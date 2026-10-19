@@ -1,0 +1,26 @@
+#!/bin/sh
+# Screenward pre-commit hook: block secrets before they reach history.
+#
+# Activation (one-time, per clone):
+#   git config core.hooksPath .githooks
+#
+# Fails closed: if gitleaks is missing, the commit is REJECTED, not
+# silently allowed through.
+
+set -eu
+
+if ! command -v gitleaks >/dev/null 2>&1; then
+    echo "pre-commit: gitleaks is not installed or not on PATH." >&2
+    echo "pre-commit: refusing to commit without a secret scan (fail closed)." >&2
+    echo "pre-commit: install gitleaks, see CONTRIBUTING.md, then retry." >&2
+    exit 1
+fi
+
+repo_root=$(git rev-parse --show-toplevel)
+
+gitleaks git \
+    --pre-commit \
+    --staged \
+    --redact \
+    --config "${repo_root}/.gitleaks.toml" \
+    "${repo_root}"

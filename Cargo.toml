@@ -1,0 +1,20 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/screenward-proto",
+    "crates/screenward-server",
+]
+
+[workspace.package]
+edition = "2021"
+rust-version = "1.95"
+license = "AGPL-3.0-only"
+publish = false
+
+# Shared lint configuration for every workspace member. Each crate opts in
+# via `[lints] workspace = true` in its own Cargo.toml.
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }

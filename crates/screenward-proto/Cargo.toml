@@ -1,0 +1,13 @@
+[package]
+name = "screenward-proto"
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Shared types for the Screenward backend and clients (skeleton, no types yet)."
+
+[lints]
+workspace = true
+
+[dependencies]

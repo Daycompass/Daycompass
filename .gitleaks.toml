@@ -1,0 +1,14 @@
+title = "Screenward gitleaks config"
+
+[extend]
+# Start from gitleaks' default ruleset and add our own rule on top.
+useDefault = true
+
+[[rules]]
+id = "screenward-app-token"
+description = "Screenward application token (swd_/sws_ prefixed)"
+regex = '''sw[ds]_[A-Za-z0-9_-]{43}'''
+keywords = ["swd_", "sws_"]
+
+# No allowlist entries. Per project policy, paths/patterns are only added
+# here after a real false positive occurs, each one commented with why.

@@ -1,0 +1,4 @@
+# Workspace-wide clippy configuration. Lint *levels* (warn/deny/allow) live
+# in [workspace.lints.clippy] in the root Cargo.toml; this file is only for
+# clippy's tunable thresholds.
+msrv = "1.95.0"

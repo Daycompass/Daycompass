@@ -1,0 +1,13 @@
+[package]
+name = "screenward-server"
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Screenward self-hosted backend (skeleton: starts and exits cleanly, no API yet)."
+
+[lints]
+workspace = true
+
+[dependencies]

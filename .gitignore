@@ -1,0 +1,29 @@
+# Build artifacts
+/target/
+**/target/
+
+# Secrets and local environment
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+secrets/
+**/secrets/
+
+# Local/runtime data (anchored to repo root, not source dirs named "data")
+/data/
+
+# Local Claude Code settings (personal, not shared via repo)
+.claude/settings.local.json
+
+# Editor / OS cruft
+.idea/
+.vscode/
+*.swp
+.DS_Store
+
+# Rust
+Cargo.lock.bak

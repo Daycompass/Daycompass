@@ -1,0 +1,24 @@
+{
+  "permissions": {
+    "deny": [
+      "Read(.env)",
+      "Read(.env.*)",
+      "Read(**/.env)",
+      "Read(**/.env.*)",
+      "Edit(.env)",
+      "Edit(.env.*)",
+      "Edit(**/.env)",
+      "Edit(**/.env.*)",
+      "Read(**/*.pem)",
+      "Edit(**/*.pem)",
+      "Read(**/*.key)",
+      "Edit(**/*.key)",
+      "Read(secrets/**)",
+      "Edit(secrets/**)",
+      "Read(**/secrets/**)",
+      "Edit(**/secrets/**)",
+      "Bash(git push:*)",
+      "Bash(git remote:*)"
+    ]
+  }
+}

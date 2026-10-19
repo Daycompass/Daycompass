@@ -1,0 +1,16 @@
+version: 2
+updates:
+  - package-ecosystem: "cargo"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+
+# A "docker" entry is intentionally omitted: no Dockerfile exists yet in
+# this milestone. Add it once one does, otherwise Dependabot errors out
+# looking for a manifest that is not there.
