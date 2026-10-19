@@ -17,6 +17,14 @@ something already in flight.
 - Test code must not contain hardcoded credentials, even fake-looking
   ones that resemble real formats. Use obviously-synthetic placeholders.
 
+## Language
+
+Everything that ends up in this repository is English: code,
+identifiers, comments, docs, commit messages, log messages, error
+messages, CLI output, hook messages, CI step names, PR and issue
+templates. No German (or any other non-English language) anywhere in
+the repo.
+
 ## Local setup
 
 1. Install the Rust toolchain pinned in `rust-toolchain.toml` (rustup

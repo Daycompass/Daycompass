@@ -16,6 +16,13 @@ students. This file applies to the whole repository.
 4. No hardcoded credentials, including in test code.
 5. When unsure, ask rather than guess.
 
+## Language
+
+Everything that ends up in the repo is English: code, identifiers,
+comments, docs, commit messages, log messages, error messages, CLI
+output, hook messages, CI step names, PR and issue templates. No
+German (or any other non-English language) anywhere in the repo.
+
 ## Stack conventions
 
 - Rust stable, Cargo workspace, edition 2021 or newer.
