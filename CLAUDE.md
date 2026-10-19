@@ -16,6 +16,64 @@ students. This file applies to the whole repository.
 4. No hardcoded credentials, including in test code.
 5. When unsure, ask rather than guess.
 
+## Project purpose and roadmap
+
+Screenward is an open-source (AGPL-3.0), self-hosted screen time
+tracker for school and university students. It tracks usage across
+devices and separates study time from distraction time.
+
+This repository is the BACKEND ONLY. Clients (Android, Windows, macOS,
+Linux, later iOS) live in separate repositories and sync to this
+server. No tracking code lives here. The server is the source of
+truth.
+
+The backend consists of:
+
+1. A JSON API (REST) for clients and for export: auth, devices, event
+   ingest, stats, category rules.
+2. A web dashboard served by the same binary, planned for M5. Users see
+   their combined stats across all devices and manage their settings
+   (category rules, goals, devices, password, sessions, export, data
+   deletion). Admins additionally manage accounts and retention.
+
+### Design decisions (fixed, do not revisit without asking)
+
+- One binary, one container, SQLite, minimal RAM.
+- The dashboard is server-rendered HTML (askama or maud) with htmx. No
+  npm, no Node build, no SPA framework. Assets are vendored and
+  embedded in the binary. No CDN. Strict CSP (`default-src 'self'`, no
+  inline scripts, `frame-ancestors 'none'`).
+- HTML handlers and JSON handlers call the same service layer. No
+  business logic in handlers.
+- Security-relevant configuration (bind address, trusted proxies, rate
+  limits, Argon2 parameters, public URL) is environment-only and is
+  never editable through the API or the dashboard.
+- Privacy: an admin can manage accounts and devices but can NEVER read
+  another user's usage events or stats. The dashboard must never show
+  an admin other users' data.
+- No telemetry, no outgoing requests, no phone-home.
+- Events carry no category. Categories are assigned at query time.
+- All timestamps in new tables are INTEGER Unix seconds.
+- Auth code requires two reviewers.
+
+### Roadmap (status is updated after each milestone)
+
+- M0 foundation: done
+- M1a config, DB, server skeleton: done
+- M1b users table, setup flow, login, sessions, CSRF, rate limiting:
+  in progress
+- M1c user management API: planned
+- M2 devices, pairing, event ingest: planned
+- M3 stats, category rules (JSON API): planned
+- M4 export, retention, Dockerfile, compose, docs: planned
+- M5a/b/c web dashboard (shell, stats pages, settings): planned
+
+Rule: implement ONLY the milestone that was explicitly asked for.
+Everything else in this section is context, not a task. Do not build
+UI, templates, static assets or later-milestone endpoints in advance,
+even if it seems convenient. If a current task would be easier with
+something from a later milestone, say so instead of building it.
+
 ## Language
 
 Everything that ends up in the repo is English: code, identifiers,
