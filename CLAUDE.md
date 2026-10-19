@@ -30,9 +30,11 @@ German (or any other non-English language) anywhere in the repo.
 - Every crate has `#![forbid(unsafe_code)]`.
 - `Cargo.lock` is committed. All `cargo` invocations in CI (and when
   checking locally) use `--locked`.
-- Planned for later milestones, **not yet present**: axum, tokio, sqlx
-  (SQLite), argon2, utoipa. Do not add these dependencies, a database,
-  authentication, or API endpoints unless a specific task asks for them.
+- Present since M1a: axum, tokio, sqlx (SQLite only, bundled), serde,
+  thiserror, tracing, tracing-subscriber, tower, tower-http. Planned
+  for later milestones, **not yet present**: argon2, utoipa. Do not add
+  users, auth, tokens, or domain tables unless a specific task asks for
+  them.
 - No `authors` field and no real names/emails anywhere in `Cargo.toml`
   files. Where a rights holder must be named, use "Screenward
   contributors".
