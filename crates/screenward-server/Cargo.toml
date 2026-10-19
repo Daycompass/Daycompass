@@ -5,7 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 publish.workspace = true
-description = "Screenward self-hosted backend (skeleton: starts and exits cleanly, no API yet)."
+description = "Screenward self-hosted backend: config, SQLite storage, and a hardened HTTP skeleton with /healthz. No users, auth, or domain tables yet."
 
 [lints]
 workspace = true
@@ -20,3 +20,9 @@ serde = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
+
+[dev-dependencies]
+# Already in the dependency graph transitively (axum's JSON support);
+# declared directly here so integration tests can parse response bodies.
+# A dev-dependency only - never part of the shipped binary.
+serde_json = { version = "~1.0" }
