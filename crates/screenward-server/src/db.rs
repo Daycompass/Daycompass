@@ -1,7 +1,7 @@
 //! SQLite pool setup, hardening, and embedded migrations.
 //!
-//! No user or device tables exist yet: the one migration shipped here
-//! only creates `schema_info` (see `migrations/0001_schema_info.sql`).
+//! Migrations live in `migrations/` and are embedded into the binary at
+//! compile time. No device or event tables exist yet.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -143,7 +143,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn migrations_create_schema_info_with_version_one() {
+    async fn migrations_record_the_current_schema_version() {
         let pool = memory_pool().await;
         migrate(&pool).await.expect("migrations must apply");
 
@@ -151,7 +151,94 @@ mod tests {
             .fetch_one(&pool)
             .await
             .expect("schema_info must have exactly one row");
-        assert_eq!(version, 1);
+        assert_eq!(version, 2);
+    }
+
+    /// The auth tables must exist and be STRICT, so a value of the wrong
+    /// type is rejected rather than silently coerced.
+    #[tokio::test]
+    async fn migrations_create_strict_auth_tables() {
+        let pool = memory_pool().await;
+        migrate(&pool).await.expect("migrations must apply");
+
+        for table in ["users", "sessions", "setup_tokens"] {
+            let (strict,): (i64,) = sqlx::query_as(
+                "SELECT strict FROM pragma_table_list WHERE schema = 'main' AND name = ?1",
+            )
+            .bind(table)
+            .fetch_one(&pool)
+            .await
+            .unwrap_or_else(|_| panic!("table {table} must exist"));
+            assert_eq!(strict, 1, "table {table} must be STRICT");
+        }
+    }
+
+    /// `ON DELETE CASCADE` on `sessions.user_id` only actually fires
+    /// because the pool enables `foreign_keys`. Verify both together.
+    #[tokio::test]
+    async fn deleting_a_user_cascades_to_their_sessions() {
+        let pool = memory_pool().await;
+        migrate(&pool).await.expect("migrations must apply");
+
+        sqlx::query(
+            "INSERT INTO users (id, username, password_hash, role, created_at)
+             VALUES ('u1', 'alice', 'not-a-real-hash', 'user', 0)",
+        )
+        .execute(&pool)
+        .await
+        .expect("inserting a user must succeed");
+        sqlx::query(
+            "INSERT INTO sessions
+                 (id, user_id, token_hash, created_at, last_used_at, expires_at)
+             VALUES ('s1', 'u1', x'00', 0, 0, 0)",
+        )
+        .execute(&pool)
+        .await
+        .expect("inserting a session must succeed");
+
+        sqlx::query("DELETE FROM users WHERE id = 'u1'")
+            .execute(&pool)
+            .await
+            .expect("deleting the user must succeed");
+
+        let (sessions,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM sessions")
+            .fetch_one(&pool)
+            .await
+            .expect("counting sessions must succeed");
+        assert_eq!(sessions, 0, "the session must have been cascaded away");
+    }
+
+    /// A session row may not reference a user that does not exist.
+    #[tokio::test]
+    async fn sessions_require_an_existing_user() {
+        let pool = memory_pool().await;
+        migrate(&pool).await.expect("migrations must apply");
+
+        let result = sqlx::query(
+            "INSERT INTO sessions
+                 (id, user_id, token_hash, created_at, last_used_at, expires_at)
+             VALUES ('s1', 'nobody', x'00', 0, 0, 0)",
+        )
+        .execute(&pool)
+        .await;
+        assert!(result.is_err(), "the foreign key must be enforced");
+    }
+
+    #[tokio::test]
+    async fn users_reject_an_unknown_role() {
+        let pool = memory_pool().await;
+        migrate(&pool).await.expect("migrations must apply");
+
+        let result = sqlx::query(
+            "INSERT INTO users (id, username, password_hash, role, created_at)
+             VALUES ('u1', 'alice', 'not-a-real-hash', 'superadmin', 0)",
+        )
+        .execute(&pool)
+        .await;
+        assert!(
+            result.is_err(),
+            "the role CHECK constraint must be enforced"
+        );
     }
 
     #[tokio::test]
