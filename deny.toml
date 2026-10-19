@@ -1,7 +1,4 @@
 # cargo-deny configuration. See https://embarkstudios.github.io/cargo-deny/
-#
-# No third-party dependencies exist yet (workspace skeleton only), so this
-# file mainly establishes the policy for when they arrive.
 
 [graph]
 all-features = true
@@ -34,6 +31,14 @@ allow = [
 confidence-threshold = 0.8
 
 [bans]
+# Kept at "warn", not "deny", because the dependency graph unavoidably
+# contains two generations of the RustCrypto crates: sqlx-core depends on
+# the 0.10 generation (sha2 0.10 -> digest 0.10), while argon2 0.6 pulls
+# the 0.11 generation (blake2 0.11 -> digest 0.11). That accounts for the
+# duplicate sha2/digest/block-buffer/crypto-common/cpufeatures entries.
+# Both generations enter the graph as soon as argon2 is present, so this
+# cannot be resolved from our side; it goes away once sqlx moves up.
+# No "ignore" entries - the warnings stay visible on purpose.
 multiple-versions = "warn"
 wildcards = "deny"
 # The workspace's own path-dependency members are not on crates.io and have
