@@ -32,6 +32,10 @@ sqlx = { version = "~0.9", default-features = false, features = [
     "sqlite",
     "sqlite-bundled",
     "migrate",
+    # Needed for the `sqlx::migrate!()` macro that embeds migrations into
+    # the binary at compile time (vs. reading them from disk at runtime).
+    # Adds no driver/TLS surface - verified via `cargo tree`.
+    "macros",
 ] }
 serde = { version = "~1.0", features = ["derive"] }
 thiserror = { version = "~2.0" }
