@@ -13,9 +13,12 @@ use axum::routing::{get, post};
 use axum::Router;
 use serde::Serialize;
 
+use axum::http::StatusCode;
+
 use crate::auth::store::UserRecord;
-use crate::error::not_found;
+use crate::error::{not_found, ApiError};
 use crate::middleware::require_matching_origin;
+use crate::ratelimit::Decision;
 use crate::state::AppState;
 
 /// Builds the route table.
@@ -69,5 +72,25 @@ impl From<&UserRecord> for UserView {
             username: user.username.as_str().to_owned(),
             role: user.role.as_str(),
         }
+    }
+}
+
+/// Turns a limiter decision into the one response every rate limit
+/// produces.
+///
+/// Identical whichever bucket refused, and it never says which. "This
+/// account is rate limited" would be an account oracle, and a far
+/// cheaper one than timing a password check.
+fn rate_limited(decision: Decision) -> Option<ApiError> {
+    match decision {
+        Decision::Allowed => None,
+        Decision::Limited { retry_after } => Some(
+            ApiError::new(
+                StatusCode::TOO_MANY_REQUESTS,
+                "rate_limited",
+                "too many requests; please try again later",
+            )
+            .retry_after(retry_after),
+        ),
     }
 }

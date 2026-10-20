@@ -12,7 +12,9 @@ use sqlx::SqlitePool;
 
 use crate::auth::password::{HashError, Hasher};
 use crate::auth::session::SessionPolicy;
-use crate::config::{Config, PublicUrl};
+use crate::clientip::ClientKey;
+use crate::config::{Config, PublicUrl, TrustedProxies};
+use crate::ratelimit::{RateLimiter, UsernameKey};
 
 /// Cloned once per request by axum. Every field is cheap to clone: the
 /// pool and the hasher are handles to shared state rather than copies of
@@ -28,6 +30,39 @@ pub struct AppState {
     /// costs the same as a real one. Built once at startup: doing it per
     /// request would double the work of every failed login.
     pub decoy_password_hash: Arc<String>,
+    pub trusted_proxies: TrustedProxies,
+    pub limits: Limits,
+}
+
+/// The rate limiters, one per bucket.
+///
+/// Separate limiters rather than one shared map, so pressure on one
+/// bucket cannot evict another's entries - invented usernames must not
+/// be able to flush the per-address counters.
+#[derive(Clone)]
+pub struct Limits {
+    pub login_ip: Arc<RateLimiter<ClientKey>>,
+    pub login_username: Arc<RateLimiter<UsernameKey>>,
+    pub setup_ip: Arc<RateLimiter<ClientKey>>,
+}
+
+impl Limits {
+    fn new(config: &Config) -> Self {
+        Self {
+            login_ip: Arc::new(RateLimiter::new(
+                config.rate_limit_login_ip,
+                config.rate_limit_max_entries,
+            )),
+            login_username: Arc::new(RateLimiter::new(
+                config.rate_limit_login_username,
+                config.rate_limit_max_entries,
+            )),
+            setup_ip: Arc::new(RateLimiter::new(
+                config.rate_limit_setup_ip,
+                config.rate_limit_max_entries,
+            )),
+        }
+    }
 }
 
 impl AppState {
@@ -53,6 +88,8 @@ impl AppState {
             },
             public_url: config.public_url.clone(),
             decoy_password_hash,
+            trusted_proxies: config.trusted_proxies.clone(),
+            limits: Limits::new(config),
         })
     }
 }

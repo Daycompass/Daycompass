@@ -168,6 +168,22 @@ impl Config {
         Self::load(&ProcessEnv)
     }
 
+    /// Loads configuration from an explicit map of variables.
+    ///
+    /// For tests that need a specific setting without mutating the real
+    /// process environment - which Rust requires `unsafe` for, and this
+    /// crate forbids.
+    #[doc(hidden)]
+    pub fn for_test(vars: &std::collections::HashMap<String, String>) -> Result<Self, ConfigError> {
+        struct MapEnv<'a>(&'a std::collections::HashMap<String, String>);
+        impl VarSource for MapEnv<'_> {
+            fn get(&self, name: &str) -> Option<String> {
+                self.0.get(name).cloned()
+            }
+        }
+        Self::load(&MapEnv(vars))
+    }
+
     /// Configuration with every value at its compiled-in default.
     ///
     /// Exists so tests can build an app without reading the real

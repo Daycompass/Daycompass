@@ -19,8 +19,10 @@ use crate::auth::password::HashError;
 use crate::auth::secret::SecretString;
 use crate::auth::session;
 use crate::auth::time::UnixTime;
+use crate::clientip::ClientAddr;
 use crate::error::ApiError;
-use crate::routes::UserView;
+use crate::ratelimit::UsernameKey;
+use crate::routes::{rate_limited, UserView};
 use crate::state::AppState;
 
 #[derive(Deserialize)]
@@ -41,7 +43,34 @@ struct SessionResponse {
     csrf_token: String,
 }
 
-pub async fn log_in(State(state): State<AppState>, Json(request): Json<LoginRequest>) -> Response {
+pub async fn log_in(
+    State(state): State<AppState>,
+    client: ClientAddr,
+    Json(request): Json<LoginRequest>,
+) -> Response {
+    let now = UnixTime::now();
+
+    // Order matters. The per-address bucket is checked first so that
+    // invented usernames cannot flood the per-username map before
+    // anything bounds them - the address limit is what caps how many
+    // distinct usernames one client can even introduce.
+    if let Some(error) = rate_limited(state.limits.login_ip.check(client.rate_limit_key(), now)) {
+        return error.into_response();
+    }
+
+    // Then the per-username bucket, which protects one account against
+    // a guessing attack spread across many addresses.
+    if let Some(error) = rate_limited(
+        state
+            .limits
+            .login_username
+            .check(UsernameKey::new(&request.username), now),
+    ) {
+        return error.into_response();
+    }
+
+    // Only now is Argon2 work reached: the hasher's semaphore and its
+    // wait timeout are the third and last line of defence.
     let result = login::log_in(
         &state.pool,
         &state.hasher,
@@ -49,7 +78,7 @@ pub async fn log_in(State(state): State<AppState>, Json(request): Json<LoginRequ
         state.session_policy,
         &request.username,
         request.password,
-        UnixTime::now(),
+        now,
     )
     .await;
 
