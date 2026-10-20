@@ -11,16 +11,18 @@ pub mod db;
 pub mod error;
 pub mod middleware;
 pub mod routes;
+pub mod state;
 
 use axum::Router;
 use sqlx::SqlitePool;
 use tracing_subscriber::EnvFilter;
 
 use config::Config;
+use state::AppState;
 
-/// Builds the full axum app (routes plus middleware) over `pool`.
-pub fn build_app(pool: SqlitePool) -> Router {
-    middleware::apply(routes::router(pool))
+/// Builds the full axum app (routes plus middleware) over `state`.
+pub fn build_app(state: AppState) -> Router {
+    middleware::apply(routes::router(state))
 }
 
 /// Initializes JSON structured logging at the level given by

@@ -151,12 +151,30 @@ impl VarSource for ProcessEnv {
     }
 }
 
+/// A source where nothing is set, so every default applies.
+struct NoEnv;
+
+impl VarSource for NoEnv {
+    fn get(&self, _name: &str) -> Option<String> {
+        None
+    }
+}
+
 impl Config {
     /// Loads configuration from the real process environment. Fails on the
     /// first invalid or ambiguous variable; never includes any value in
     /// the returned error.
     pub fn from_env() -> Result<Self, ConfigError> {
         Self::load(&ProcessEnv)
+    }
+
+    /// Configuration with every value at its compiled-in default.
+    ///
+    /// Exists so tests can build an app without reading the real
+    /// process environment, where a stray `SCREENWARD_*` variable in a
+    /// developer's shell would otherwise change what the test exercises.
+    pub fn defaults() -> Self {
+        Self::load(&NoEnv).expect("the compiled-in defaults must be valid")
     }
 
     fn load(source: &impl VarSource) -> Result<Self, ConfigError> {

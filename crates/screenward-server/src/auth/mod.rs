@@ -7,6 +7,10 @@
 //! them without duplicating any logic.
 
 pub mod password;
+pub mod role;
 pub mod secret;
+pub mod setup;
+pub mod store;
+pub mod time;
 pub mod token;
 pub mod username;

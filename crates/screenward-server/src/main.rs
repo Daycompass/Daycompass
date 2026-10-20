@@ -3,7 +3,12 @@
 //! shut down.
 #![forbid(unsafe_code)]
 
+use std::io::Write;
+
+use screenward_server::auth::setup;
+use screenward_server::auth::time::UnixTime;
 use screenward_server::config::Config;
+use screenward_server::state::AppState;
 
 #[tokio::main]
 async fn main() {
@@ -28,7 +33,26 @@ async fn main() {
         }
     };
 
-    let app = screenward_server::build_app(pool);
+    // While no admin exists the instance cannot authenticate anybody,
+    // so it issues a bootstrap token and prints it. Any token from an
+    // earlier run is invalidated here, so only the line printed by this
+    // start is live.
+    match setup::issue_token_if_unprovisioned(&pool, UnixTime::now()).await {
+        Ok(Some(token)) => {
+            print_setup_instructions(&setup::setup_instructions(
+                &token,
+                config.public_url.as_str(),
+            ));
+        }
+        // The normal case from the second start onwards.
+        Ok(None) => {}
+        Err(err) => {
+            tracing::error!(error = %err, "failed to prepare the first-time setup token");
+            std::process::exit(1);
+        }
+    }
+
+    let app = screenward_server::build_app(AppState::new(pool, &config));
 
     let listener = match tokio::net::TcpListener::bind(config.bind_addr).await {
         Ok(listener) => listener,
@@ -49,4 +73,20 @@ async fn main() {
     }
 
     tracing::info!("shut down cleanly");
+}
+
+/// Writes the setup instructions straight to stdout, not through
+/// `tracing`.
+///
+/// Three reasons: a log level must never be able to hide it, JSON log
+/// output would bury the token inside a field an operator then has to
+/// dig out, and the value must not pass through the logging pipeline at
+/// all. Flushed explicitly, because a container's stdout may be block
+/// buffered and this line has to appear immediately.
+fn print_setup_instructions(message: &str) {
+    let mut stdout = std::io::stdout().lock();
+    // Nothing useful can be done if stdout is gone; the server should
+    // still come up.
+    let _ = writeln!(stdout, "{message}");
+    let _ = stdout.flush();
 }

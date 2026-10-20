@@ -19,7 +19,7 @@ use tower_http::request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetReques
 use tower_http::set_header::SetResponseHeaderLayer;
 use tracing::Instrument;
 
-use crate::error::ApiError;
+use crate::error::{ApiError, Deliberate};
 
 /// Small default: this milestone has no file uploads, just tiny JSON
 /// bodies on future endpoints.
@@ -111,10 +111,19 @@ async fn log_request(request: Request, next: Next) -> Response {
 /// infrastructure layer (timeout, body limit) produced. This is the
 /// single place that guarantees no internal detail ever reaches a
 /// client, regardless of where the error came from.
+///
+/// Responses carrying [`Deliberate`] are left alone. Those were built
+/// by this server's own error type, which already produces the uniform
+/// shape, and rebuilding them would throw away their specific error
+/// code and any `Retry-After` header they set. Anything else - a serde
+/// rejection quoting part of the request body, a timeout, the body-size
+/// limit - is still replaced wholesale.
 async fn normalize_error_responses(request: Request, next: Next) -> Response {
     let response = next.run(request).await;
     let status = response.status();
-    if status.is_client_error() || status.is_server_error() {
+    let deliberate = response.extensions().get::<Deliberate>().is_some();
+
+    if (status.is_client_error() || status.is_server_error()) && !deliberate {
         ApiError::from_status(status).into_response()
     } else {
         response
