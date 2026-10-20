@@ -6,9 +6,24 @@ useDefault = true
 
 [[rules]]
 id = "screenward-app-token"
-description = "Screenward application token (swd_/sws_ prefixed)"
-regex = '''sw[ds]_[A-Za-z0-9_-]{43}'''
-keywords = ["swd_", "sws_"]
+description = "Screenward application token (sw<letter>_ prefixed)"
+# Covers every current and future one-letter prefix: sws_ (session),
+# swb_ (bootstrap/setup), swd_ (device), and whatever comes next. The
+# body is 32 random bytes in base64url without padding, which is always
+# exactly 43 characters.
+#
+# Deliberately unanchored: a token embedded in a longer string should
+# still be caught. A consequence is that a 44-character body also
+# matches, via its first 43 characters - over-matching is the right
+# failure direction here.
+regex = '''sw[a-z]_[A-Za-z0-9_-]{43}'''
+# No `keywords` on purpose. Gitleaks treats keywords as a hard
+# pre-filter, so listing ["sws_", "swb_"] would silently skip every
+# prefix letter not in the list - exactly the bug that widening the
+# regex from sw[ds]_ was meant to avoid. The regex is specific enough
+# on its own.
+#
+# `.githooks/tests/gitleaks-rules.sh` pins this behaviour.
 
 # No allowlist entries. Per project policy, paths/patterns are only added
 # here after a real false positive occurs, each one commented with why.

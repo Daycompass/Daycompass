@@ -42,6 +42,17 @@ the repo.
    commit. It fails closed: if gitleaks isn't installed, the commit is
    rejected rather than silently skipping the scan.
 
+   The rule that recognizes Screenward's own token format has its own
+   test. Run it after changing `.gitleaks.toml`:
+
+   ```sh
+   .githooks/tests/gitleaks-rules.sh
+   ```
+
+   It generates candidate tokens from fresh randomness at runtime and
+   pipes them through gitleaks, so it never writes a token-shaped string
+   to disk. CI runs it too.
+
 ## Before opening a pull request
 
 - `cargo fmt --check`

@@ -5,6 +5,7 @@
 //! process. No users, auth, or domain tables yet - see `CLAUDE.md`.
 #![forbid(unsafe_code)]
 
+pub mod auth;
 pub mod config;
 pub mod db;
 pub mod error;
