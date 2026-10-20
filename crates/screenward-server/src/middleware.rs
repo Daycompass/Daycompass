@@ -8,8 +8,8 @@
 
 use std::time::{Duration, Instant};
 
-use axum::extract::{DefaultBodyLimit, Request};
-use axum::http::{HeaderName, HeaderValue, StatusCode};
+use axum::extract::{DefaultBodyLimit, Request, State};
+use axum::http::{header, HeaderName, HeaderValue, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::Router;
@@ -19,7 +19,9 @@ use tower_http::request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetReques
 use tower_http::set_header::SetResponseHeaderLayer;
 use tracing::Instrument;
 
+use crate::auth::origin;
 use crate::error::{ApiError, Deliberate};
+use crate::state::AppState;
 
 /// Small default: this milestone has no file uploads, just tiny JSON
 /// bodies on future endpoints.
@@ -128,4 +130,54 @@ async fn normalize_error_responses(request: Request, next: Next) -> Response {
     } else {
         response
     }
+}
+
+/// Rejects a state-changing request whose `Origin` names someone else.
+///
+/// Applied only to the routes that can be cookie-authenticated; see
+/// [`crate::routes::router`] for why the exemption is structural. The
+/// rule itself lives in [`crate::auth::origin`], which is where it is
+/// tested.
+pub async fn require_matching_origin(
+    State(state): State<AppState>,
+    request: Request,
+    next: Next,
+) -> Response {
+    let headers = request.headers().get_all(header::ORIGIN);
+    let mut values = headers.iter();
+    let first = values.next();
+
+    // More than one Origin header is not something a browser does, and
+    // picking one of several would be a way to smuggle the wrong answer
+    // past this check.
+    if values.next().is_some() {
+        return reject_origin();
+    }
+
+    let origin = match first {
+        None => None,
+        Some(value) => match value.to_str() {
+            Ok(text) => Some(text),
+            // Present but not text: refuse rather than fall through to
+            // the "absent" case, which is deliberately permissive.
+            Err(_) => return reject_origin(),
+        },
+    };
+
+    if !origin::is_allowed(request.method().as_str(), origin, &state.public_url) {
+        return reject_origin();
+    }
+
+    next.run(request).await
+}
+
+/// The one response an Origin failure produces. The message does not
+/// echo the offending value, and does not state the expected one.
+fn reject_origin() -> Response {
+    ApiError::new(
+        StatusCode::FORBIDDEN,
+        "origin_mismatch",
+        "this request did not come from an allowed origin",
+    )
+    .into_response()
 }

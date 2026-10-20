@@ -5,6 +5,7 @@
 //! this module: per `CLAUDE.md`, the JSON handlers and the later HTML
 //! handlers must share one service layer.
 
+mod auth;
 mod health;
 mod setup;
 
@@ -14,12 +15,37 @@ use serde::Serialize;
 
 use crate::auth::store::UserRecord;
 use crate::error::not_found;
+use crate::middleware::require_matching_origin;
 use crate::state::AppState;
 
+/// Builds the route table.
+///
+/// Split into two groups so the `Origin` exemption is structural rather
+/// than a path string compared at runtime: a route is exempt because of
+/// which router it is registered in, which is much harder to get subtly
+/// wrong than a list of paths to skip.
 pub fn router(state: AppState) -> Router {
-    Router::new()
+    // Everything that may be state-changing and cookie-authenticated.
+    let origin_checked = Router::new()
+        .route("/api/v1/auth/login", post(auth::log_in))
+        .route("/api/v1/auth/logout", post(auth::log_out))
+        .route("/api/v1/auth/me", get(auth::me))
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            require_matching_origin,
+        ));
+
+    // Exempt. `/healthz` is a GET, so the check would pass it anyway.
+    // `/api/v1/setup` carries no cookie: there is no ambient credential
+    // for a hostile page to ride on, and its protection is the
+    // unguessable setup token.
+    let origin_exempt = Router::new()
         .route("/healthz", get(health::healthz))
-        .route("/api/v1/setup", post(setup::create_first_admin))
+        .route("/api/v1/setup", post(setup::create_first_admin));
+
+    Router::new()
+        .merge(origin_checked)
+        .merge(origin_exempt)
         .fallback(not_found)
         .with_state(state)
 }

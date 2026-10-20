@@ -6,9 +6,15 @@
 //! nothing about axum, so the JSON API and the later dashboard can share
 //! them without duplicating any logic.
 
+pub mod cookie;
+pub mod csrf;
+pub mod extract;
+pub mod login;
+pub mod origin;
 pub mod password;
 pub mod role;
 pub mod secret;
+pub mod session;
 pub mod setup;
 pub mod store;
 pub mod time;

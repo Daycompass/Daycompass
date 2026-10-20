@@ -84,6 +84,27 @@ impl Password {
         Ok(Self(candidate))
     }
 
+    /// Checks only blankness and the upper bound, not the minimum
+    /// length.
+    ///
+    /// Login uses this rather than [`Password::parse`]. The minimum is a
+    /// rule for *choosing* a password, not for presenting one: raising
+    /// it later must stop new weak passwords, not lock out every
+    /// existing account whose password is now below the new floor.
+    ///
+    /// The upper bound still applies, because it bounds the work a
+    /// single request can ask for. Rejecting on it leaks nothing about
+    /// accounts - the outcome depends only on the caller's own input.
+    pub fn parse_for_verification(candidate: SecretString) -> Result<Self, PasswordPolicyError> {
+        if candidate.is_blank() {
+            return Err(PasswordPolicyError::Blank);
+        }
+        if candidate.char_count() > MAX_CHARS {
+            return Err(PasswordPolicyError::Length);
+        }
+        Ok(Self(candidate))
+    }
+
     fn expose(&self) -> &str {
         self.0.expose()
     }
@@ -477,6 +498,33 @@ mod tests {
         // No composition rules: all digits, or all one repeated
         // character, is accepted at the right length.
         assert!(Password::parse(SecretString::new("012345678901".to_owned())).is_ok());
+    }
+
+    /// Tightening the minimum must not lock existing accounts out, so
+    /// verification accepts a password the current policy would refuse
+    /// to set.
+    #[test]
+    fn verification_does_not_enforce_the_minimum_length() {
+        let short = password_of_length(MIN_CHARS - 4);
+        assert_eq!(
+            Password::parse(password_of_length(MIN_CHARS - 4)).unwrap_err(),
+            PasswordPolicyError::Length,
+            "setting it must still be refused"
+        );
+        assert!(
+            Password::parse_for_verification(short).is_ok(),
+            "presenting it must still be allowed"
+        );
+
+        // The upper bound and blankness still apply.
+        assert_eq!(
+            Password::parse_for_verification(password_of_length(MAX_CHARS + 1)).unwrap_err(),
+            PasswordPolicyError::Length
+        );
+        assert_eq!(
+            Password::parse_for_verification(SecretString::new("  ".to_owned())).unwrap_err(),
+            PasswordPolicyError::Blank
+        );
     }
 
     #[test]

@@ -20,8 +20,10 @@ async fn migrated_pool() -> SqlitePool {
 }
 
 /// Application state over `pool`, using the default configuration.
-fn test_state(pool: SqlitePool) -> AppState {
+async fn test_state(pool: SqlitePool) -> AppState {
     AppState::new(pool, &Config::defaults())
+        .await
+        .expect("building the state must succeed")
 }
 
 async fn body_json(response: axum::response::Response) -> Value {
@@ -33,7 +35,7 @@ async fn body_json(response: axum::response::Response) -> Value {
 
 #[tokio::test]
 async fn healthz_returns_200_with_db_reachable() {
-    let app = screenward_server::build_app(test_state(migrated_pool().await));
+    let app = screenward_server::build_app(test_state(migrated_pool().await).await);
 
     let response = app
         .oneshot(
@@ -52,7 +54,7 @@ async fn healthz_returns_200_with_db_reachable() {
 
 #[tokio::test]
 async fn healthz_response_has_no_internal_details() {
-    let app = screenward_server::build_app(test_state(migrated_pool().await));
+    let app = screenward_server::build_app(test_state(migrated_pool().await).await);
 
     let response = app
         .oneshot(
@@ -81,7 +83,7 @@ async fn healthz_returns_503_with_no_internal_details_when_db_is_unreachable() {
     let pool = migrated_pool().await;
     pool.close().await; // simulate the database becoming unreachable
 
-    let app = screenward_server::build_app(test_state(pool));
+    let app = screenward_server::build_app(test_state(pool).await);
     let response = app
         .oneshot(
             Request::builder()
@@ -107,7 +109,7 @@ async fn healthz_returns_503_with_no_internal_details_when_db_is_unreachable() {
 
 #[tokio::test]
 async fn unknown_route_returns_uniform_json_error() {
-    let app = screenward_server::build_app(test_state(migrated_pool().await));
+    let app = screenward_server::build_app(test_state(migrated_pool().await).await);
 
     let response = app
         .oneshot(
@@ -134,7 +136,7 @@ async fn unknown_route_returns_uniform_json_error() {
 
 #[tokio::test]
 async fn responses_carry_a_request_id_and_security_headers() {
-    let app = screenward_server::build_app(test_state(migrated_pool().await));
+    let app = screenward_server::build_app(test_state(migrated_pool().await).await);
 
     let response = app
         .oneshot(
@@ -158,7 +160,7 @@ async fn responses_carry_a_request_id_and_security_headers() {
 
 #[tokio::test]
 async fn error_responses_also_carry_security_headers() {
-    let app = screenward_server::build_app(test_state(migrated_pool().await));
+    let app = screenward_server::build_app(test_state(migrated_pool().await).await);
 
     let response = app
         .oneshot(

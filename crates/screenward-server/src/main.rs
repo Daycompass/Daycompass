@@ -52,7 +52,19 @@ async fn main() {
         }
     }
 
-    let app = screenward_server::build_app(AppState::new(pool, &config));
+    let state = match AppState::new(pool.clone(), &config).await {
+        Ok(state) => state,
+        Err(err) => {
+            // Argon2 cannot run at all. Better to refuse to start than
+            // to discover this at the first login attempt.
+            tracing::error!(error = %err, "failed to initialize password hashing");
+            std::process::exit(1);
+        }
+    };
+
+    screenward_server::spawn_cleanup_task(pool, state.session_policy);
+
+    let app = screenward_server::build_app(state);
 
     let listener = match tokio::net::TcpListener::bind(config.bind_addr).await {
         Ok(listener) => listener,

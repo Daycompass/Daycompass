@@ -45,6 +45,36 @@ pub async fn setup_db(config: &Config) -> Result<SqlitePool, db::DbError> {
     Ok(pool)
 }
 
+/// How often the background sweep runs.
+///
+/// An hour is frequent enough that expired rows do not accumulate and
+/// infrequent enough to be invisible in load. Expiry itself does not
+/// depend on this task: a session is also checked, and deleted, on every
+/// request that presents it. This only catches the ones nobody comes
+/// back for.
+const CLEANUP_INTERVAL: std::time::Duration = std::time::Duration::from_secs(60 * 60);
+
+/// Spawns the task that deletes expired sessions and spent setup tokens.
+///
+/// Runs one sweep immediately, so a restart cleans up whatever expired
+/// while the process was down, then on a fixed interval. A failed sweep
+/// is logged and retried at the next tick rather than ending the task,
+/// since a transient database error must not silently stop cleanup for
+/// the lifetime of the process.
+pub fn spawn_cleanup_task(pool: SqlitePool, policy: auth::session::SessionPolicy) {
+    tokio::spawn(async move {
+        let mut ticker = tokio::time::interval(CLEANUP_INTERVAL);
+        loop {
+            ticker.tick().await;
+            match auth::session::sweep_expired(&pool, policy, auth::time::UnixTime::now()).await {
+                Ok(0) => {}
+                Ok(removed) => tracing::info!(removed, "cleaned up expired rows"),
+                Err(err) => tracing::error!(error = %err, "the cleanup sweep failed"),
+            }
+        }
+    });
+}
+
 /// Waits for Ctrl-C or, on Unix, SIGTERM - whichever comes first - so
 /// `axum::serve(..).with_graceful_shutdown(shutdown_signal())` lets
 /// in-flight requests finish instead of dropping them.

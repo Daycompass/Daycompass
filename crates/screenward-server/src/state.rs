@@ -1,35 +1,59 @@
 //! Shared application state.
 //!
 //! Handlers receive this and nothing else. It holds the database pool
-//! and the long-lived services built from configuration at startup, so
-//! that nothing security-relevant is re-derived per request and nothing
-//! reads the environment after startup.
+//! and the long-lived values built from configuration at startup, so
+//! nothing security-relevant is re-derived per request and nothing reads
+//! the environment after startup.
+
+use std::sync::Arc;
 
 use axum::extract::FromRef;
 use sqlx::SqlitePool;
 
-use crate::auth::password::Hasher;
-use crate::config::Config;
+use crate::auth::password::{HashError, Hasher};
+use crate::auth::session::SessionPolicy;
+use crate::config::{Config, PublicUrl};
 
 /// Cloned once per request by axum. Every field is cheap to clone: the
-/// pool and the hasher are handles to shared state, not copies of it,
-/// which is what keeps the Argon2 concurrency cap global.
+/// pool and the hasher are handles to shared state rather than copies of
+/// it, which is what keeps the Argon2 concurrency cap global.
 #[derive(Clone)]
 pub struct AppState {
     pub pool: SqlitePool,
     pub hasher: Hasher,
+    pub session_policy: SessionPolicy,
+    pub public_url: PublicUrl,
+    /// A hash of a random password that was discarded, verified against
+    /// when a login names an account that does not exist, so that path
+    /// costs the same as a real one. Built once at startup: doing it per
+    /// request would double the work of every failed login.
+    pub decoy_password_hash: Arc<String>,
 }
 
 impl AppState {
-    pub fn new(pool: SqlitePool, config: &Config) -> Self {
-        Self {
+    /// Builds the state, including the decoy hash.
+    ///
+    /// Fallible and async because of that hash. Failing here means
+    /// Argon2 cannot run at all, which is worth refusing to start over
+    /// rather than discovering at the first login.
+    pub async fn new(pool: SqlitePool, config: &Config) -> Result<Self, HashError> {
+        let hasher = Hasher::new(
+            config.argon2,
+            config.argon2_max_concurrent,
+            config.argon2_wait_timeout,
+        );
+        let decoy_password_hash = Arc::new(hasher.decoy_hash().await?);
+
+        Ok(Self {
             pool,
-            hasher: Hasher::new(
-                config.argon2,
-                config.argon2_max_concurrent,
-                config.argon2_wait_timeout,
-            ),
-        }
+            hasher,
+            session_policy: SessionPolicy {
+                idle_timeout: config.session_idle_timeout,
+                absolute_timeout: config.session_absolute_timeout,
+            },
+            public_url: config.public_url.clone(),
+            decoy_password_hash,
+        })
     }
 }
 

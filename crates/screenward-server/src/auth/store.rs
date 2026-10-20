@@ -271,3 +271,135 @@ pub async fn delete_stale_setup_tokens(
             .await?;
     Ok(result.rows_affected())
 }
+
+/// A row from `sessions`.
+#[derive(Debug, Clone)]
+pub struct SessionRecord {
+    pub id: String,
+    pub user_id: String,
+    pub created_at: UnixTime,
+    /// When the session was last seen on a request. Drives the idle
+    /// timeout.
+    pub last_used_at: UnixTime,
+    /// Hard end of life, set when the session was created. Drives the
+    /// absolute timeout.
+    pub expires_at: UnixTime,
+}
+
+/// Stores a new session row.
+pub async fn insert_session(
+    pool: &SqlitePool,
+    session: &SessionRecord,
+    token_hash: &TokenHash,
+) -> Result<(), StoreError> {
+    sqlx::query(
+        "INSERT INTO sessions (id, user_id, token_hash, created_at, last_used_at, expires_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+    )
+    .bind(&session.id)
+    .bind(&session.user_id)
+    .bind(token_hash.as_bytes())
+    .bind(session.created_at.as_secs())
+    .bind(session.last_used_at.as_secs())
+    .bind(session.expires_at.as_secs())
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// Looks up a session and its account in one statement.
+///
+/// One query rather than two so the session and the user are read from a
+/// single consistent view: between two separate reads the account could
+/// be deleted, leaving a handler holding a session that points nowhere.
+pub async fn find_session_with_user(
+    pool: &SqlitePool,
+    token_hash: &TokenHash,
+) -> Result<Option<(SessionRecord, UserRecord)>, StoreError> {
+    let row = sqlx::query(
+        "SELECT s.id            AS session_id,
+                s.user_id       AS session_user_id,
+                s.created_at    AS session_created_at,
+                s.last_used_at  AS session_last_used_at,
+                s.expires_at    AS session_expires_at,
+                u.id            AS id,
+                u.username      AS username,
+                u.password_hash AS password_hash,
+                u.role          AS role,
+                u.created_at    AS created_at
+         FROM sessions s
+         JOIN users u ON u.id = s.user_id
+         WHERE s.token_hash = ?1",
+    )
+    .bind(token_hash.as_bytes())
+    .fetch_optional(pool)
+    .await?;
+
+    let Some(row) = row else {
+        return Ok(None);
+    };
+
+    let session = SessionRecord {
+        id: row.try_get("session_id")?,
+        user_id: row.try_get("session_user_id")?,
+        created_at: UnixTime::from_secs(row.try_get("session_created_at")?),
+        last_used_at: UnixTime::from_secs(row.try_get("session_last_used_at")?),
+        expires_at: UnixTime::from_secs(row.try_get("session_expires_at")?),
+    };
+    let user = user_from_row(&row)?;
+    Ok(Some((session, user)))
+}
+
+/// Records that a session was just used.
+pub async fn touch_session(
+    pool: &SqlitePool,
+    session_id: &str,
+    now: UnixTime,
+) -> Result<(), StoreError> {
+    sqlx::query("UPDATE sessions SET last_used_at = ?2 WHERE id = ?1")
+        .bind(session_id)
+        .bind(now.as_secs())
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+/// Deletes one session. Used by logout and when a session is found to
+/// have expired.
+pub async fn delete_session(pool: &SqlitePool, session_id: &str) -> Result<(), StoreError> {
+    sqlx::query("DELETE FROM sessions WHERE id = ?1")
+        .bind(session_id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+/// Removes every session past its absolute lifetime or its idle window.
+///
+/// Two statements rather than one `OR`, because each of these can use an
+/// index while the disjunction could use neither.
+pub async fn delete_expired_sessions(
+    pool: &SqlitePool,
+    now: UnixTime,
+    idle_cutoff: UnixTime,
+) -> Result<u64, StoreError> {
+    let absolute = sqlx::query("DELETE FROM sessions WHERE expires_at <= ?1")
+        .bind(now.as_secs())
+        .execute(pool)
+        .await?;
+    let idle = sqlx::query("DELETE FROM sessions WHERE last_used_at <= ?1")
+        .bind(idle_cutoff.as_secs())
+        .execute(pool)
+        .await?;
+    Ok(absolute.rows_affected() + idle.rows_affected())
+}
+
+/// How many sessions an account currently has. For tests and later
+/// session management.
+pub async fn count_sessions_for_user(pool: &SqlitePool, user_id: &str) -> Result<i64, StoreError> {
+    let (count,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM sessions WHERE user_id = ?1")
+        .bind(user_id)
+        .fetch_one(pool)
+        .await?;
+    Ok(count)
+}
