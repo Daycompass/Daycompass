@@ -13,10 +13,8 @@ use axum::routing::{get, post};
 use axum::Router;
 use serde::Serialize;
 
-use axum::http::StatusCode;
-
 use crate::auth::store::UserRecord;
-use crate::error::{not_found, ApiError};
+use crate::error::{not_found, ApiError, ErrorKind};
 use crate::middleware::require_matching_origin;
 use crate::ratelimit::Decision;
 use crate::state::AppState;
@@ -84,13 +82,8 @@ impl From<&UserRecord> for UserView {
 fn rate_limited(decision: Decision) -> Option<ApiError> {
     match decision {
         Decision::Allowed => None,
-        Decision::Limited { retry_after } => Some(
-            ApiError::new(
-                StatusCode::TOO_MANY_REQUESTS,
-                "rate_limited",
-                "too many requests; please try again later",
-            )
-            .retry_after(retry_after),
-        ),
+        Decision::Limited { retry_after } => {
+            Some(ApiError::of(ErrorKind::RateLimited).retry_after(retry_after))
+        }
     }
 }

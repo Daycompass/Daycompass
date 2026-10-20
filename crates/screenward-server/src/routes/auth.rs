@@ -20,7 +20,7 @@ use crate::auth::secret::SecretString;
 use crate::auth::session;
 use crate::auth::time::UnixTime;
 use crate::clientip::ClientAddr;
-use crate::error::ApiError;
+use crate::error::{ApiError, ErrorKind};
 use crate::ratelimit::UsernameKey;
 use crate::routes::{rate_limited, UserView};
 use crate::state::AppState;
@@ -104,17 +104,13 @@ pub async fn log_in(
             invalid_credentials().into_response()
         }
 
-        Err(LoginError::Hash(HashError::Busy)) => ApiError::new(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "server_busy",
-            "the server is too busy to process this request",
-        )
-        .retry_after(state.hasher.wait_timeout())
-        .into_response(),
+        Err(LoginError::Hash(HashError::Busy)) => ApiError::of(ErrorKind::ServerBusy)
+            .retry_after(state.hasher.wait_timeout())
+            .into_response(),
 
         Err(err) => {
             tracing::error!(error = %err, "login failed unexpectedly");
-            ApiError::from_status(StatusCode::INTERNAL_SERVER_ERROR).into_response()
+            ApiError::of(ErrorKind::InternalError).into_response()
         }
     }
 }
@@ -125,11 +121,7 @@ pub async fn log_in(
 /// could not name an account at all, so the response body and status
 /// reveal nothing about which accounts exist.
 fn invalid_credentials() -> ApiError {
-    ApiError::new(
-        StatusCode::UNAUTHORIZED,
-        "invalid_credentials",
-        "the username or password is incorrect",
-    )
+    ApiError::of(ErrorKind::InvalidCredentials)
 }
 
 /// Ends the session server side and clears the cookie.
@@ -139,7 +131,7 @@ fn invalid_credentials() -> ApiError {
 pub async fn log_out(State(state): State<AppState>, auth: AuthSession) -> Response {
     if let Err(err) = session::end(&state.pool, &auth.session.id).await {
         tracing::error!(error = %err, "could not delete a session on logout");
-        return ApiError::from_status(StatusCode::INTERNAL_SERVER_ERROR).into_response();
+        return ApiError::of(ErrorKind::InternalError).into_response();
     }
 
     tracing::info!(user_id = %auth.user.id, "logout");

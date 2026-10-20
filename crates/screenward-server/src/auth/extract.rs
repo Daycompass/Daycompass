@@ -12,14 +12,14 @@
 use std::fmt;
 
 use axum::extract::FromRequestParts;
+use axum::http::header;
 use axum::http::request::Parts;
-use axum::http::{header, StatusCode};
 use axum::response::{IntoResponse, Response};
 
 use super::store::{SessionRecord, UserRecord};
 use super::time::UnixTime;
 use super::{cookie, csrf, origin, session};
-use crate::error::ApiError;
+use crate::error::{ApiError, ErrorKind};
 use crate::state::AppState;
 
 /// Header a client echoes its CSRF token back in.
@@ -93,32 +93,16 @@ pub enum AuthRejection {
 
 impl IntoResponse for AuthRejection {
     fn into_response(self) -> Response {
-        let error = match self {
-            Self::Unauthenticated => ApiError::new(
-                StatusCode::UNAUTHORIZED,
-                "unauthenticated",
-                "authentication is required",
-            ),
+        let kind = match self {
+            Self::Unauthenticated => ErrorKind::Unauthenticated,
             // Naming which half failed is safe: the client knows what it
             // sent, and a hostile page cannot read either response.
-            Self::CsrfMissing => ApiError::new(
-                StatusCode::FORBIDDEN,
-                "csrf_token_missing",
-                "this request requires an X-CSRF-Token header",
-            ),
-            Self::CsrfInvalid => ApiError::new(
-                StatusCode::FORBIDDEN,
-                "csrf_token_invalid",
-                "the CSRF token does not match this session",
-            ),
-            Self::NotAnAdmin => ApiError::new(
-                StatusCode::FORBIDDEN,
-                "forbidden",
-                "this account may not perform this action",
-            ),
-            Self::Unavailable => ApiError::from_status(StatusCode::INTERNAL_SERVER_ERROR),
+            Self::CsrfMissing => ErrorKind::CsrfTokenMissing,
+            Self::CsrfInvalid => ErrorKind::CsrfTokenInvalid,
+            Self::NotAnAdmin => ErrorKind::NotPermitted,
+            Self::Unavailable => ErrorKind::InternalError,
         };
-        error.into_response()
+        ApiError::of(kind).into_response()
     }
 }
 
@@ -171,6 +155,8 @@ impl FromRequestParts<AppState> for AuthSession {
 
 #[cfg(test)]
 mod tests {
+    use axum::http::StatusCode;
+
     use super::*;
     use crate::auth::role::Role;
     use crate::auth::secret::SecretString;

@@ -23,10 +23,9 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
 use axum::extract::{ConnectInfo, FromRequestParts};
 use axum::http::request::Parts;
-use axum::http::StatusCode;
 
 use crate::config::{unmap_v4, TrustedProxies};
-use crate::error::ApiError;
+use crate::error::{ApiError, ErrorKind};
 use crate::state::AppState;
 
 /// Header the resolution above reads.
@@ -150,7 +149,7 @@ impl FromRequestParts<AppState> for ClientAddr {
         let Some(ConnectInfo(peer)) = parts.extensions.get::<ConnectInfo<std::net::SocketAddr>>()
         else {
             tracing::error!("no peer address on the request; connect info is not wired up");
-            return Err(ApiError::from_status(StatusCode::INTERNAL_SERVER_ERROR));
+            return Err(ApiError::of(ErrorKind::InternalError));
         };
 
         let forwarded = parts

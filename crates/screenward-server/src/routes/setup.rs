@@ -17,12 +17,13 @@ use axum::response::{IntoResponse, Response};
 use axum::Json;
 use serde::{Deserialize, Serialize};
 
-use crate::auth::password::HashError;
+use crate::auth::password::{HashError, PasswordPolicyError};
 use crate::auth::secret::SecretString;
 use crate::auth::setup::{self, SetupError};
 use crate::auth::time::UnixTime;
+use crate::auth::username::UsernameError;
 use crate::clientip::ClientAddr;
-use crate::error::ApiError;
+use crate::error::{ApiError, ErrorKind};
 use crate::routes::{rate_limited, UserView};
 use crate::state::AppState;
 
@@ -83,40 +84,33 @@ fn to_api_error(err: SetupError, state: &AppState) -> ApiError {
         // Byte-for-byte the response an unknown route gives, so a
         // provisioned instance is indistinguishable from one that never
         // had this endpoint.
-        SetupError::AlreadyCompleted => ApiError::from_status(StatusCode::NOT_FOUND),
+        SetupError::AlreadyCompleted => ApiError::of(ErrorKind::NotFound),
 
-        SetupError::InvalidToken => ApiError::new(
-            StatusCode::UNAUTHORIZED,
-            "invalid_setup_token",
-            "the setup token is not valid",
-        ),
+        SetupError::InvalidToken => ApiError::of(ErrorKind::InvalidSetupToken),
 
         // The policies are public rules, so naming which one failed is
-        // useful rather than leaky. Neither message echoes the input.
-        SetupError::InvalidUsername(reason) => ApiError::new(
-            StatusCode::BAD_REQUEST,
-            "invalid_username",
-            reason.to_string(),
-        ),
-        SetupError::InvalidPassword(reason) => ApiError::new(
-            StatusCode::BAD_REQUEST,
-            "invalid_password",
-            reason.to_string(),
-        ),
+        // useful rather than leaky. Each variant maps to one fixed
+        // message; the policy error's own `Display` goes to the log,
+        // never to the client.
+        SetupError::InvalidUsername(reason) => ApiError::of(match reason {
+            UsernameError::Length => ErrorKind::UsernameLength,
+            UsernameError::Charset => ErrorKind::UsernameCharset,
+        }),
+        SetupError::InvalidPassword(reason) => ApiError::of(match reason {
+            PasswordPolicyError::Blank => ErrorKind::PasswordBlank,
+            PasswordPolicyError::Length => ErrorKind::PasswordLength,
+        }),
 
         // Shed, not refused: the client should come back.
-        SetupError::Hash(HashError::Busy) => ApiError::new(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "server_busy",
-            "the server is too busy to process this request",
-        )
-        .retry_after(state.hasher.wait_timeout()),
+        SetupError::Hash(HashError::Busy) => {
+            ApiError::of(ErrorKind::ServerBusy).retry_after(state.hasher.wait_timeout())
+        }
 
         // Everything left is an internal fault. The detail is logged,
         // never returned.
         SetupError::Hash(_) | SetupError::Store(_) | SetupError::Rng(_) => {
             tracing::error!(error = %err, "setup failed");
-            ApiError::from_status(StatusCode::INTERNAL_SERVER_ERROR)
+            ApiError::of(ErrorKind::InternalError)
         }
     }
 }

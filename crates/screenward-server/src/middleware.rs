@@ -9,7 +9,7 @@
 use std::time::{Duration, Instant};
 
 use axum::extract::{DefaultBodyLimit, Request, State};
-use axum::http::{header, HeaderName, HeaderValue, StatusCode};
+use axum::http::{header, HeaderName, HeaderValue};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::Router;
@@ -20,7 +20,7 @@ use tower_http::set_header::SetResponseHeaderLayer;
 use tracing::Instrument;
 
 use crate::auth::origin;
-use crate::error::{ApiError, Deliberate};
+use crate::error::{ApiError, Deliberate, ErrorKind};
 use crate::state::AppState;
 
 /// Small default: this milestone has no file uploads, just tiny JSON
@@ -73,7 +73,7 @@ pub fn apply(router: Router) -> Router {
 /// other error reaching here is unexpected; treated the same way rather
 /// than risking a detail leak.
 async fn handle_timeout_error(_err: tower::BoxError) -> ApiError {
-    ApiError::from_status(StatusCode::REQUEST_TIMEOUT)
+    ApiError::of(ErrorKind::RequestTimeout)
 }
 
 /// Logs exactly one line per request: method, path (never the query
@@ -174,10 +174,5 @@ pub async fn require_matching_origin(
 /// The one response an Origin failure produces. The message does not
 /// echo the offending value, and does not state the expected one.
 fn reject_origin() -> Response {
-    ApiError::new(
-        StatusCode::FORBIDDEN,
-        "origin_mismatch",
-        "this request did not come from an allowed origin",
-    )
-    .into_response()
+    ApiError::of(ErrorKind::OriginMismatch).into_response()
 }
