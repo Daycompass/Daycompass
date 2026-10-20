@@ -6,5 +6,7 @@
 //! nothing about axum, so the JSON API and the later dashboard can share
 //! them without duplicating any logic.
 
+pub mod password;
 pub mod secret;
 pub mod token;
+pub mod username;
