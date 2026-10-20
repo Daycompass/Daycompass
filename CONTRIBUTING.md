@@ -42,6 +42,45 @@ the repo.
    commit. It fails closed: if gitleaks isn't installed, the commit is
    rejected rather than silently skipping the scan.
 
+   The rule that recognizes Screenward's own token format has its own
+   test. Run it after changing `.gitleaks.toml`:
+
+   ```sh
+   .githooks/tests/gitleaks-rules.sh
+   ```
+
+   It generates candidate tokens from fresh randomness at runtime and
+   pipes them through gitleaks, so it never writes a token-shaped string
+   to disk. CI runs it too.
+
+## Authentication code needs two reviewers
+
+Any change touching authentication needs **two approving reviews**, not
+one. That covers:
+
+- `crates/screenward-server/src/auth/**`
+- `crates/screenward-server/src/clientip.rs` and `ratelimit.rs`
+- `crates/screenward-server/src/routes/auth.rs` and `routes/setup.rs`
+- the `Origin` and error-normalizing middleware
+- any migration that touches `users`, `sessions` or `setup_tokens`
+
+The reason is that the failure mode is quiet. A bug in this code does
+not crash or return a wrong number: it silently accepts a request it
+should have refused, and the tests keep passing because they assert the
+behaviour someone already got wrong. A second reader is the cheapest
+defence available.
+
+When reviewing, look especially for:
+
+- a response that differs between "wrong password" and "no such
+  account", in status, body, headers or the work done
+- a comparison of secrets with `==` instead of a constant-time check
+- a plaintext secret reaching a log, an error, a `Debug` impl or a
+  database column
+- a state-changing route that does not require the CSRF token
+- a check performed outside the transaction that is supposed to make it
+  atomic
+
 ## Before opening a pull request
 
 - `cargo fmt --check`

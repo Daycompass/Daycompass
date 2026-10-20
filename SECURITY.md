@@ -1,16 +1,20 @@
 # Security Policy
 
-> **Placeholder.** The reporting address below is a placeholder and
-> must be replaced with a real, monitored channel before this project
-> accepts outside contributions or deployments.
-
 ## Reporting a vulnerability
 
 Please do **not** open a public GitHub issue for security
 vulnerabilities.
 
-Instead, report it privately to: `security@example.org` (placeholder -
-replace with a real address).
+Use GitHub's **private vulnerability reporting** instead: open the
+repository's *Security* tab and choose *Report a vulnerability*. That
+creates a private advisory visible only to the maintainers, so no email
+address has to be published or kept monitored, and the report cannot be
+read by anyone else while it is being fixed.
+
+If private reporting is not enabled on the repository, ask a maintainer
+to switch it on (*Settings -> Advanced Security -> Private
+vulnerability reporting*) rather than sending the details through a
+public channel.
 
 Include:
 

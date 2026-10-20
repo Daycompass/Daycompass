@@ -5,21 +5,26 @@
 //! process. No users, auth, or domain tables yet - see `CLAUDE.md`.
 #![forbid(unsafe_code)]
 
+pub mod auth;
+pub mod clientip;
 pub mod config;
 pub mod db;
 pub mod error;
 pub mod middleware;
+pub mod ratelimit;
 pub mod routes;
+pub mod state;
 
 use axum::Router;
 use sqlx::SqlitePool;
 use tracing_subscriber::EnvFilter;
 
 use config::Config;
+use state::AppState;
 
-/// Builds the full axum app (routes plus middleware) over `pool`.
-pub fn build_app(pool: SqlitePool) -> Router {
-    middleware::apply(routes::router(pool))
+/// Builds the full axum app (routes plus middleware) over `state`.
+pub fn build_app(state: AppState) -> Router {
+    middleware::apply(routes::router(state))
 }
 
 /// Initializes JSON structured logging at the level given by
@@ -40,6 +45,62 @@ pub async fn setup_db(config: &Config) -> Result<SqlitePool, db::DbError> {
     let pool = db::connect(&target).await?;
     db::migrate(&pool).await?;
     Ok(pool)
+}
+
+/// Serves `app` on `listener` until `shutdown` resolves.
+///
+/// The `into_make_service_with_connect_info` call lives here, in one
+/// place, because it is what puts the peer address on every request.
+/// Without it the `ClientAddr` extractor fails closed and nothing can
+/// be rate limited - a wiring mistake no handler test can catch,
+/// because handler tests inject the peer address themselves. That is
+/// why this function exists as a seam rather than being inlined in
+/// `main`, and why `tests/serve_over_tcp.rs` drives it over a real
+/// socket.
+pub async fn serve<F>(
+    listener: tokio::net::TcpListener,
+    app: Router,
+    shutdown: F,
+) -> std::io::Result<()>
+where
+    F: std::future::Future<Output = ()> + Send + 'static,
+{
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown)
+    .await
+}
+
+/// How often the background sweep runs.
+///
+/// An hour is frequent enough that expired rows do not accumulate and
+/// infrequent enough to be invisible in load. Expiry itself does not
+/// depend on this task: a session is also checked, and deleted, on every
+/// request that presents it. This only catches the ones nobody comes
+/// back for.
+const CLEANUP_INTERVAL: std::time::Duration = std::time::Duration::from_secs(60 * 60);
+
+/// Spawns the task that deletes expired sessions and spent setup tokens.
+///
+/// Runs one sweep immediately, so a restart cleans up whatever expired
+/// while the process was down, then on a fixed interval. A failed sweep
+/// is logged and retried at the next tick rather than ending the task,
+/// since a transient database error must not silently stop cleanup for
+/// the lifetime of the process.
+pub fn spawn_cleanup_task(pool: SqlitePool, policy: auth::session::SessionPolicy) {
+    tokio::spawn(async move {
+        let mut ticker = tokio::time::interval(CLEANUP_INTERVAL);
+        loop {
+            ticker.tick().await;
+            match auth::session::sweep_expired(&pool, policy, auth::time::UnixTime::now()).await {
+                Ok(0) => {}
+                Ok(removed) => tracing::info!(removed, "cleaned up expired rows"),
+                Err(err) => tracing::error!(error = %err, "the cleanup sweep failed"),
+            }
+        }
+    });
 }
 
 /// Waits for Ctrl-C or, on Unix, SIGTERM - whichever comes first - so

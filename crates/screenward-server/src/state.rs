@@ -1,0 +1,102 @@
+//! Shared application state.
+//!
+//! Handlers receive this and nothing else. It holds the database pool
+//! and the long-lived values built from configuration at startup, so
+//! nothing security-relevant is re-derived per request and nothing reads
+//! the environment after startup.
+
+use std::sync::Arc;
+
+use axum::extract::FromRef;
+use sqlx::SqlitePool;
+
+use crate::auth::password::{HashError, Hasher};
+use crate::auth::session::SessionPolicy;
+use crate::clientip::ClientKey;
+use crate::config::{Config, PublicUrl, TrustedProxies};
+use crate::ratelimit::{RateLimiter, UsernameKey};
+
+/// Cloned once per request by axum. Every field is cheap to clone: the
+/// pool and the hasher are handles to shared state rather than copies of
+/// it, which is what keeps the Argon2 concurrency cap global.
+#[derive(Clone)]
+pub struct AppState {
+    pub pool: SqlitePool,
+    pub hasher: Hasher,
+    pub session_policy: SessionPolicy,
+    pub public_url: PublicUrl,
+    /// A hash of a random password that was discarded, verified against
+    /// when a login names an account that does not exist, so that path
+    /// costs the same as a real one. Built once at startup: doing it per
+    /// request would double the work of every failed login.
+    pub decoy_password_hash: Arc<String>,
+    pub trusted_proxies: TrustedProxies,
+    pub limits: Limits,
+}
+
+/// The rate limiters, one per bucket.
+///
+/// Separate limiters rather than one shared map, so pressure on one
+/// bucket cannot evict another's entries - invented usernames must not
+/// be able to flush the per-address counters.
+#[derive(Clone)]
+pub struct Limits {
+    pub login_ip: Arc<RateLimiter<ClientKey>>,
+    pub login_username: Arc<RateLimiter<UsernameKey>>,
+    pub setup_ip: Arc<RateLimiter<ClientKey>>,
+}
+
+impl Limits {
+    fn new(config: &Config) -> Self {
+        Self {
+            login_ip: Arc::new(RateLimiter::new(
+                config.rate_limit_login_ip,
+                config.rate_limit_max_entries,
+            )),
+            login_username: Arc::new(RateLimiter::new(
+                config.rate_limit_login_username,
+                config.rate_limit_max_entries,
+            )),
+            setup_ip: Arc::new(RateLimiter::new(
+                config.rate_limit_setup_ip,
+                config.rate_limit_max_entries,
+            )),
+        }
+    }
+}
+
+impl AppState {
+    /// Builds the state, including the decoy hash.
+    ///
+    /// Fallible and async because of that hash. Failing here means
+    /// Argon2 cannot run at all, which is worth refusing to start over
+    /// rather than discovering at the first login.
+    pub async fn new(pool: SqlitePool, config: &Config) -> Result<Self, HashError> {
+        let hasher = Hasher::new(
+            config.argon2,
+            config.argon2_max_concurrent,
+            config.argon2_wait_timeout,
+        );
+        let decoy_password_hash = Arc::new(hasher.decoy_hash().await?);
+
+        Ok(Self {
+            pool,
+            hasher,
+            session_policy: SessionPolicy {
+                idle_timeout: config.session_idle_timeout,
+                absolute_timeout: config.session_absolute_timeout,
+            },
+            public_url: config.public_url.clone(),
+            decoy_password_hash,
+            trusted_proxies: config.trusted_proxies.clone(),
+            limits: Limits::new(config),
+        })
+    }
+}
+
+/// Lets a handler ask for just the pool with `State<SqlitePool>`.
+impl FromRef<AppState> for SqlitePool {
+    fn from_ref(state: &AppState) -> Self {
+        state.pool.clone()
+    }
+}
