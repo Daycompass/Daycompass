@@ -21,8 +21,9 @@ use crate::auth::password::HashError;
 use crate::auth::secret::SecretString;
 use crate::auth::setup::{self, SetupError};
 use crate::auth::time::UnixTime;
+use crate::clientip::ClientAddr;
 use crate::error::ApiError;
-use crate::routes::UserView;
+use crate::routes::{rate_limited, UserView};
 use crate::state::AppState;
 
 #[derive(Deserialize)]
@@ -40,15 +41,25 @@ struct SetupResponse {
 
 pub async fn create_first_admin(
     State(state): State<AppState>,
+    client: ClientAddr,
     Json(request): Json<SetupRequest>,
 ) -> Response {
+    let now = UnixTime::now();
+
+    // The setup token is unguessable, so this bounds noise rather than
+    // guessing - but it also stops an unauthenticated caller from
+    // spending Argon2 work at will while setup is still open.
+    if let Some(error) = rate_limited(state.limits.setup_ip.check(client.rate_limit_key(), now)) {
+        return error.into_response();
+    }
+
     let result = setup::complete_setup(
         &state.pool,
         &state.hasher,
         &request.setup_token,
         &request.username,
         request.password,
-        UnixTime::now(),
+        now,
     )
     .await;
 

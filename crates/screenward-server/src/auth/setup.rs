@@ -111,14 +111,21 @@ pub fn setup_instructions(token: &Token, public_url: &str) -> String {
 ///
 /// The order of work matters:
 ///
-/// 1. The username and password policies are checked first, because
-///    they are free.
-/// 2. The admin check and the token check run as cheap reads, so a bad
-///    token is rejected before any Argon2 work is spent on it.
-/// 3. Only then is the password hashed.
-/// 4. The authoritative write happens in a `BEGIN IMMEDIATE`
-///    transaction that re-checks both, so two requests racing through
-///    steps 1 to 3 still produce exactly one admin.
+/// 1. The admin check comes **first**, before anything looks at the
+///    input at all. Once an admin exists every call must answer
+///    `AlreadyCompleted` - which the endpoint turns into a 404 - no
+///    matter what was sent. Validating the token or the policies first
+///    would make a provisioned instance answer 401 or 400 for
+///    malformed input while a genuinely absent route answers 404, which
+///    is exactly the leak the 404 is there to prevent.
+/// 2. Then the username and password policies, because they are free.
+/// 3. Then the token, as a cheap read, so a bad one is rejected before
+///    any Argon2 work is spent on it.
+/// 4. Only then is the password hashed.
+/// 5. The authoritative write happens in a `BEGIN IMMEDIATE`
+///    transaction that re-checks the admin and the token, so two
+///    requests racing through the earlier steps still produce exactly
+///    one admin.
 ///
 /// Hashing deliberately happens outside the transaction: it takes tens
 /// of milliseconds, and holding SQLite's write lock for that long would
@@ -131,15 +138,18 @@ pub async fn complete_setup(
     raw_password: SecretString,
     now: UnixTime,
 ) -> Result<UserRecord, SetupError> {
+    // Before anything else, so a provisioned instance is uniformly a
+    // 404 and this function's remaining logic really is dead code.
+    if store::admin_exists(pool).await? {
+        return Err(SetupError::AlreadyCompleted);
+    }
+
     let username = Username::parse(raw_username)?;
     let password = Password::parse(raw_password)?;
 
     let token_hash = TokenHash::of_presented(TokenKind::Setup, presented_token.expose())
         .ok_or(SetupError::InvalidToken)?;
 
-    if store::admin_exists(pool).await? {
-        return Err(SetupError::AlreadyCompleted);
-    }
     if !store::setup_token_is_live(pool, &token_hash, now).await? {
         return Err(SetupError::InvalidToken);
     }
@@ -534,6 +544,48 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(users, 1, "no second account may exist either");
+    }
+
+    /// Once an admin exists, every input must give the same answer.
+    /// Reporting a malformed token or a bad username instead would tell
+    /// an unauthenticated caller that this endpoint exists at all.
+    #[tokio::test]
+    async fn a_provisioned_instance_answers_already_completed_for_any_input() {
+        let pool = memory_pool().await;
+        let token = issue_token_if_unprovisioned(&pool, now())
+            .await
+            .unwrap()
+            .unwrap();
+        complete(&pool, &token, "alice", now())
+            .await
+            .expect("setup must succeed once");
+
+        let session_token = Token::generate(TokenKind::Session).unwrap();
+        let cases: [(&str, &str); 5] = [
+            ("a well-formed but unknown token", "swb_x"),
+            ("a session token", session_token.expose()),
+            ("junk", "not-a-token"),
+            ("nothing", ""),
+            ("the token that worked", token.expose()),
+        ];
+
+        for (label, candidate) in cases {
+            for username in ["bob", "x", "not a username!"] {
+                let result = complete_setup(
+                    &pool,
+                    &test_hasher(),
+                    &SecretString::new(candidate.to_owned()),
+                    username,
+                    random_secret(),
+                    now(),
+                )
+                .await;
+                assert!(
+                    matches!(result, Err(SetupError::AlreadyCompleted)),
+                    "{label} with username {username:?} must be AlreadyCompleted,                      got {result:?}"
+                );
+            }
+        }
     }
 
     #[tokio::test]
