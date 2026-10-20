@@ -47,6 +47,32 @@ pub async fn setup_db(config: &Config) -> Result<SqlitePool, db::DbError> {
     Ok(pool)
 }
 
+/// Serves `app` on `listener` until `shutdown` resolves.
+///
+/// The `into_make_service_with_connect_info` call lives here, in one
+/// place, because it is what puts the peer address on every request.
+/// Without it the `ClientAddr` extractor fails closed and nothing can
+/// be rate limited - a wiring mistake no handler test can catch,
+/// because handler tests inject the peer address themselves. That is
+/// why this function exists as a seam rather than being inlined in
+/// `main`, and why `tests/serve_over_tcp.rs` drives it over a real
+/// socket.
+pub async fn serve<F>(
+    listener: tokio::net::TcpListener,
+    app: Router,
+    shutdown: F,
+) -> std::io::Result<()>
+where
+    F: std::future::Future<Output = ()> + Send + 'static,
+{
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown)
+    .await
+}
+
 /// How often the background sweep runs.
 ///
 /// An hour is frequent enough that expired rows do not accumulate and

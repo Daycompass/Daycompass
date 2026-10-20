@@ -79,6 +79,12 @@ impl TestApp {
         }
     }
 
+    /// The router itself, for the test that serves it over a real
+    /// socket rather than calling it with `oneshot`.
+    pub fn router(&self) -> Router {
+        self.router.clone()
+    }
+
     /// Sends one request and returns status, headers and parsed body.
     pub async fn send(&self, request: TestRequest) -> TestResponse {
         let response = self

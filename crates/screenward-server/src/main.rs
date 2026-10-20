@@ -76,9 +76,12 @@ async fn main() {
 
     tracing::info!(addr = %config.bind_addr, "listening");
 
-    if let Err(err) = axum::serve(listener, app)
-        .with_graceful_shutdown(screenward_server::shutdown_signal())
-        .await
+    // `serve` is what attaches the peer address to each request; see
+    // its documentation. Previously this called `axum::serve` directly
+    // and therefore attached nothing, which made every request needing
+    // a client address fail closed with 500.
+    if let Err(err) =
+        screenward_server::serve(listener, app, screenward_server::shutdown_signal()).await
     {
         tracing::error!(error = %err, "server error");
         std::process::exit(1);

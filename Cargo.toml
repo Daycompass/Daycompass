@@ -29,8 +29,11 @@ tokio = { version = "~1.54", features = [
     "signal",
     # "sync": Semaphore, to cap concurrent Argon2 hashes.
     # "time": the periodic session/setup-token cleanup task.
+    # "net": TcpListener. Enabled transitively by axum anyway; named
+    # here so the binary does not depend on that staying true.
     "sync",
     "time",
+    "net",
 ] }
 axum = { version = "~0.8" }
 tower = { version = "~0.5", features = ["util", "timeout"] }
