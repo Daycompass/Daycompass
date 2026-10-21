@@ -139,21 +139,69 @@ pub async fn enforce_session_access(
 
 /// Requires a paired, unrevoked device, then hands it to the handler.
 ///
-/// Attached from an [`Access::Device`] entry. The two rules it
-/// enforces are the mirror image of the bearer refusal above, and both
-/// are documented in [`crate::auth::device`].
+/// Attached from an [`Access::Device`] entry. The two cross-credential
+/// rules it enforces are the mirror image of the bearer refusal above,
+/// and both are documented in [`crate::auth::device`].
+///
+/// # The pre-authentication limiter
+///
+/// This layer also enforces the route's
+/// [`LimitKey::PeerBeforeAuth`] limit, which the shared rate-limit
+/// layer cannot: the policy is *peek, then charge only on failure*,
+/// and `RateLimiter::check` counts and decides in one call.
+///
+/// The order below is what makes it worth having. The peek happens
+/// first, before the cookie check, before the bearer is parsed and
+/// before any query - so a caller who is already out of budget costs
+/// one hash-map lookup and nothing else. Every path that refuses the
+/// request then charges the bucket; the path that succeeds does not,
+/// so a working device never spends from it however much it syncs.
+///
+/// A database *error* does not charge. That is this server failing,
+/// not the caller misbehaving, and charging for it would let a
+/// database wobble lock out the clients that happened to be syncing.
 pub async fn enforce_device_access(
     State((state, _spec)): State<RouteState>,
     request: Request,
     next: Next,
 ) -> Response {
-    let (parts, body) = request.into_parts();
+    let now = UnixTime::now();
+    let (mut parts, body) = request.into_parts();
+
+    // Fail closed if the client address cannot be resolved. Without it
+    // there is no key to count against, and letting the request
+    // through unlimited is exactly the hole this layer exists to
+    // close. `ClientAddr` already logs and answers 500; the important
+    // part is that the request stops here rather than reaching the
+    // lookup uncounted.
+    let client = match ClientAddr::from_request_parts(&mut parts, &state).await {
+        Ok(client) => client,
+        Err(rejection) => return rejection.into_response(),
+    };
+    let peer = client.rate_limit_key();
+
+    // Read-only, and before everything. An exhausted bucket answers
+    // 429 with a Retry-After and never touches the database.
+    if let Some(error) = rate_limited(state.limits.device_auth_fail.peek(&peer, now)) {
+        return error.into_response();
+    }
+
+    // Charges the failure bucket and produces the one refusal every
+    // kind of authentication failure shares.
+    let refuse = || {
+        state.limits.device_auth_fail.check(peer, now);
+        DeviceRejection::Unauthenticated.into_response()
+    };
 
     // A device route refuses any request carrying the Screenward
     // session cookie, even one that also presents a valid token. A
     // device is a different principal with a different credential, and
     // a request arriving with both is not something a native client
     // does.
+    //
+    // It charges the bucket like any other failure: the budget is per
+    // address, and a browser that reaches a device route is a client
+    // with a bug, spending its own address's budget.
     //
     // `cookie::is_present` rather than `cookie::read(..).is_some()`:
     // `read` returns `None` for a *duplicated* cookie, so two copies
@@ -167,26 +215,26 @@ pub async fn enforce_device_access(
         .iter()
         .filter_map(|value| value.to_str().ok());
     if cookie::is_present(cookies) {
-        return DeviceRejection::Unauthenticated.into_response();
+        return refuse();
     }
 
     let Some(presented) = device::presented_bearer(&parts) else {
-        return DeviceRejection::Unauthenticated.into_response();
+        return refuse();
     };
 
     // The shape of the token is checked in memory inside `resolve`
-    // before any query, which is what keeps an unauthenticated caller
-    // from spending a database lookup per attempt on a route whose
-    // rate limit cannot run until the device is known.
-    let resolved = match device::resolve(&state.pool, presented, UnixTime::now()).await {
+    // before any query, so a malformed token costs no lookup even
+    // while it does spend from the failure budget.
+    let resolved = match device::resolve(&state.pool, presented, now).await {
         Ok(resolved) => resolved,
         Err(err) => {
+            // Not charged: see the note above.
             tracing::error!(error = %err, "could not resolve a device");
             return DeviceRejection::Unavailable.into_response();
         }
     };
     let Some(record) = resolved else {
-        return DeviceRejection::Unauthenticated.into_response();
+        return refuse();
     };
 
     let mut request = Request::from_parts(parts, body);
@@ -263,6 +311,11 @@ pub async fn enforce_rate_limits(
             }
             // The handler owns this one: its key is in the request body.
             (_, LimitKey::Body) => continue,
+            // `enforce_device_access` owns this one. It runs before
+            // this layer and before any query, peeks rather than
+            // charges, and charges only when authentication fails -
+            // none of which this loop can express.
+            (_, LimitKey::PeerBeforeAuth) => continue,
             _ => return unenforceable(*limit),
         };
 

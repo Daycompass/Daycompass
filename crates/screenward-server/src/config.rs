@@ -49,6 +49,7 @@ const VAR_EVENT_MAX_AGE: &str = "SCREENWARD_EVENT_MAX_AGE_SECS";
 const VAR_RATE_LIMIT_PAIR_IP: &str = "SCREENWARD_RATE_LIMIT_PAIR_IP";
 const VAR_RATE_LIMIT_PAIR_GLOBAL: &str = "SCREENWARD_RATE_LIMIT_PAIR_GLOBAL";
 const VAR_RATE_LIMIT_INGEST_DEVICE: &str = "SCREENWARD_RATE_LIMIT_INGEST_DEVICE";
+const VAR_RATE_LIMIT_DEVICE_AUTH_FAIL: &str = "SCREENWARD_RATE_LIMIT_DEVICE_AUTH_FAIL";
 
 const DEFAULT_BIND_ADDR: &str = "127.0.0.1:8080";
 const DEFAULT_DATA_DIR: &str = "./data";
@@ -136,6 +137,31 @@ const DEFAULT_RATE_LIMIT_PAIR_IP: &str = "10/300";
 /// security and makes that lever cheaper to pull.
 const DEFAULT_RATE_LIMIT_PAIR_GLOBAL: &str = "600/60";
 
+/// Sixty *failed* device authentications per minute from one client
+/// address.
+///
+/// The one limiter consulted before anything is authenticated, and
+/// therefore the only thing bounding what an anonymous caller can
+/// make the device routes do. Without it a well-formed but unknown
+/// bearer token costs one indexed lookup per request, forever.
+///
+/// Only failures count. A paired device that is working never touches
+/// this budget however much it syncs, which is what makes the limit
+/// affordable behind a school NAT where many devices share one
+/// address.
+///
+/// The trade-off, and it is the same shape as the shared pairing
+/// ceiling above: the budget is per address, so once it is exhausted
+/// a *valid* token from that address is refused too, until the window
+/// rolls over. Behind a NAT one misconfigured client can therefore
+/// lock out its neighbours for up to a minute. That is accepted for
+/// the same two reasons - the window is fixed and always clears
+/// itself, with no administrator needed, and sixty failures a minute
+/// is far above what a working client produces. A client that is
+/// failing to authenticate sixty times a minute is broken or hostile,
+/// and either way should be made to slow down.
+const DEFAULT_RATE_LIMIT_DEVICE_AUTH_FAIL: &str = "60/60";
+
 /// Thirty ingest requests per minute for one device.
 ///
 /// At the 500-event batch cap that is fifteen thousand events a
@@ -177,6 +203,8 @@ pub struct Config {
     pub rate_limit_pair_global: RateLimitRule,
     /// Ingest requests from one device, per window.
     pub rate_limit_ingest_device: RateLimitRule,
+    /// Failed device authentications from one address, per window.
+    pub rate_limit_device_auth_fail: RateLimitRule,
 }
 
 /// Failed to load configuration. Messages name the offending variable but
@@ -406,6 +434,11 @@ impl Config {
             VAR_RATE_LIMIT_INGEST_DEVICE,
             DEFAULT_RATE_LIMIT_INGEST_DEVICE,
         )?;
+        let rate_limit_device_auth_fail = rule(
+            source,
+            VAR_RATE_LIMIT_DEVICE_AUTH_FAIL,
+            DEFAULT_RATE_LIMIT_DEVICE_AUTH_FAIL,
+        )?;
 
         Ok(Config {
             bind_addr,
@@ -428,6 +461,7 @@ impl Config {
             rate_limit_pair_ip,
             rate_limit_pair_global,
             rate_limit_ingest_device,
+            rate_limit_device_auth_fail,
         })
     }
 }
@@ -458,6 +492,10 @@ impl fmt::Debug for Config {
             .field("rate_limit_pair_ip", &self.rate_limit_pair_ip)
             .field("rate_limit_pair_global", &self.rate_limit_pair_global)
             .field("rate_limit_ingest_device", &self.rate_limit_ingest_device)
+            .field(
+                "rate_limit_device_auth_fail",
+                &self.rate_limit_device_auth_fail,
+            )
             .finish()
     }
 }
@@ -1227,7 +1265,8 @@ mod tests {
                 "event_max_age: 7776000s, ",
                 "rate_limit_pair_ip: RateLimitRule { max: 10, window: 300s }, ",
                 "rate_limit_pair_global: RateLimitRule { max: 600, window: 60s }, ",
-                "rate_limit_ingest_device: RateLimitRule { max: 30, window: 60s }",
+                "rate_limit_ingest_device: RateLimitRule { max: 30, window: 60s }, ",
+                "rate_limit_device_auth_fail: RateLimitRule { max: 60, window: 60s }",
                 " }",
             )
         );

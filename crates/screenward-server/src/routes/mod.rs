@@ -149,7 +149,14 @@ pub enum Bucket {
     PwChange,
     PairIp,
     PairGlobal,
+    /// Requests from one authenticated device. Shared by
+    /// `POST /api/v1/events` and `GET /api/v1/device/me`: the name
+    /// says ingest because that is what it was introduced for and
+    /// what its environment variable is called, but both device
+    /// routes count against it.
     IngestDevice,
+    /// *Failed* device authentications from one client address.
+    DeviceAuthFail,
 }
 
 /// What a limiter counts a request against.
@@ -171,6 +178,20 @@ pub enum LimitKey {
     /// by a layer, because a layer cannot see the body without
     /// buffering it - the handler is the first place the key exists.
     Body,
+    /// The client address, checked *before* the caller is
+    /// authenticated and charged only when authentication fails.
+    ///
+    /// Enforced by [`crate::routes::access::enforce_device_access`]
+    /// rather than by the shared rate-limit layer, which cannot
+    /// express it: that layer's loop calls `check`, which counts and
+    /// decides in one step, while this policy needs a read-only peek
+    /// up front and a charge on three separate failure paths.
+    ///
+    /// Moving the shared layer outside the access layer would not
+    /// help - it would still be one `check` per limit, and it would
+    /// change the ordering of [`LimitKey::Device`], which must stay
+    /// inside because it keys on the device that layer resolves.
+    PeerBeforeAuth,
 }
 
 /// A limiter a route is counted against.
@@ -194,7 +215,7 @@ impl RateLimit {
     /// and is skipped by the shared layer's loop rather than being
     /// unenforced.
     pub const fn enforced_by_shared_layer(self) -> bool {
-        !matches!(self.key, LimitKey::Body)
+        !matches!(self.key, LimitKey::Body | LimitKey::PeerBeforeAuth)
     }
 }
 
@@ -330,7 +351,33 @@ impl RouteSpec {
                 self.method,
                 self.path
             );
+            // Only the device access layer enforces this one, so an
+            // entry claiming it anywhere else would be claiming a
+            // protection nothing applies.
+            assert!(
+                limit.key != LimitKey::PeerBeforeAuth || self.access.needs_device(),
+                "{} {}: a pre-auth peer limit is only enforced on a device route",
+                self.method,
+                self.path
+            );
         }
+
+        // And the converse, which is the half that actually protects
+        // anything: every device route must declare it. The layer
+        // enforces it unconditionally, so an entry without it would
+        // leave the table describing less than the server does - and
+        // the next person to add a device route would get the limit
+        // by accident rather than by decision.
+        assert!(
+            !self.access.needs_device()
+                || self
+                    .rate_limits
+                    .iter()
+                    .any(|limit| limit.key == LimitKey::PeerBeforeAuth),
+            "{} {}: a device route must declare a PeerBeforeAuth limit",
+            self.method,
+            self.path
+        );
     }
 }
 
@@ -516,7 +563,10 @@ pub const INVENTORY: &[RouteSpec] = &[
         csrf: false,
         sets_session_cookie: false,
         max_body_bytes: Some(crate::events::ingest::MAX_BODY_BYTES),
-        rate_limits: &[RateLimit::new(Bucket::IngestDevice, LimitKey::Device)],
+        rate_limits: &[
+            RateLimit::new(Bucket::DeviceAuthFail, LimitKey::PeerBeforeAuth),
+            RateLimit::new(Bucket::IngestDevice, LimitKey::Device),
+        ],
     },
     // Lets a client detect clock skew, which is what makes the
     // validator's future-dating rules diagnosable from the outside.
@@ -528,7 +578,14 @@ pub const INVENTORY: &[RouteSpec] = &[
         csrf: false,
         sets_session_cookie: false,
         max_body_bytes: None,
-        rate_limits: &[],
+        rate_limits: &[
+            RateLimit::new(Bucket::DeviceAuthFail, LimitKey::PeerBeforeAuth),
+            // The same bucket as ingest, deliberately: a client that
+            // polls this route is spending the same kind of budget as
+            // one that syncs, and two buckets would just be two
+            // numbers to keep in step.
+            RateLimit::new(Bucket::IngestDevice, LimitKey::Device),
+        ],
     },
     RouteSpec {
         method: "GET",
@@ -962,10 +1019,17 @@ mod tests {
     #[test]
     #[should_panic(expected = "a route without a session cannot require a CSRF token")]
     fn a_device_route_may_not_demand_a_csrf_token() {
-        let mut spec = spec_with(Access::Device, true, &[]);
+        let mut spec = spec_with(Access::Device, true, PRE_AUTH);
         spec.origin = OriginRule::NoAmbientAuthority;
         spec.validate();
     }
+
+    /// The limit every device route has to declare, for the probes
+    /// above that are about some *other* contradiction.
+    const PRE_AUTH: &[RateLimit] = &[RateLimit::new(
+        Bucket::DeviceAuthFail,
+        LimitKey::PeerBeforeAuth,
+    )];
 
     #[test]
     #[should_panic(expected = "must require a CSRF token")]
@@ -985,8 +1049,36 @@ mod tests {
     #[test]
     #[should_panic(expected = "needs a session to key on")]
     fn a_device_route_may_not_use_a_session_keyed_limit() {
-        const LIMITS: &[RateLimit] = &[RateLimit::new(Bucket::PwChange, LimitKey::Session)];
+        const LIMITS: &[RateLimit] = &[
+            RateLimit::new(Bucket::DeviceAuthFail, LimitKey::PeerBeforeAuth),
+            RateLimit::new(Bucket::PwChange, LimitKey::Session),
+        ];
         let mut spec = spec_with(Access::Device, false, LIMITS);
+        spec.origin = OriginRule::NoAmbientAuthority;
+        spec.validate();
+    }
+
+    /// The pre-auth peer limit is enforced only by the device access
+    /// layer, so claiming it anywhere else claims a protection
+    /// nothing applies.
+    #[test]
+    #[should_panic(expected = "a pre-auth peer limit is only enforced on a device route")]
+    fn a_pre_auth_peer_limit_is_only_for_device_routes() {
+        const LIMITS: &[RateLimit] = &[RateLimit::new(
+            Bucket::DeviceAuthFail,
+            LimitKey::PeerBeforeAuth,
+        )];
+        spec_with(Access::Public, false, LIMITS).validate();
+    }
+
+    /// And the direction that actually protects something: the layer
+    /// enforces the limit on every device route unconditionally, so an
+    /// entry that does not declare it would leave the table describing
+    /// less than the server does.
+    #[test]
+    #[should_panic(expected = "a device route must declare a PeerBeforeAuth limit")]
+    fn a_device_route_must_declare_the_pre_auth_peer_limit() {
+        let mut spec = spec_with(Access::Device, false, &[]);
         spec.origin = OriginRule::NoAmbientAuthority;
         spec.validate();
     }
@@ -1037,7 +1129,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "a device route must be marked NoAmbientAuthority")]
     fn a_device_route_must_skip_the_origin_check() {
-        spec_with(Access::Device, false, &[]).validate();
+        spec_with(Access::Device, false, PRE_AUTH).validate();
     }
 
     /// And the shapes that are fine must stay fine, or the check would
@@ -1051,10 +1143,17 @@ mod tests {
 
         // The two kinds that may skip the Origin check.
         exempt_spec(Access::BodySecret, false).validate();
-        exempt_spec(Access::Device, false).validate();
+        // A device route also has to carry the pre-auth limit, so the
+        // exempt probe needs it to be a shape the table could use.
+        let mut exempt_device = exempt_spec(Access::Device, false);
+        exempt_device.rate_limits = PRE_AUTH;
+        exempt_device.validate();
 
-        // A device-keyed limit on a device route.
-        const INGEST: &[RateLimit] = &[RateLimit::new(Bucket::IngestDevice, LimitKey::Device)];
+        // A device route, with both limits its entry must carry.
+        const INGEST: &[RateLimit] = &[
+            RateLimit::new(Bucket::DeviceAuthFail, LimitKey::PeerBeforeAuth),
+            RateLimit::new(Bucket::IngestDevice, LimitKey::Device),
+        ];
         let mut device = spec_with(Access::Device, false, INGEST);
         device.origin = OriginRule::NoAmbientAuthority;
         device.max_body_bytes = Some(512 * 1024);

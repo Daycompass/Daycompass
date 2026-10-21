@@ -123,6 +123,41 @@ impl<K: Eq + Hash + Clone> RateLimiter<K> {
         Decision::Allowed
     }
 
+    /// Says whether `key` has budget left, **without spending any**.
+    ///
+    /// For the one policy [`check`](Self::check) cannot express: refuse
+    /// a caller who is already out of budget, but charge only when the
+    /// request turns out to be a failure. Device authentication needs
+    /// exactly that - a successful request must not consume the
+    /// failure budget - so it peeks first and charges later.
+    ///
+    /// Deliberately read-only, and in particular it **does not insert
+    /// an entry**. That matters because this is the one limiter
+    /// consulted before any authentication: if peeking created a map
+    /// entry, an unauthenticated flood of distinct addresses could
+    /// grow the map without ever charging anything. An unknown key has
+    /// full budget and leaves no trace.
+    pub fn peek(&self, key: &K, now: UnixTime) -> Decision {
+        let windows = self
+            .windows
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+
+        let Some(window) = windows.get(key) else {
+            return Decision::Allowed;
+        };
+        if window.has_ended(self.rule.window, now) {
+            return Decision::Allowed;
+        }
+        if window.count >= self.rule.max {
+            let elapsed = now.saturating_duration_since(window.started_at);
+            return Decision::Limited {
+                retry_after: self.rule.window.saturating_sub(elapsed),
+            };
+        }
+        Decision::Allowed
+    }
+
     /// Frees one slot. Linear in the number of entries, but only runs
     /// once the map is at its bound.
     fn make_room(&self, windows: &mut HashMap<K, Window>, now: UnixTime) {
@@ -412,6 +447,88 @@ mod tests {
             handle.join().expect("no thread may panic");
         }
         assert!(limiter.tracked() <= 64);
+    }
+
+    // --- peeking --------------------------------------------------------
+
+    /// Peeking must never spend budget, however often it is done.
+    #[test]
+    fn peeking_does_not_consume_anything() {
+        let limiter = RateLimiter::new(rule(2, 60), 100);
+
+        for _ in 0..100 {
+            assert_eq!(limiter.peek(&"key", at(1_000)), Decision::Allowed);
+        }
+        // Still the full budget afterwards.
+        assert!(limiter.check("key", at(1_000)).is_allowed());
+        assert!(limiter.check("key", at(1_000)).is_allowed());
+        assert!(!limiter.check("key", at(1_000)).is_allowed());
+    }
+
+    /// And it must not create an entry. This is the property that
+    /// keeps a pre-authentication peek from being a memory vector: a
+    /// flood of distinct addresses that never gets as far as being
+    /// charged must leave the map empty.
+    #[test]
+    fn peeking_an_unknown_key_stores_nothing() {
+        let limiter = RateLimiter::new(rule(2, 60), 100);
+
+        for key in 0..1_000 {
+            assert_eq!(limiter.peek(&key, at(1_000)), Decision::Allowed);
+        }
+        assert_eq!(limiter.tracked(), 0, "peeking must leave no trace");
+    }
+
+    #[test]
+    fn peeking_reports_an_exhausted_key_with_a_retry_after() {
+        let limiter = RateLimiter::new(rule(1, 60), 100);
+        assert!(limiter.check("key", at(1_000)).is_allowed());
+
+        assert_eq!(
+            limiter.peek(&"key", at(1_000)),
+            Decision::Limited {
+                retry_after: Duration::from_secs(60)
+            }
+        );
+        assert_eq!(
+            limiter.peek(&"key", at(1_045)),
+            Decision::Limited {
+                retry_after: Duration::from_secs(15)
+            },
+            "the countdown must match what check() would have said"
+        );
+    }
+
+    /// The window reset, seen through `peek`. A caller who exhausted
+    /// the budget gets it back when the window ends, and the peek has
+    /// to agree with `check` about when that is.
+    #[test]
+    fn a_peeked_window_reopens_when_it_ends() {
+        let limiter = RateLimiter::new(rule(2, 60), 100);
+        assert!(limiter.check("key", at(1_000)).is_allowed());
+        assert!(limiter.check("key", at(1_000)).is_allowed());
+
+        // Exhausted, and still exhausted one second before the end.
+        assert!(!limiter.peek(&"key", at(1_000)).is_allowed());
+        assert!(!limiter.peek(&"key", at(1_059)).is_allowed());
+
+        // Open again exactly at the boundary, for both operations.
+        assert!(limiter.peek(&"key", at(1_060)).is_allowed());
+        assert!(limiter.check("key", at(1_060)).is_allowed());
+    }
+
+    /// Peek and check must never disagree about the same key at the
+    /// same instant, or a request could be admitted by one and
+    /// refused by the other.
+    #[test]
+    fn peek_agrees_with_check_at_every_point_in_a_window() {
+        let limiter = RateLimiter::new(rule(3, 60), 100);
+
+        for expected_allowed in [true, true, true, false, false] {
+            let peeked = limiter.peek(&"key", at(1_000)).is_allowed();
+            assert_eq!(peeked, expected_allowed);
+            assert_eq!(limiter.check("key", at(1_000)).is_allowed(), peeked);
+        }
     }
 
     // --- username keys ------------------------------------------------

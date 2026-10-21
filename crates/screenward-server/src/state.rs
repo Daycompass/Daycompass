@@ -63,6 +63,14 @@ pub struct Limits {
     /// Ingest requests, per device. Keyed on the device the access
     /// layer resolved, so an unauthenticated caller never reaches it.
     pub ingest_device: Arc<RateLimiter<DeviceKey>>,
+    /// *Failed* device authentications, per client address.
+    ///
+    /// The only limiter consulted before authentication, and so the
+    /// only one bounding an anonymous caller on the device routes. It
+    /// is peeked before the lookup and charged only on failure, which
+    /// the shared rate-limit layer cannot express - see
+    /// [`crate::routes::LimitKey::PeerBeforeAuth`].
+    pub device_auth_fail: Arc<RateLimiter<ClientKey>>,
 }
 
 impl Limits {
@@ -93,6 +101,16 @@ impl Limits {
             pair_global: Arc::new(RateLimiter::new(config.rate_limit_pair_global, 1)),
             ingest_device: Arc::new(RateLimiter::new(
                 config.rate_limit_ingest_device,
+                config.rate_limit_max_entries,
+            )),
+            // Bounded by the same `max_entries` as every other keyed
+            // limiter. That bound is what keeps this one from being a
+            // memory vector despite being reachable unauthenticated:
+            // `RateLimiter::peek` never inserts, and the charge path
+            // goes through `check`, which reclaims ended windows and
+            // then evicts before exceeding the cap.
+            device_auth_fail: Arc::new(RateLimiter::new(
+                config.rate_limit_device_auth_fail,
                 config.rate_limit_max_entries,
             )),
         }

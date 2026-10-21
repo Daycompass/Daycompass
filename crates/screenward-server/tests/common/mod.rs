@@ -47,6 +47,10 @@ pub const GENEROUS_LIMITS: &[(&str, &str)] = &[
     ("SCREENWARD_RATE_LIMIT_PAIR_IP", "1000/300"),
     ("SCREENWARD_RATE_LIMIT_PAIR_GLOBAL", "100000/60"),
     ("SCREENWARD_RATE_LIMIT_INGEST_DEVICE", "1000/60"),
+    // Generous, but not so generous that a test about this bucket
+    // cannot reach it. `tests/device_auth_limit.rs` sets its own
+    // tight values rather than relying on this one.
+    ("SCREENWARD_RATE_LIMIT_DEVICE_AUTH_FAIL", "1000/60"),
 ];
 
 /// A running app plus the pool behind it.
@@ -482,7 +486,7 @@ pub fn random_secret() -> String {
 pub struct TestRequest {
     method: Method,
     uri: String,
-    peer: String,
+    peer: Option<String>,
     /// Every `Origin` header to send, in order. A list rather than one
     /// value so a test can send two, which the server must refuse.
     origins: Vec<String>,
@@ -521,7 +525,7 @@ impl TestRequest {
         Self {
             method,
             uri: uri.to_owned(),
-            peer: DEFAULT_PEER.to_owned(),
+            peer: Some(DEFAULT_PEER.to_owned()),
             origins: Vec::new(),
             cookie: None,
             csrf: None,
@@ -534,7 +538,7 @@ impl TestRequest {
     }
 
     pub fn peer(mut self, peer: &str) -> Self {
-        self.peer = peer.to_owned();
+        self.peer = Some(peer.to_owned());
         self
     }
 
@@ -589,6 +593,17 @@ impl TestRequest {
         self.authorization(&format!("{scheme} {token}"))
     }
 
+    /// Drops the peer address the connect-info extractor needs.
+    ///
+    /// Normally `into_make_service_with_connect_info` supplies it and
+    /// the harness fakes it; this is for the tests that check what
+    /// happens when it is missing, which must be a refusal rather
+    /// than an uncounted request.
+    pub fn without_peer(mut self) -> Self {
+        self.peer = None;
+        self
+    }
+
     /// Sends `bytes` as the body, with a JSON content type, bypassing
     /// the JSON builder. For the body-size limit tests.
     pub fn raw_json(mut self, bytes: Vec<u8>) -> Self {
@@ -634,8 +649,10 @@ impl TestRequest {
 
         // Normally set by `into_make_service_with_connect_info`; the
         // ClientAddr extractor fails closed without it.
-        let peer: SocketAddr = self.peer.parse().expect("a valid peer address");
-        request.extensions_mut().insert(ConnectInfo(peer));
+        if let Some(peer) = self.peer {
+            let peer: SocketAddr = peer.parse().expect("a valid peer address");
+            request.extensions_mut().insert(ConnectInfo(peer));
+        }
         request
     }
 }
