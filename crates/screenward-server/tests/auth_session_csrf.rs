@@ -170,6 +170,50 @@ async fn a_state_changing_request_from_a_wrong_origin_is_rejected() {
     assert_eq!(response.status, StatusCode::OK);
 }
 
+/// Two `Origin` headers are refused even when both name this instance.
+///
+/// No browser sends two, so a request carrying them is not a client
+/// being odd - it is someone hoping the server picks the value that
+/// suits them. The rule is documented in `auth::origin` and applied in
+/// `routes::access`, and this is what proves it is applied.
+#[tokio::test]
+async fn more_than_one_origin_header_is_rejected() {
+    let app = TestApp::new().await;
+    let credentials = app.provision_admin().await;
+    let session = app.log_in(&credentials).await;
+
+    for pair in [
+        [GOOD_ORIGIN, GOOD_ORIGIN],
+        [GOOD_ORIGIN, BAD_ORIGIN],
+        [BAD_ORIGIN, GOOD_ORIGIN],
+    ] {
+        let response = app
+            .send(
+                TestRequest::post("/api/v1/auth/logout")
+                    .origin(pair[0])
+                    .origin(pair[1])
+                    .authenticated(&session),
+            )
+            .await;
+        assert_eq!(
+            response.status,
+            StatusCode::FORBIDDEN,
+            "{pair:?} must be rejected"
+        );
+        assert_eq!(response.error_code(), Some("origin_mismatch"), "{pair:?}");
+    }
+
+    // Nothing above ended the session: one good header still works.
+    let response = app
+        .send(
+            TestRequest::post("/api/v1/auth/logout")
+                .origin(GOOD_ORIGIN)
+                .authenticated(&session),
+        )
+        .await;
+    assert_eq!(response.status, StatusCode::NO_CONTENT);
+}
+
 /// A GET changes nothing, so it is not subject to the Origin check.
 #[tokio::test]
 async fn a_get_is_allowed_from_any_origin_and_needs_no_csrf_token() {

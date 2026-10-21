@@ -12,10 +12,12 @@ sync to this server.
 ## Status: early development
 
 The backend currently has configuration, SQLite storage with migrations,
-a hardened HTTP skeleton (`/healthz`), and authentication: the
-first-admin setup flow, login, logout, sessions with CSRF protection,
-and rate limiting. There is no user management API, no devices, no
-pairing and no event ingest yet. Expect breaking changes at any time.
+a hardened HTTP skeleton (`/healthz`), authentication (the first-admin
+setup flow, login, logout, sessions with CSRF protection, rate
+limiting), and account management: an admin creates, lists, re-roles and
+deletes accounts, and any logged-in account can change its own
+password. There are no devices, no pairing and no event ingest yet.
+Expect breaking changes at any time.
 
 ## First start
 
@@ -77,6 +79,7 @@ disabled.
 | `POST /api/v1/auth/login` | Sets the `__Host-sws` session cookie, returns a CSRF token. |
 | `POST /api/v1/auth/logout` | Deletes the session server side and clears the cookie. |
 | `GET /api/v1/auth/me` | The current account, and the session's CSRF token. |
+| `POST /api/v1/auth/password` | Change your own password. |
 
 Every state-changing request authenticated by the session cookie must
 send the CSRF token in an `X-CSRF-Token` header. The token is derived
@@ -98,6 +101,80 @@ headers are checked against, and the server refuses to start without it.
 `SCREENWARD_TRUSTED_PROXIES` (a comma-separated list of CIDRs, empty by
 default). Set it to the addresses of your own proxies, or per-client
 rate limiting will count every request against the proxy instead.
+
+## Accounts
+
+| Endpoint | Purpose |
+| --- | --- |
+| `POST /api/v1/users` | Create an account: `username`, `password`, `role`. Admin only. |
+| `GET /api/v1/users` | List accounts: `id`, `username`, `role`, `created_at`. Admin only. |
+| `PATCH /api/v1/users/{id}` | Change an account's `role`. Admin only. |
+| `DELETE /api/v1/users/{id}` | Delete an account and its sessions. Admin only. |
+
+A password hash never leaves the server: the account endpoints select no
+such column in the first place.
+
+Usernames follow the same rules everywhere - trimmed, lowercased, 3 to
+32 characters of `a-z`, `0-9`, `_`, `.` and `-` - so `Alice` and `alice`
+are the same account, and creating the second one answers 409.
+
+Request bodies reject unknown fields. A stray or misspelled field is an
+error rather than something silently ignored.
+
+### What an admin can and cannot do
+
+An admin manages accounts. An admin **cannot** read another account's
+usage events or stats, and will not be able to when those exist.
+
+There is no endpoint for an admin to set someone else's password.
+`POST /api/v1/auth/password` takes no account parameter at all, so it
+can only ever change the caller's own.
+
+### The last admin
+
+The last remaining admin can be neither deleted nor demoted; both
+answer 409 `last_admin_protected`. The check and the write happen in one
+`BEGIN IMMEDIATE` transaction, so two admins removing each other at the
+same moment cannot leave the instance with none.
+
+Short of that, an admin may demote or delete **themselves**. A role is
+read from the database on every request and is never cached in a
+session, so such an admin loses administrative access on their very next
+request - no new login, and no waiting for a session to expire. The same
+is why demoting another admin takes effect immediately, and why deleting
+an account ends its sessions at once: the sessions are deleted with the
+row, so every cookie it handed out stops working.
+
+### Changing your own password
+
+`POST /api/v1/auth/password` takes `current_password` and
+`new_password`. The current password must be correct (403
+`invalid_current_password` otherwise - the session stays valid, so a
+client must not treat this as being logged out), and the new one must
+satisfy the password policy.
+
+On success, **every other session of that account is ended** and the one
+that made the request survives, so changing a password is a reliable way
+to sign other devices out without signing yourself out. The response
+says how many sessions that was.
+
+Two changes in flight at once leave exactly one in effect: the write
+applies only if the stored hash is still the one that was verified, and
+the other request is answered 409 `password_change_conflict`.
+
+The endpoint is rate limited **per session**, in front of the Argon2
+semaphore, because each attempt costs one verification plus one hash -
+the most expensive thing an authenticated caller can ask for. Every
+attempt counts, including successful ones. See
+`SCREENWARD_RATE_LIMIT_PW_CHANGE` in `.env.example`.
+
+Per session rather than per account on purpose: someone who has stolen
+a session cannot exhaust the budget the owner needs to lock them out.
+Logging in again yields a fresh session with its own budget, and
+changing the password there ends every other session including the
+stolen one. The cost of that choice is that the limit bounds Argon2 work
+per session rather than per account; opening more sessions means more
+budget, which the login limits bound in turn.
 
 ## License
 

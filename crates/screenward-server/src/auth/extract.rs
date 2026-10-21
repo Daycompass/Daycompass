@@ -6,10 +6,15 @@
 //! authenticated state-changing request without CSRF protection,
 //! because the same thing that gives it the user also enforces it.
 //!
-//! The `Origin` check is separate, in [`crate::middleware`], because it
-//! applies to requests that have no session yet - login above all.
+//! The `Origin` check is separate, in `crate::routes::access`,
+//! because it applies to requests that have no session yet - login
+//! above all. That module also carries the layer that attaches this
+//! extractor's work to a route from the route inventory; the CSRF rule
+//! itself is [`verify_csrf`] below, called from both places so there is
+//! only ever one implementation of it.
 
 use std::fmt;
+use std::sync::Arc;
 
 use axum::extract::FromRequestParts;
 use axum::http::header;
@@ -47,9 +52,11 @@ impl AuthSession {
     /// Returns the user if they are an admin, otherwise a rejection that
     /// becomes a 403.
     ///
-    /// No endpoint calls this yet - admin-only routes are a later
-    /// milestone - so it is covered by its own tests rather than through
-    /// a request.
+    /// Reads the role from the account record resolved for *this*
+    /// request, which is what makes a demotion take effect immediately
+    /// rather than when the session next expires. Called from the access
+    /// layer built from a route's inventory entry, and again by the
+    /// `AdminContext` extractor as the second line.
     pub fn require_admin(&self) -> Result<&UserRecord, AuthRejection> {
         if self.user.role.is_admin() {
             Ok(&self.user)
@@ -106,6 +113,103 @@ impl IntoResponse for AuthRejection {
     }
 }
 
+/// The session token in the request's cookies, if there is one.
+fn presented_session_token(parts: &Parts) -> Option<&str> {
+    let cookies = parts
+        .headers
+        .get_all(header::COOKIE)
+        .iter()
+        .filter_map(|value| value.to_str().ok());
+    cookie::read(cookies)
+}
+
+/// Checks the `X-CSRF-Token` header against the session cookie.
+///
+/// The only implementation of the CSRF rule. It is called from two
+/// places - this extractor, for any unsafe method, and the access layer
+/// built from a route's inventory entry - so that the table can make the
+/// check mandatory for a route without there being a second copy of the
+/// logic to drift from this one.
+///
+/// Needs only the two values the client sent, so a forged request is
+/// refused without spending a database query on it, and the outcome
+/// still says nothing about whether the session is real.
+pub fn verify_csrf(parts: &Parts) -> Result<(), AuthRejection> {
+    let token = presented_session_token(parts).ok_or(AuthRejection::Unauthenticated)?;
+    let presented = parts
+        .headers
+        .get(CSRF_HEADER)
+        .and_then(|value| value.to_str().ok())
+        .ok_or(AuthRejection::CsrfMissing)?;
+    if !csrf::verify(token, presented) {
+        return Err(AuthRejection::CsrfInvalid);
+    }
+    Ok(())
+}
+
+/// The session a route's access layer resolved for this request.
+///
+/// Defined here, in the auth module, and holding a private field: that
+/// combination is what makes an authenticated context unforgeable. No
+/// handler, and no other module, can build one - the only way to get it
+/// is to read what the access layer stored, so a route registered
+/// without that layer fails closed with a 500 and a log line instead of
+/// calling a handler that believes it is authenticated.
+pub struct SessionContext(Arc<AuthSession>);
+
+impl SessionContext {
+    pub fn auth(&self) -> &AuthSession {
+        &self.0
+    }
+}
+
+impl FromRequestParts<AppState> for SessionContext {
+    type Rejection = AuthRejection;
+
+    async fn from_request_parts(
+        parts: &mut Parts,
+        _state: &AppState,
+    ) -> Result<Self, Self::Rejection> {
+        match parts.extensions.get::<Arc<AuthSession>>() {
+            Some(auth) => Ok(Self(Arc::clone(auth))),
+            None => {
+                tracing::error!(
+                    "a handler asked for a session on a route with no access layer attached"
+                );
+                Err(AuthRejection::Unavailable)
+            }
+        }
+    }
+}
+
+/// Like [`SessionContext`], and the account is an admin.
+///
+/// The role is re-checked here against the record resolved for *this*
+/// request. The access layer has already checked it for an admin route;
+/// this is the second line, so a handler that asks for admin rights
+/// gets them only if the account really has them now, whatever the
+/// route was registered as.
+pub struct AdminContext(Arc<AuthSession>);
+
+impl AdminContext {
+    pub fn auth(&self) -> &AuthSession {
+        &self.0
+    }
+}
+
+impl FromRequestParts<AppState> for AdminContext {
+    type Rejection = AuthRejection;
+
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &AppState,
+    ) -> Result<Self, Self::Rejection> {
+        let session = SessionContext::from_request_parts(parts, state).await?;
+        session.auth().require_admin()?;
+        Ok(Self(session.0))
+    }
+}
+
 impl FromRequestParts<AppState> for AuthSession {
     type Rejection = AuthRejection;
 
@@ -113,28 +217,14 @@ impl FromRequestParts<AppState> for AuthSession {
         parts: &mut Parts,
         state: &AppState,
     ) -> Result<Self, Self::Rejection> {
-        let cookies = parts
-            .headers
-            .get_all(header::COOKIE)
-            .iter()
-            .filter_map(|value| value.to_str().ok());
-        let token = cookie::read(cookies)
+        let token = presented_session_token(parts)
             .ok_or(AuthRejection::Unauthenticated)?
             .to_owned();
 
-        // CSRF before the database lookup. The check needs only the two
-        // values the client sent, so a forged request is refused without
-        // spending a query on it - and the outcome still says nothing
-        // about whether the session is real.
+        // CSRF before the database lookup, for any method that is not
+        // safe - whether or not a route's entry also demands it.
         if !origin::is_safe_method(parts.method.as_str()) {
-            let presented = parts
-                .headers
-                .get(CSRF_HEADER)
-                .and_then(|value| value.to_str().ok())
-                .ok_or(AuthRejection::CsrfMissing)?;
-            if !csrf::verify(&token, presented) {
-                return Err(AuthRejection::CsrfInvalid);
-            }
+            verify_csrf(parts)?;
         }
 
         let resolved = session::resolve(&state.pool, &token, state.session_policy, UnixTime::now())
@@ -155,6 +245,7 @@ impl FromRequestParts<AppState> for AuthSession {
 
 #[cfg(test)]
 mod tests {
+    use axum::handler::Handler;
     use axum::http::StatusCode;
 
     use super::*;
@@ -163,9 +254,9 @@ mod tests {
     use crate::auth::token::{Token, TokenKind};
     use crate::auth::username::Username;
 
-    /// Builds an [`AuthSession`] directly. No admin-only endpoint exists
-    /// yet - those are a later milestone - so the role helper is covered
-    /// here rather than through a request.
+    /// Builds an [`AuthSession`] directly, so the role helper can be
+    /// checked without a request. The same ground is covered over HTTP
+    /// in `tests/route_inventory.rs` and `tests/users_admin.rs`.
     fn auth_session(role: Role) -> (AuthSession, Token) {
         let token = Token::generate(TokenKind::Session).expect("CSPRNG must be available");
         let session = SessionRecord {
@@ -254,5 +345,54 @@ mod tests {
         // The non-secret identifiers are useful and safe to show.
         assert!(debug.contains("user-1"));
         assert!(debug.contains("session-1"));
+    }
+
+    /// A handler asking for a session on a route whose entry attached no
+    /// access layer must fail, not run. This is the fail-closed half of
+    /// the route table driving the layers: forgetting the flag cannot
+    /// produce an unauthenticated call into a handler that believes it
+    /// is authenticated.
+    ///
+    /// The handlers are called directly rather than through a router,
+    /// because registering a route anywhere but in the one inventory
+    /// helper is what `tests/route_inventory.rs` forbids.
+    #[tokio::test]
+    async fn a_session_handler_without_its_layer_fails_closed() {
+        async fn handler(_session: SessionContext) -> &'static str {
+            "this must never be reached"
+        }
+
+        let response = handler.call(probe_request(), test_state().await).await;
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    #[tokio::test]
+    async fn an_admin_handler_without_its_layer_fails_closed() {
+        async fn handler(_admin: AdminContext) -> &'static str {
+            "this must never be reached"
+        }
+
+        let response = handler.call(probe_request(), test_state().await).await;
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    fn probe_request() -> axum::http::Request<axum::body::Body> {
+        axum::http::Request::builder()
+            .uri("/probe")
+            .body(axum::body::Body::empty())
+            .expect("the request must be valid")
+    }
+
+    async fn test_state() -> AppState {
+        use crate::config::Config;
+        use crate::db::{self, DbTarget};
+
+        let pool = db::connect(&DbTarget::Memory)
+            .await
+            .expect("in-memory pool must connect");
+        db::migrate(&pool).await.expect("migrations must apply");
+        AppState::new(pool, &Config::defaults())
+            .await
+            .expect("building the state must succeed")
     }
 }

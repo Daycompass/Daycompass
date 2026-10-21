@@ -178,6 +178,46 @@ impl UsernameKey {
     }
 }
 
+/// A rate limit key for one account, for the endpoints an
+/// already-authenticated caller can spend server work on.
+///
+/// Holds a truncated SHA-256 of the session id for the same two reasons
+/// as [`UsernameKey`]: every entry is one fixed small size, and the
+/// limiter's state is not a list of which sessions have been active.
+/// The session id is not itself a secret - the session *token* is, and
+/// only its hash is ever stored - but hashing keeps the limiter's state
+/// uniform and opaque either way.
+///
+/// Keyed by session rather than by account, which is a deliberate
+/// trade-off:
+///
+/// * What it buys: someone who has stolen a session cannot exhaust the
+///   budget of the account's *other* sessions. The owner can log in
+///   again and change their password on the fresh session immediately,
+///   which is the one action that ends the theft. A per-account bucket
+///   would let the thief delay exactly that remediation for a whole
+///   window.
+/// * What it costs: an account can enlarge its total budget by opening
+///   more sessions, so the Argon2 bound is per session rather than per
+///   account. That is capped from the other side - opening a session
+///   costs a login, and logins are limited per username and per
+///   address - so the multiplier is bounded, not open-ended.
+///
+/// Not keyed by address: the address a logged-in client comes from can
+/// change between requests (mobile networks, a VPN), which would hand
+/// out fresh budget for free.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct SessionKey([u8; 16]);
+
+impl SessionKey {
+    pub fn new(session_id: &str) -> Self {
+        let digest = Sha256::digest(session_id.as_bytes());
+        let mut key = [0u8; 16];
+        key.copy_from_slice(&digest[..16]);
+        Self(key)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -372,5 +412,48 @@ mod tests {
             !rendered.contains("alice"),
             "limiter state must not be a list of attempted account names"
         );
+    }
+
+    // --- session keys -------------------------------------------------
+
+    /// Unlike a username, a session id is used exactly as given: it is
+    /// already canonical, and folding case would merge two distinct ids.
+    #[test]
+    fn session_keys_are_per_id_and_fixed_size() {
+        let key = SessionKey::new("00000000-0000-7000-8000-000000000001");
+        assert_eq!(key, SessionKey::new("00000000-0000-7000-8000-000000000001"));
+        assert_ne!(key, SessionKey::new("00000000-0000-7000-8000-000000000002"));
+
+        let huge: String = std::iter::repeat_n('x', 100_000).collect();
+        assert_eq!(std::mem::size_of_val(&SessionKey::new(&huge)), 16);
+    }
+
+    #[test]
+    fn a_session_key_does_not_contain_the_id() {
+        let id = "00000000-0000-7000-8000-000000000001";
+        let rendered = format!("{:?}", SessionKey::new(id));
+        assert!(!rendered.contains(id));
+    }
+
+    /// The per-session limiter must count every attempt, not only the
+    /// ones that turn out to be wrong: a correct-password flood is also
+    /// a way to occupy the hashing permits.
+    #[test]
+    fn every_attempt_counts_against_the_session_limit() {
+        let limiter = RateLimiter::new(rule(2, 60), 100);
+        let key = SessionKey::new("00000000-0000-7000-8000-000000000001");
+
+        assert!(limiter.check(key, at(0)).is_allowed());
+        assert!(limiter.check(key, at(0)).is_allowed());
+        assert!(!limiter.check(key, at(0)).is_allowed());
+        // Another session - including another session of the same
+        // account - starts with its own budget. That is the point of
+        // keying by session: a stolen session cannot spend the owner's.
+        assert!(limiter
+            .check(
+                SessionKey::new("00000000-0000-7000-8000-000000000002"),
+                at(0)
+            )
+            .is_allowed());
     }
 }

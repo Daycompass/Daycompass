@@ -9,7 +9,12 @@
 //! No CSRF token and no `Origin` check here, unlike every other
 //! state-changing endpoint: this request carries no cookie, so there is
 //! no ambient credential for a hostile page to ride on. Its protection
-//! is the unguessable setup token, plus the per-address rate limit.
+//! is the unguessable setup token, plus the per-address rate limit -
+//! which is attached from the route's entry in
+//! [`crate::routes::INVENTORY`], along with the two exemptions above.
+//! The token is unguessable, so that limit bounds noise rather than
+//! guessing, but it also stops an unauthenticated caller from spending
+//! Argon2 work at will while setup is still open.
 
 use axum::extract::State;
 use axum::http::StatusCode;
@@ -22,9 +27,8 @@ use crate::auth::secret::SecretString;
 use crate::auth::setup::{self, SetupError};
 use crate::auth::time::UnixTime;
 use crate::auth::username::UsernameError;
-use crate::clientip::ClientAddr;
 use crate::error::{ApiError, ErrorKind};
-use crate::routes::{rate_limited, UserView};
+use crate::routes::UserView;
 use crate::state::AppState;
 
 #[derive(Deserialize)]
@@ -42,17 +46,9 @@ struct SetupResponse {
 
 pub async fn create_first_admin(
     State(state): State<AppState>,
-    client: ClientAddr,
     Json(request): Json<SetupRequest>,
 ) -> Response {
     let now = UnixTime::now();
-
-    // The setup token is unguessable, so this bounds noise rather than
-    // guessing - but it also stops an unauthenticated caller from
-    // spending Argon2 work at will while setup is still open.
-    if let Some(error) = rate_limited(state.limits.setup_ip.check(client.rate_limit_key(), now)) {
-        return error.into_response();
-    }
 
     let result = setup::complete_setup(
         &state.pool,

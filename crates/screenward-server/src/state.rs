@@ -14,7 +14,7 @@ use crate::auth::password::{HashError, Hasher};
 use crate::auth::session::SessionPolicy;
 use crate::clientip::ClientKey;
 use crate::config::{Config, PublicUrl, TrustedProxies};
-use crate::ratelimit::{RateLimiter, UsernameKey};
+use crate::ratelimit::{RateLimiter, SessionKey, UsernameKey};
 
 /// Cloned once per request by axum. Every field is cheap to clone: the
 /// pool and the hasher are handles to shared state rather than copies of
@@ -44,6 +44,9 @@ pub struct Limits {
     pub login_ip: Arc<RateLimiter<ClientKey>>,
     pub login_username: Arc<RateLimiter<UsernameKey>>,
     pub setup_ip: Arc<RateLimiter<ClientKey>>,
+    /// Password changes, keyed by session. See [`SessionKey`] for why
+    /// the session and not the account or the address.
+    pub pw_change: Arc<RateLimiter<SessionKey>>,
 }
 
 impl Limits {
@@ -59,6 +62,10 @@ impl Limits {
             )),
             setup_ip: Arc::new(RateLimiter::new(
                 config.rate_limit_setup_ip,
+                config.rate_limit_max_entries,
+            )),
+            pw_change: Arc::new(RateLimiter::new(
+                config.rate_limit_pw_change,
                 config.rate_limit_max_entries,
             )),
         }

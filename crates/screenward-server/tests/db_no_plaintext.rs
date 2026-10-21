@@ -56,11 +56,38 @@ async fn no_plaintext_secret_is_ever_stored() {
         .await;
     assert_eq!(me.status, StatusCode::OK);
 
+    // An account created by an admin, and a password changed by its
+    // owner: both write a password hash through a different path than
+    // setup does, so both belong in this scan.
+    let session = common::Session {
+        cookie: session_cookie.clone(),
+        csrf_token: csrf_token.clone(),
+    };
+    let (_id, created_credentials) = app.create_account(&session, "bob", "user").await;
+    let changed_password = common::random_secret();
+    let change = app
+        .send(
+            TestRequest::post("/api/v1/auth/password")
+                .origin(GOOD_ORIGIN)
+                .authenticated(&session)
+                .json(json!({
+                    "current_password": password,
+                    "new_password": changed_password,
+                })),
+        )
+        .await;
+    assert_eq!(change.status, StatusCode::OK, "{:?}", change.body);
+
     let dump = app.dump_all_values().await;
     assert!(!dump.is_empty(), "the scan must actually read something");
 
     let secrets = [
         ("the password", password.as_str()),
+        (
+            "the created account's password",
+            created_credentials.password.as_str(),
+        ),
+        ("the changed password", changed_password.as_str()),
         ("the setup token", setup_token.as_str()),
         ("the session token", session_token.as_str()),
         // Derived, never stored: if this appears, something started
