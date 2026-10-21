@@ -50,12 +50,7 @@ async fn creating_an_account_returns_it_without_a_hash() {
     assert_eq!(response.status, StatusCode::CREATED, "{:?}", response.body);
     assert_eq!(
         response.shape(),
-        vec![
-            "user.created_at",
-            "user.id",
-            "user.role",
-            "user.username"
-        ]
+        vec!["user.created_at", "user.id", "user.role", "user.username"]
     );
     assert_eq!(response.body["user"]["username"], "bob");
     assert_eq!(response.body["user"]["role"], "user");
@@ -101,7 +96,11 @@ async fn a_duplicate_username_is_a_conflict_however_it_is_spelled() {
             "{spelling:?}: {:?}",
             response.body
         );
-        assert_eq!(response.error_code(), Some("username_taken"), "{spelling:?}");
+        assert_eq!(
+            response.error_code(),
+            Some("username_taken"),
+            "{spelling:?}"
+        );
     }
 
     let listed = app
@@ -503,7 +502,12 @@ async fn an_unknown_account_id_is_a_not_found() {
                     .json(json!({ "role": "user" })),
             )
             .await;
-        assert_eq!(patch.status, StatusCode::NOT_FOUND, "{id}: {:?}", patch.body);
+        assert_eq!(
+            patch.status,
+            StatusCode::NOT_FOUND,
+            "{id}: {:?}",
+            patch.body
+        );
         assert_eq!(patch.error_code(), Some("not_found"), "{id}");
 
         let delete = app

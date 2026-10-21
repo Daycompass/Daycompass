@@ -186,9 +186,10 @@ async fn admin_count(conn: &mut sqlx::SqliteConnection) -> Result<i64, StoreErro
 
 /// Every account, oldest first, without password hashes.
 pub async fn list_users(pool: &SqlitePool) -> Result<Vec<UserSummary>, StoreError> {
-    let rows = sqlx::query("SELECT id, username, role, created_at FROM users ORDER BY created_at, id")
-        .fetch_all(pool)
-        .await?;
+    let rows =
+        sqlx::query("SELECT id, username, role, created_at FROM users ORDER BY created_at, id")
+            .fetch_all(pool)
+            .await?;
     rows.iter().map(summary_from_row).collect()
 }
 
@@ -382,14 +383,13 @@ pub async fn replace_password_hash_if_unchanged(
 ) -> Result<PasswordChangeOutcome, StoreError> {
     let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
 
-    let updated = sqlx::query(
-        "UPDATE users SET password_hash = ?2 WHERE id = ?1 AND password_hash = ?3",
-    )
-    .bind(user_id)
-    .bind(new_hash)
-    .bind(expected_hash)
-    .execute(&mut *tx)
-    .await?;
+    let updated =
+        sqlx::query("UPDATE users SET password_hash = ?2 WHERE id = ?1 AND password_hash = ?3")
+            .bind(user_id)
+            .bind(new_hash)
+            .bind(expected_hash)
+            .execute(&mut *tx)
+            .await?;
 
     if updated.rows_affected() == 0 {
         tx.rollback().await?;
@@ -858,7 +858,9 @@ mod tests {
         add(&pool, "bob", Role::User).await;
 
         assert!(matches!(
-            set_role_guarded(&pool, &alice.id, Role::User).await.unwrap(),
+            set_role_guarded(&pool, &alice.id, Role::User)
+                .await
+                .unwrap(),
             RoleChangeOutcome::LastAdmin
         ));
         assert_eq!(role_of(&pool, &alice.id).await, Some(Role::Admin));
@@ -877,7 +879,9 @@ mod tests {
         add(&pool, "bob", Role::Admin).await;
 
         assert!(matches!(
-            set_role_guarded(&pool, &alice.id, Role::User).await.unwrap(),
+            set_role_guarded(&pool, &alice.id, Role::User)
+                .await
+                .unwrap(),
             RoleChangeOutcome::Changed(_)
         ));
         assert_eq!(role_of(&pool, &alice.id).await, Some(Role::User));
@@ -891,7 +895,9 @@ mod tests {
         let missing = new_id();
 
         assert!(matches!(
-            set_role_guarded(&pool, &missing, Role::Admin).await.unwrap(),
+            set_role_guarded(&pool, &missing, Role::Admin)
+                .await
+                .unwrap(),
             RoleChangeOutcome::NotFound
         ));
         assert_eq!(
@@ -984,11 +990,12 @@ mod tests {
             .unwrap();
         assert_eq!(stored, opaque_hash("bob-next"));
 
-        let remaining: Vec<String> = sqlx::query_scalar("SELECT id FROM sessions WHERE user_id = ?1")
-            .bind(&user.id)
-            .fetch_all(&pool)
-            .await
-            .unwrap();
+        let remaining: Vec<String> =
+            sqlx::query_scalar("SELECT id FROM sessions WHERE user_id = ?1")
+                .bind(&user.id)
+                .fetch_all(&pool)
+                .await
+                .unwrap();
         assert_eq!(remaining, vec![current]);
         assert!(!remaining.contains(&other));
     }
@@ -1056,7 +1063,10 @@ mod tests {
             .iter()
             .filter(|outcome| matches!(outcome, PasswordChangeOutcome::Changed { .. }))
             .count();
-        assert_eq!(applied, 1, "exactly one change may be applied: {outcomes:?}");
+        assert_eq!(
+            applied, 1,
+            "exactly one change may be applied: {outcomes:?}"
+        );
 
         let stored: String = sqlx::query_scalar("SELECT password_hash FROM users WHERE id = ?1")
             .bind(&user.id)

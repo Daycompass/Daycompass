@@ -17,15 +17,15 @@
 //! Two directions are therefore impossible rather than merely tested:
 //!
 //!   * A route that is not in the table cannot be registered -
-//!     [`RouteTable::add`] panics at startup for an unknown
+//!     `RouteTable::add` panics at startup for an unknown
 //!     method-and-path.
 //!   * A table entry that is never registered cannot be left behind -
-//!     [`RouteTable::finish`] panics for it.
+//!     `RouteTable::finish` panics for it.
 //!
 //! `tests/route_inventory.rs` walks the table over HTTP (anonymous,
 //! ordinary user, admin, plus missing-CSRF and wrong-Origin probes) and
 //! also fails if `.route(` appears anywhere outside the one call in
-//! [`RouteTable::add`], which is what keeps the registration path
+//! `RouteTable::add`, which is what keeps the registration path
 //! single.
 
 mod access;
@@ -137,10 +137,10 @@ impl RouteSpec {
             self.path
         );
 
-        // A CSRF token is checked against a session, so there has to be
-        // one.
+        // Requiring a CSRF token implies requiring a session: the token
+        // is checked against one, so there has to be one.
         assert!(
-            !(self.csrf && !self.access.needs_session()),
+            !self.csrf || self.access.needs_session(),
             "{} {}: a public route cannot require a CSRF token",
             self.method,
             self.path
@@ -148,19 +148,22 @@ impl RouteSpec {
 
         // The converse is the dangerous direction: a cookie-
         // authenticated, state-changing route with no CSRF token is
-        // exactly the hole the extractor and this layer exist to close.
+        // exactly the hole the extractor and the access layer exist to
+        // close. Being state-changing and session-backed implies CSRF.
+        let state_changing_session_route =
+            self.access.needs_session() && !crate::auth::origin::is_safe_method(self.method);
         assert!(
-            !(self.access.needs_session()
-                && !crate::auth::origin::is_safe_method(self.method)
-                && !self.csrf),
+            !state_changing_session_route || self.csrf,
             "{} {}: a state-changing session route must require a CSRF token",
             self.method,
             self.path
         );
 
+        // An account-keyed limit implies a session, since the key comes
+        // from the account the session resolved to.
         for limit in self.rate_limits {
             assert!(
-                !(limit.key == LimitKey::Account && !self.access.needs_session()),
+                limit.key != LimitKey::Account || self.access.needs_session(),
                 "{} {}: an account-keyed limit needs a session to key on",
                 self.method,
                 self.path
@@ -281,7 +284,7 @@ pub fn spec_for(method: &str, path: &str) -> Option<&'static RouteSpec> {
 
 /// Builds the route table.
 ///
-/// Every route goes through [`RouteTable::add`], which looks its entry
+/// Every route goes through `RouteTable::add`, which looks its entry
 /// up in [`INVENTORY`] and attaches what the entry calls for.
 pub fn router(state: AppState) -> Router {
     let mut table = RouteTable::new(state);
@@ -506,6 +509,61 @@ mod tests {
         for spec in INVENTORY {
             let _ = method_filter(spec.method);
         }
+    }
+
+    /// A green build does not prove the consistency check works, so
+    /// here is each contradiction it has to refuse. Every one of these
+    /// would otherwise be a route with less protection than the table
+    /// claims.
+    fn spec_with(access: Access, csrf: bool, limits: &'static [RateLimit]) -> RouteSpec {
+        RouteSpec {
+            method: "POST",
+            path: "/probe",
+            access,
+            origin_checked: true,
+            csrf,
+            rate_limits: limits,
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "a public route cannot require a CSRF token")]
+    fn a_public_route_may_not_demand_a_csrf_token() {
+        spec_with(Access::Public, true, &[]).validate();
+    }
+
+    #[test]
+    #[should_panic(expected = "must require a CSRF token")]
+    fn a_state_changing_session_route_may_not_skip_csrf() {
+        spec_with(Access::Session, false, &[]).validate();
+    }
+
+    #[test]
+    #[should_panic(expected = "needs a session to key on")]
+    fn an_account_keyed_limit_needs_a_session() {
+        const LIMITS: &[RateLimit] = &[RateLimit::new(Bucket::PasswordUser, LimitKey::Account)];
+        spec_with(Access::Public, false, LIMITS).validate();
+    }
+
+    /// And the shapes that are fine must stay fine, or the check would
+    /// be refusing the table it is supposed to allow.
+    #[test]
+    fn the_shapes_the_table_actually_uses_are_accepted() {
+        const BODY: &[RateLimit] = &[RateLimit::new(Bucket::LoginUsername, LimitKey::Body)];
+        spec_with(Access::Public, false, BODY).validate();
+        spec_with(Access::Session, true, &[]).validate();
+        spec_with(Access::Admin, true, &[]).validate();
+
+        // A safe method needs no CSRF token, whatever the access.
+        RouteSpec {
+            method: "GET",
+            path: "/probe",
+            access: Access::Admin,
+            origin_checked: true,
+            csrf: false,
+            rate_limits: &[],
+        }
+        .validate();
     }
 
     /// The privacy rule from `CLAUDE.md`, as a property of the type: an

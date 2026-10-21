@@ -296,14 +296,11 @@ async fn every_layer_enforced_rate_limit_refuses_when_reached() {
         ("SCREENWARD_RATE_LIMIT_PASSWORD_USER", "2/900"),
     ];
 
-    for spec in INVENTORY
-        .iter()
-        .filter(|spec| {
-            spec.rate_limits
-                .iter()
-                .any(|limit| limit.enforced_by_layer())
-        })
-    {
+    for spec in INVENTORY.iter().filter(|spec| {
+        spec.rate_limits
+            .iter()
+            .any(|limit| limit.enforced_by_layer())
+    }) {
         let app = TestApp::with_vars(tight).await;
         let (credentials, admin) = app.provisioned_admin().await;
         let label = format!("{} {}", spec.method, spec.path);
@@ -352,8 +349,8 @@ async fn every_layer_enforced_rate_limit_refuses_when_reached() {
             StatusCode::TOO_MANY_REQUESTS,
             "{label} refused its first attempt, saw {statuses:?}"
         );
-        let limited = limited
-            .unwrap_or_else(|| panic!("{label} was never limited, saw {statuses:?}"));
+        let limited =
+            limited.unwrap_or_else(|| panic!("{label} was never limited, saw {statuses:?}"));
         assert_eq!(limited.error_code(), Some("rate_limited"), "{label}");
         assert!(
             limited.retry_after().is_some_and(|after| after >= 1),

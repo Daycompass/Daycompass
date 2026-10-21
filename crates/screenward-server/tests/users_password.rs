@@ -62,7 +62,12 @@ async fn a_change_keeps_this_session_and_ends_every_other_one() {
                     .authenticated(dead),
             )
             .await;
-        assert_eq!(response.status, StatusCode::UNAUTHORIZED, "{:?}", response.body);
+        assert_eq!(
+            response.status,
+            StatusCode::UNAUTHORIZED,
+            "{:?}",
+            response.body
+        );
         assert_eq!(response.error_code(), Some("unauthenticated"));
     }
 
@@ -127,7 +132,12 @@ async fn a_wrong_current_password_changes_nothing() {
 
     // 403, not 401: the session is perfectly valid, so a client must not
     // conclude it has been logged out.
-    assert_eq!(response.status, StatusCode::FORBIDDEN, "{:?}", response.body);
+    assert_eq!(
+        response.status,
+        StatusCode::FORBIDDEN,
+        "{:?}",
+        response.body
+    );
     assert_eq!(response.error_code(), Some("invalid_current_password"));
 
     // No session was ended, and the old password still works.
@@ -156,9 +166,7 @@ async fn a_new_password_below_the_policy_is_refused() {
         (&generated[..11], "invalid_password"),
         ("   ", "invalid_password"),
     ] {
-        let response = app
-            .send(change(&session, &credentials.password, new))
-            .await;
+        let response = app.send(change(&session, &credentials.password, new)).await;
         assert_eq!(
             response.status,
             StatusCode::BAD_REQUEST,

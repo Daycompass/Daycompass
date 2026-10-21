@@ -83,7 +83,10 @@ async fn no_plaintext_secret_is_ever_stored() {
 
     let secrets = [
         ("the password", password.as_str()),
-        ("the created account's password", created_credentials.password.as_str()),
+        (
+            "the created account's password",
+            created_credentials.password.as_str(),
+        ),
         ("the changed password", changed_password.as_str()),
         ("the setup token", setup_token.as_str()),
         ("the session token", session_token.as_str()),

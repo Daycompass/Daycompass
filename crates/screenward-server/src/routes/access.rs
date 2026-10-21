@@ -122,7 +122,7 @@ pub async fn enforce_access(
 
 /// Applies the layer-enforced limiters named in the entry.
 ///
-/// Attached inside [`enforce_access`], so an account-keyed limit can key
+/// Attached inside `enforce_access`, so an account-keyed limit can key
 /// on the session that layer resolved - and so a password change is
 /// counted *before* it reaches the Argon2 semaphore, which is the point
 /// of limiting it at all. Every request that gets this far counts,
@@ -191,7 +191,7 @@ fn unenforceable(limit: crate::routes::RateLimit) -> Response {
     ApiError::of(ErrorKind::InternalError).into_response()
 }
 
-/// The session [`enforce_access`] resolved for this request.
+/// The session `enforce_access` resolved for this request.
 ///
 /// A handler cannot construct one: the only way to get it is to read
 /// what the layer stored, and a route with no access layer therefore
@@ -227,7 +227,7 @@ impl FromRequestParts<AppState> for SessionContext {
 /// Like [`SessionContext`], and the account is an admin.
 ///
 /// The role is re-checked here against the record resolved for this
-/// request. [`enforce_access`] has already checked it for an
+/// request. `enforce_access` has already checked it for an
 /// `Access::Admin` route; this is the second line, so a handler that
 /// asks for admin rights gets them only if the account really has them
 /// now, whatever the route was registered as.

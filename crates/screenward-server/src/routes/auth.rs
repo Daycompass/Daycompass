@@ -49,10 +49,7 @@ struct SessionResponse {
     csrf_token: String,
 }
 
-pub async fn log_in(
-    State(state): State<AppState>,
-    Json(request): Json<LoginRequest>,
-) -> Response {
+pub async fn log_in(State(state): State<AppState>, Json(request): Json<LoginRequest>) -> Response {
     let now = UnixTime::now();
 
     // The per-address bucket has already been checked by the layer the

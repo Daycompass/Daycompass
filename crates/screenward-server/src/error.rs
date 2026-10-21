@@ -116,9 +116,9 @@ impl ErrorKind {
             | Self::OriginMismatch
             | Self::CurrentPasswordInvalid => StatusCode::FORBIDDEN,
             Self::NotFound => StatusCode::NOT_FOUND,
-            Self::UsernameTaken
-            | Self::LastAdminProtected
-            | Self::PasswordChangeConflict => StatusCode::CONFLICT,
+            Self::UsernameTaken | Self::LastAdminProtected | Self::PasswordChangeConflict => {
+                StatusCode::CONFLICT
+            }
             Self::MethodNotAllowed => StatusCode::METHOD_NOT_ALLOWED,
             Self::RequestTimeout => StatusCode::REQUEST_TIMEOUT,
             Self::PayloadTooLarge => StatusCode::PAYLOAD_TOO_LARGE,

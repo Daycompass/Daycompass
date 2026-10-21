@@ -218,9 +218,9 @@ pub struct PasswordChangeReport {
 ///    verified against, so two parallel changes cannot both succeed.
 ///
 /// Rate limiting happens before any of this, per account, at the route
-/// - see [`crate::routes::INVENTORY`]. It has to be in front of the
-/// semaphore rather than behind it, or a flood of password changes
-/// would occupy the hashing permits that logins also need.
+/// itself: see [`crate::routes::INVENTORY`]. It has to be in front of
+/// the Argon2 semaphore rather than behind it, or a flood of password
+/// changes would occupy the hashing permits that logins also need.
 pub async fn change_own_password(
     pool: &SqlitePool,
     hasher: &Hasher,
@@ -517,11 +517,12 @@ mod tests {
             Verification::Match { .. }
         ));
 
-        let remaining: Vec<String> = sqlx::query_scalar("SELECT id FROM sessions WHERE user_id = ?1")
-            .bind(&user_id)
-            .fetch_all(&pool)
-            .await
-            .unwrap();
+        let remaining: Vec<String> =
+            sqlx::query_scalar("SELECT id FROM sessions WHERE user_id = ?1")
+                .bind(&user_id)
+                .fetch_all(&pool)
+                .await
+                .unwrap();
         assert_eq!(remaining, vec![current]);
     }
 
@@ -558,7 +559,9 @@ mod tests {
             .password_hash;
         assert_eq!(before, after, "the stored hash must be untouched");
         assert_eq!(
-            store::count_sessions_for_user(&pool, &user_id).await.unwrap(),
+            store::count_sessions_for_user(&pool, &user_id)
+                .await
+                .unwrap(),
             others.len() as i64 + 1,
             "a refused change must not end any session"
         );
@@ -601,8 +604,7 @@ mod tests {
         let (user_id, current, _others) = account_with_sessions(&pool, password).await;
         let short = SecretString::new(random_password().expose()[..11].to_owned());
 
-        let outcome =
-            change_own_password(&pool, &hasher(), &user_id, &current, old, short).await;
+        let outcome = change_own_password(&pool, &hasher(), &user_id, &current, old, short).await;
 
         assert!(matches!(
             outcome,
