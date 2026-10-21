@@ -140,6 +140,23 @@ Call this on startup and compare `server_time` with your own clock.
 Ingest refuses events dated more than 300 seconds into the future, so a
 skewed client will otherwise see rejections it cannot explain.
 
+**This is a startup and clock-skew check, not a heartbeat. Do not poll
+it on a sync interval.**
+
+**Limits:**
+
+| Limit | Status | Code |
+| --- | --- | --- |
+| Failed device authentication, per address | 429 | `rate_limited` |
+| Requests from this device | 429 | `rate_limited` |
+
+Both device routes share one per-device bucket: calling `device/me`
+spends the same budget as sending events, there are not two numbers to
+keep in step. Both are also covered by the per-address limit on
+*failed* authentication - see
+["Handling errors on device routes"](#handling-errors-on-device-routes)
+below for what to do with either 429.
+
 ### `POST /api/v1/events`
 
 Device auth. Reports observed activity.
