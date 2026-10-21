@@ -250,11 +250,33 @@ pub async fn redeem_code_and_create_device(
         return Ok(RedeemOutcome::DeviceLimitReached);
     }
 
-    sqlx::query("UPDATE pairing_codes SET used_at = ?2 WHERE id = ?1")
-        .bind(&code_id)
-        .bind(now.as_secs())
-        .execute(&mut *tx)
-        .await?;
+    // `AND used_at IS NULL` repeats what the SELECT above already
+    // established. That is the point: the SELECT's guarantee holds
+    // only because `BEGIN IMMEDIATE` has the write lock, so without
+    // this condition the whole single-use property would rest on the
+    // transaction mode and nothing else. With it, a deferred
+    // transaction - or any future change to how this is opened -
+    // fails loudly here instead of redeeming a code twice.
+    let marked =
+        sqlx::query("UPDATE pairing_codes SET used_at = ?2 WHERE id = ?1 AND used_at IS NULL")
+            .bind(&code_id)
+            .bind(now.as_secs())
+            .execute(&mut *tx)
+            .await?;
+
+    if marked.rows_affected() != 1 {
+        // Somebody else spent it between the SELECT and here, which
+        // the write lock should make impossible. Treated as the
+        // ordinary refusal rather than an error: the caller's code is
+        // in fact no longer redeemable, and that is all they may
+        // learn.
+        tracing::warn!(
+            "a pairing code was spent between its lookup and its update; \
+             the redemption transaction is not holding the write lock"
+        );
+        tx.rollback().await?;
+        return Ok(RedeemOutcome::CodeRejected);
+    }
 
     let row = sqlx::query(
         "INSERT INTO devices

@@ -374,6 +374,54 @@ async fn one_accounts_code_cannot_be_distinguished_from_anothers() {
     );
 }
 
+/// The guard on the redeem UPDATE, exercised directly.
+///
+/// The end-to-end single-use test above passes whether or not the
+/// UPDATE carries `AND used_at IS NULL`, because `BEGIN IMMEDIATE`
+/// stops a second redemption from ever reaching it. This one runs the
+/// statement itself, twice, so the condition has to be there.
+#[tokio::test]
+async fn the_redeem_update_affects_no_row_the_second_time() {
+    let app = TestApp::new().await;
+    let (_credentials, session) = app.provisioned_admin().await;
+    app.issue_pairing_code(&session).await;
+
+    let code_id: String = sqlx::query_scalar("SELECT id FROM pairing_codes")
+        .fetch_one(&app.pool)
+        .await
+        .expect("the code must exist");
+
+    let statement = "UPDATE pairing_codes SET used_at = ?2 WHERE id = ?1 AND used_at IS NULL";
+
+    let first = sqlx::query(statement)
+        .bind(&code_id)
+        .bind(1_800_000_000_i64)
+        .execute(&app.pool)
+        .await
+        .expect("the first update must run");
+    assert_eq!(first.rows_affected(), 1, "the first must claim the code");
+
+    let second = sqlx::query(statement)
+        .bind(&code_id)
+        .bind(1_800_000_999_i64)
+        .execute(&app.pool)
+        .await
+        .expect("the second update must run");
+    assert_eq!(
+        second.rows_affected(),
+        0,
+        "the second must claim nothing, which is what the redeem path checks"
+    );
+
+    // And the recorded moment is the first one's, not the second's.
+    let used_at: i64 = sqlx::query_scalar("SELECT used_at FROM pairing_codes WHERE id = ?1")
+        .bind(&code_id)
+        .fetch_one(&app.pool)
+        .await
+        .expect("the code must still be there");
+    assert_eq!(used_at, 1_800_000_000);
+}
+
 // --- the device cap ---------------------------------------------------
 
 /// Hitting the cap rolls the transaction back, so the code is **not**
