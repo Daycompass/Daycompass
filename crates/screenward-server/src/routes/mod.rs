@@ -214,8 +214,15 @@ impl RateLimit {
     /// [`LimitKey`] variant names - the handler, or the access layer -
     /// and is skipped by the shared layer's loop rather than being
     /// unenforced.
+    ///
+    /// Exhaustive, with no wildcard arm, so a new [`LimitKey`] variant
+    /// has to say which it is rather than defaulting into one bucket
+    /// by omission.
     pub const fn enforced_by_shared_layer(self) -> bool {
-        !matches!(self.key, LimitKey::Body | LimitKey::PeerBeforeAuth)
+        match self.key {
+            LimitKey::Peer | LimitKey::Session | LimitKey::Device | LimitKey::Global => true,
+            LimitKey::Body | LimitKey::PeerBeforeAuth => false,
+        }
     }
 }
 

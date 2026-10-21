@@ -275,8 +275,15 @@ pub async fn enforce_rate_limits(
     let (mut parts, body) = request.into_parts();
 
     for limit in spec.rate_limits {
-        let decision = match (limit.bucket, limit.key) {
-            (bucket, LimitKey::Peer) => {
+        // Matched on the key first, then - where more than one bucket
+        // could in principle carry that key - on the bucket. Both
+        // levels are exhaustive with no wildcard arm: a combination
+        // nothing enforces still reaches `unenforceable`, but naming
+        // every remaining variant rather than catching them with `_`
+        // means a new `Bucket` or `LimitKey` fails the build here
+        // instead of becoming a silent runtime 500.
+        let decision = match limit.key {
+            LimitKey::Peer => {
                 let client = match ClientAddr::from_request_parts(&mut parts, &state).await {
                     Ok(client) => client,
                     // No peer address means nothing can be counted;
@@ -284,19 +291,30 @@ pub async fn enforce_rate_limits(
                     Err(rejection) => return rejection.into_response(),
                 };
                 let key = client.rate_limit_key();
-                match bucket {
+                match limit.bucket {
                     Bucket::LoginIp => state.limits.login_ip.check(key, now),
                     Bucket::SetupIp => state.limits.setup_ip.check(key, now),
                     Bucket::PairIp => state.limits.pair_ip.check(key, now),
-                    _ => return unenforceable(*limit),
+                    Bucket::LoginUsername
+                    | Bucket::PwChange
+                    | Bucket::PairGlobal
+                    | Bucket::IngestDevice
+                    | Bucket::DeviceAuthFail => return unenforceable(*limit),
                 }
             }
             // One shared bucket for the whole endpoint, so there is no
             // key to resolve and nothing about the caller to read.
-            (Bucket::PairGlobal, LimitKey::Global) => {
-                state.limits.pair_global.check(GlobalKey, now)
-            }
-            (Bucket::IngestDevice, LimitKey::Device) => {
+            LimitKey::Global => match limit.bucket {
+                Bucket::PairGlobal => state.limits.pair_global.check(GlobalKey, now),
+                Bucket::LoginIp
+                | Bucket::LoginUsername
+                | Bucket::SetupIp
+                | Bucket::PwChange
+                | Bucket::PairIp
+                | Bucket::IngestDevice
+                | Bucket::DeviceAuthFail => return unenforceable(*limit),
+            },
+            LimitKey::Device => {
                 let Some(auth) = parts.extensions.get::<Arc<AuthDevice>>() else {
                     // Only reachable if the entry asked for a
                     // device-keyed limit without a device layer, which
@@ -304,12 +322,21 @@ pub async fn enforce_rate_limits(
                     tracing::error!("a device-keyed rate limit ran with no resolved device");
                     return ApiError::of(ErrorKind::InternalError).into_response();
                 };
-                state
-                    .limits
-                    .ingest_device
-                    .check(DeviceKey::new(&auth.device.id), now)
+                match limit.bucket {
+                    Bucket::IngestDevice => state
+                        .limits
+                        .ingest_device
+                        .check(DeviceKey::new(&auth.device.id), now),
+                    Bucket::LoginIp
+                    | Bucket::LoginUsername
+                    | Bucket::SetupIp
+                    | Bucket::PwChange
+                    | Bucket::PairIp
+                    | Bucket::PairGlobal
+                    | Bucket::DeviceAuthFail => return unenforceable(*limit),
+                }
             }
-            (Bucket::PwChange, LimitKey::Session) => {
+            LimitKey::Session => {
                 let Some(auth) = parts.extensions.get::<Arc<AuthSession>>() else {
                     // Only reachable if the entry asked for a
                     // session-keyed limit without a session layer, which
@@ -317,21 +344,29 @@ pub async fn enforce_rate_limits(
                     tracing::error!("a session-keyed rate limit ran with no resolved session");
                     return ApiError::of(ErrorKind::InternalError).into_response();
                 };
-                // The session id, not the account id: another session of
-                // the same account has its own budget.
-                state
-                    .limits
-                    .pw_change
-                    .check(SessionKey::new(&auth.session.id), now)
+                match limit.bucket {
+                    // The session id, not the account id: another
+                    // session of the same account has its own budget.
+                    Bucket::PwChange => state
+                        .limits
+                        .pw_change
+                        .check(SessionKey::new(&auth.session.id), now),
+                    Bucket::LoginIp
+                    | Bucket::LoginUsername
+                    | Bucket::SetupIp
+                    | Bucket::PairIp
+                    | Bucket::PairGlobal
+                    | Bucket::IngestDevice
+                    | Bucket::DeviceAuthFail => return unenforceable(*limit),
+                }
             }
             // The handler owns this one: its key is in the request body.
-            (_, LimitKey::Body) => continue,
+            LimitKey::Body => continue,
             // `enforce_device_access` owns this one. It runs before
             // this layer and before any query, peeks rather than
             // charges, and charges only when authentication fails -
             // none of which this loop can express.
-            (_, LimitKey::PeerBeforeAuth) => continue,
-            _ => return unenforceable(*limit),
+            LimitKey::PeerBeforeAuth => continue,
         };
 
         if let Some(error) = rate_limited(decision) {
