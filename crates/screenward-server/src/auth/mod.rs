@@ -20,3 +20,4 @@ pub mod store;
 pub mod time;
 pub mod token;
 pub mod username;
+pub mod users;

@@ -70,12 +70,30 @@ pub enum ErrorKind {
     /// Shed rather than refused: hashing capacity was exhausted.
     ServerBusy,
 
+    // Account management.
+    /// The requested username already belongs to an account. Only ever
+    /// returned to an admin, who can list the accounts anyway.
+    UsernameTaken,
+    /// Deleting or demoting this account would leave the instance with
+    /// no admin at all.
+    LastAdminProtected,
+    /// A password change presented the wrong current password. A 403
+    /// rather than a 401: the session is valid, so a client must not be
+    /// pushed into treating itself as logged out.
+    CurrentPasswordInvalid,
+    /// Another request changed the password first. The caller verified
+    /// against a hash that is no longer stored, so applying its change
+    /// would silently undo the one that won.
+    PasswordChangeConflict,
+
     // Input policies. These describe public rules and never echo what
     // was sent.
     UsernameLength,
     UsernameCharset,
     PasswordBlank,
     PasswordLength,
+    /// The role field named something other than the two known roles.
+    RoleUnknown,
 }
 
 impl ErrorKind {
@@ -85,7 +103,8 @@ impl ErrorKind {
             | Self::UsernameLength
             | Self::UsernameCharset
             | Self::PasswordBlank
-            | Self::PasswordLength => StatusCode::BAD_REQUEST,
+            | Self::PasswordLength
+            | Self::RoleUnknown => StatusCode::BAD_REQUEST,
             Self::Unauthorized
             | Self::Unauthenticated
             | Self::InvalidCredentials
@@ -94,8 +113,12 @@ impl ErrorKind {
             | Self::CsrfTokenMissing
             | Self::CsrfTokenInvalid
             | Self::NotPermitted
-            | Self::OriginMismatch => StatusCode::FORBIDDEN,
+            | Self::OriginMismatch
+            | Self::CurrentPasswordInvalid => StatusCode::FORBIDDEN,
             Self::NotFound => StatusCode::NOT_FOUND,
+            Self::UsernameTaken
+            | Self::LastAdminProtected
+            | Self::PasswordChangeConflict => StatusCode::CONFLICT,
             Self::MethodNotAllowed => StatusCode::METHOD_NOT_ALLOWED,
             Self::RequestTimeout => StatusCode::REQUEST_TIMEOUT,
             Self::PayloadTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
@@ -130,8 +153,13 @@ impl ErrorKind {
             Self::OriginMismatch => "origin_mismatch",
             Self::RateLimited => "rate_limited",
             Self::ServerBusy => "server_busy",
+            Self::UsernameTaken => "username_taken",
+            Self::LastAdminProtected => "last_admin_protected",
+            Self::CurrentPasswordInvalid => "invalid_current_password",
+            Self::PasswordChangeConflict => "password_change_conflict",
             Self::UsernameLength | Self::UsernameCharset => "invalid_username",
             Self::PasswordBlank | Self::PasswordLength => "invalid_password",
+            Self::RoleUnknown => "invalid_role",
         }
     }
 
@@ -168,6 +196,15 @@ impl ErrorKind {
             }
             Self::PasswordBlank => "the password must not be empty or only whitespace",
             Self::PasswordLength => "the password must be between 12 and 128 characters long",
+            Self::UsernameTaken => "that username is already taken",
+            Self::LastAdminProtected => {
+                "the last remaining admin account may not be deleted or demoted"
+            }
+            Self::CurrentPasswordInvalid => "the current password is incorrect",
+            Self::PasswordChangeConflict => {
+                "the password was changed by another request; please try again"
+            }
+            Self::RoleUnknown => "the role must be either admin or user",
         }
     }
 }
@@ -195,10 +232,15 @@ pub(crate) const ALL_ERROR_KINDS: &[ErrorKind] = &[
     ErrorKind::OriginMismatch,
     ErrorKind::RateLimited,
     ErrorKind::ServerBusy,
+    ErrorKind::UsernameTaken,
+    ErrorKind::LastAdminProtected,
+    ErrorKind::CurrentPasswordInvalid,
+    ErrorKind::PasswordChangeConflict,
     ErrorKind::UsernameLength,
     ErrorKind::UsernameCharset,
     ErrorKind::PasswordBlank,
     ErrorKind::PasswordLength,
+    ErrorKind::RoleUnknown,
 ];
 
 /// Compile-time proof that every code and message is a constant.
