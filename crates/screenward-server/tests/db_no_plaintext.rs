@@ -78,6 +78,42 @@ async fn no_plaintext_secret_is_ever_stored() {
         .await;
     assert_eq!(change.status, StatusCode::OK, "{:?}", change.body);
 
+    // A pairing code and the device token it produces. Both are
+    // secrets of their own kind, and the code is the shortest secret
+    // in the system, so it is the one most worth confirming is only
+    // ever stored hashed.
+    let pairing_code = app.issue_pairing_code(&session).await;
+    let device = app
+        .redeem_pairing_code(&pairing_code, "laptop", "linux")
+        .await;
+
+    // A second code that is minted and never redeemed, so an unspent
+    // row is in the dump as well as a spent one.
+    let unredeemed_code = app.issue_pairing_code(&session).await;
+
+    // Use the device, so `last_seen_at` is written and an event row
+    // exists to scan too.
+    let me = app
+        .send(TestRequest::get("/api/v1/device/me").authenticated_as_device(&device))
+        .await;
+    assert_eq!(me.status, StatusCode::OK);
+    let now = me.body["server_time"].as_i64().expect("a clock");
+    let ingested = app
+        .send(
+            TestRequest::post("/api/v1/events")
+                .authenticated_as_device(&device)
+                .json(json!({
+                    "events": [{
+                        "event_id": "0123456789abcdef0123456789abcdef",
+                        "start_ts": now - 600,
+                        "duration_secs": 300,
+                        "app_id": "org.example.app",
+                    }],
+                })),
+        )
+        .await;
+    assert_eq!(ingested.body["accepted"], 1);
+
     let dump = app.dump_all_values().await;
     assert!(!dump.is_empty(), "the scan must actually read something");
 
@@ -93,6 +129,9 @@ async fn no_plaintext_secret_is_ever_stored() {
         // Derived, never stored: if this appears, something started
         // persisting it.
         ("the CSRF token", csrf_token.as_str()),
+        ("the redeemed pairing code", pairing_code.as_str()),
+        ("the unredeemed pairing code", unredeemed_code.as_str()),
+        ("the device token", device.token.as_str()),
     ];
 
     for (label, secret) in secrets {
@@ -115,6 +154,23 @@ async fn no_plaintext_secret_is_ever_stored() {
                     "the body of {label} appears in the database: {value}"
                 );
             }
+        }
+    }
+
+    // A pairing code is shown grouped and hashed ungrouped, so the
+    // dash-free form is a distinct string that could have been stored
+    // by mistake. Both spellings have to be absent.
+    for (label, code) in [
+        ("the redeemed pairing code", &pairing_code),
+        ("the unredeemed pairing code", &unredeemed_code),
+    ] {
+        let canonical = code.replace('-', "");
+        assert_ne!(canonical, *code, "the shown form must carry its dash");
+        for value in &dump {
+            assert!(
+                !value.contains(&canonical),
+                "the canonical form of {label} appears in the database: {value}"
+            );
         }
     }
 }
@@ -147,6 +203,36 @@ async fn what_is_stored_is_a_hash_of_the_expected_form() {
         .await
         .expect("the redeemed setup token row must still be there");
     assert_eq!(setup_hash.len(), 32);
+
+    // A device token and a pairing code store the same shape of
+    // digest as a session token does.
+    let session = app.log_in(&credentials).await;
+    let code = app.issue_pairing_code(&session).await;
+    let device = app.redeem_pairing_code(&code, "laptop", "linux").await;
+    assert!(device.token.starts_with("swd_"));
+
+    let device_hash: Vec<u8> = sqlx::query_scalar("SELECT token_hash FROM devices")
+        .fetch_one(&app.pool)
+        .await
+        .expect("the device must exist");
+    assert_eq!(device_hash.len(), 32, "a SHA-256 digest");
+
+    let code_hash: Vec<u8> = sqlx::query_scalar("SELECT code_hash FROM pairing_codes")
+        .fetch_one(&app.pool)
+        .await
+        .expect("the redeemed code row must still be there");
+    assert_eq!(code_hash.len(), 32);
+
+    // And a device token's hash is not a session token's, even though
+    // both are SHA-256: the prefix is part of what gets hashed.
+    let session_hashes: Vec<Vec<u8>> = sqlx::query_scalar("SELECT token_hash FROM sessions")
+        .fetch_all(&app.pool)
+        .await
+        .expect("reading must succeed");
+    assert!(
+        !session_hashes.contains(&device_hash),
+        "a device token must not collide with a session token"
+    );
 }
 
 /// There must be no column anywhere whose name suggests it holds a
