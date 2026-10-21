@@ -123,8 +123,11 @@ mod tests {
     /// not an ASCII-only product.
     #[test]
     fn names_outside_ascii_are_accepted() {
-        for raw in ["Wohnzimmer-PC", "\u{043d}\u{043e}\u{0443}\u{0442}", "\u{30ce}\u{30fc}\u{30c8}"]
-        {
+        for raw in [
+            "Wohnzimmer-PC",
+            "\u{043d}\u{043e}\u{0443}\u{0442}",
+            "\u{30ce}\u{30fc}\u{30c8}",
+        ] {
             assert!(DeviceName::parse(raw).is_ok(), "{raw:?} must be accepted");
         }
     }

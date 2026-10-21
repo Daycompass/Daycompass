@@ -1,5 +1,18 @@
 {
   "permissions": {
+    "allow": [
+      "Bash(gh issue view:*)",
+      "Bash(gh issue list:*)",
+      "Bash(gh project item-list:*)",
+      "Bash(gh project view:*)"
+    ],
+    "ask": [
+      "Bash(gh issue create:*)",
+      "Bash(gh issue comment:*)",
+      "Bash(gh issue edit:*)",
+      "Bash(gh project item-add:*)",
+      "Bash(gh project item-edit:*)"
+    ],
     "deny": [
       "Read(.env)",
       "Read(.env.*)",
@@ -18,7 +31,11 @@
       "Read(**/secrets/**)",
       "Edit(**/secrets/**)",
       "Bash(git push:*)",
-      "Bash(git remote:*)"
+      "Bash(git remote:*)",
+      "Bash(gh api:*)",
+      "Bash(gh pr create:*)",
+      "Bash(gh pr merge:*)",
+      "Bash(gh repo:*)"
     ]
   }
 }

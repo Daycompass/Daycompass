@@ -485,12 +485,10 @@ mod tests {
             Option<String>,
             Option<String>,
             i64,
-        ) = sqlx::query_as(
-            "SELECT event_id, app_id, label, domain, received_at FROM events",
-        )
-        .fetch_one(&pool)
-        .await
-        .expect("the event must be stored");
+        ) = sqlx::query_as("SELECT event_id, app_id, label, domain, received_at FROM events")
+            .fetch_one(&pool)
+            .await
+            .expect("the event must be stored");
 
         assert_eq!(event_id, event_id_of(1));
         assert_eq!(app_id, "org.example.app");

@@ -432,7 +432,10 @@ mod tests {
             ("31 characters", "0123456789abcdef0123456789abcde"),
             ("33 characters", "0123456789abcdef0123456789abcdef0"),
             ("not hex", "0123456789abcdef0123456789abcdeg"),
-            ("dashes in the wrong places", "0123-456789abcdef0123456789abcdef"),
+            (
+                "dashes in the wrong places",
+                "0123-456789abcdef0123456789abcdef",
+            ),
             ("one dash too few", "0123456789ab-cdef-0123-456789abcdef"),
             ("a trailing dash", "0123456789abcdef0123456789abcdef-"),
             ("braced uuid", "{01234567-89ab-cdef-0123-456789abcdef}"),
@@ -786,7 +789,10 @@ mod tests {
         .is_ok());
         assert_eq!(
             check(RawEvent {
-                domain: Some(format!("{}.example", "a".repeat(MAX_DOMAIN_LABEL_CHARS + 1))),
+                domain: Some(format!(
+                    "{}.example",
+                    "a".repeat(MAX_DOMAIN_LABEL_CHARS + 1)
+                )),
                 ..valid()
             })
             .unwrap_err(),

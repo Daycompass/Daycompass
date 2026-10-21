@@ -11,9 +11,9 @@
 //! # Why `ON CONFLICT ... DO NOTHING` and not `INSERT OR IGNORE`
 //!
 //! The two look interchangeable and are not. `INSERT OR IGNORE` skips
-//! a row that violates *any* constraint - NOT NULL and CHECK included
-//! - so a bug in the validator, or a validator and a schema that have
-//! drifted apart, would silently drop events and this code would
+//! a row that violates *any* constraint, NOT NULL and CHECK included,
+//! so a bug in the validator - or a validator and a schema that have
+//! drifted apart - would silently drop events and this code would
 //! report them to the client as duplicates. The conflict target below
 //! suppresses exactly the duplicate and nothing else; every other
 //! constraint still raises, fails the transaction, and is logged.

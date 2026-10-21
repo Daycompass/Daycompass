@@ -519,10 +519,16 @@ mod tests {
     #[test]
     fn one_devices_budget_is_not_another_devices() {
         let limiter = RateLimiter::new(rule(1, 60), 100);
-        assert!(limiter.check(DeviceKey::new("device-a"), at(0)).is_allowed());
-        assert!(!limiter.check(DeviceKey::new("device-a"), at(0)).is_allowed());
+        assert!(limiter
+            .check(DeviceKey::new("device-a"), at(0))
+            .is_allowed());
+        assert!(!limiter
+            .check(DeviceKey::new("device-a"), at(0))
+            .is_allowed());
         assert!(
-            limiter.check(DeviceKey::new("device-b"), at(0)).is_allowed(),
+            limiter
+                .check(DeviceKey::new("device-b"), at(0))
+                .is_allowed(),
             "a second device starts with its own budget"
         );
     }

@@ -239,9 +239,7 @@ impl ErrorKind {
             }
             Self::RoleUnknown => "the role must be either admin or user",
             Self::InvalidPairingCode => "the pairing code is not valid",
-            Self::DeviceLimitReached => {
-                "this account has reached the maximum number of devices"
-            }
+            Self::DeviceLimitReached => "this account has reached the maximum number of devices",
             Self::PairingCodeLimitReached => {
                 "this account already has the maximum number of active pairing codes"
             }

@@ -27,12 +27,13 @@ use axum::extract::{FromRequestParts, Request, State};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 
+use crate::auth::device::{self, AuthDevice, DeviceRejection};
 use crate::auth::extract::{verify_csrf, AuthRejection, AuthSession};
-use crate::auth::origin;
 use crate::auth::time::UnixTime;
+use crate::auth::{cookie, origin};
 use crate::clientip::ClientAddr;
 use crate::error::{ApiError, ErrorKind};
-use crate::ratelimit::SessionKey;
+use crate::ratelimit::{DeviceKey, GlobalKey, SessionKey};
 use crate::routes::{rate_limited, Access, Bucket, LimitKey, RouteSpec};
 use crate::state::AppState;
 
@@ -90,12 +91,29 @@ fn reject_origin() -> Response {
 /// check needs only the two values the client sent, so a forged request
 /// is refused without spending a query on it, and the outcome still
 /// says nothing about whether the session is real.
-pub async fn enforce_access(
+pub async fn enforce_session_access(
     State((state, spec)): State<RouteState>,
     request: Request,
     next: Next,
 ) -> Response {
     let (mut parts, body) = request.into_parts();
+
+    // A session route authenticates by cookie, so a bearer credential
+    // on it is a request that is confused about what it is. Refused
+    // rather than ignored.
+    //
+    // This is the second line, not the first: a device token could not
+    // be accepted as a session anyway, because the token prefix is
+    // part of what gets hashed and the two kinds live in different
+    // tables. The scheme is matched case-insensitively, so `bearer`
+    // does not slip past; see `crate::auth::device`.
+    //
+    // Deliberately only the `Bearer` scheme. A reverse proxy or CDN
+    // that attaches `Basic` credentials of its own must not break
+    // every session route.
+    if device::carries_bearer(&parts) {
+        return AuthRejection::Unauthenticated.into_response();
+    }
 
     if spec.csrf {
         if let Err(rejection) = verify_csrf(&parts) {
@@ -116,6 +134,65 @@ pub async fn enforce_access(
 
     let mut request = Request::from_parts(parts, body);
     request.extensions_mut().insert(Arc::new(auth));
+    next.run(request).await
+}
+
+/// Requires a paired, unrevoked device, then hands it to the handler.
+///
+/// Attached from an [`Access::Device`] entry. The two rules it
+/// enforces are the mirror image of the bearer refusal above, and both
+/// are documented in [`crate::auth::device`].
+pub async fn enforce_device_access(
+    State((state, _spec)): State<RouteState>,
+    request: Request,
+    next: Next,
+) -> Response {
+    let (parts, body) = request.into_parts();
+
+    // A device route refuses any request carrying the Screenward
+    // session cookie, even one that also presents a valid token. A
+    // device is a different principal with a different credential, and
+    // a request arriving with both is not something a native client
+    // does.
+    //
+    // `cookie::is_present` rather than `cookie::read(..).is_some()`:
+    // `read` returns `None` for a *duplicated* cookie, so two copies
+    // of it would otherwise be a way to slip past this refusal.
+    //
+    // And it is this one cookie, never "any cookie" - a proxy or CDN
+    // attaching its own must not break device authentication.
+    let cookies = parts
+        .headers
+        .get_all(axum::http::header::COOKIE)
+        .iter()
+        .filter_map(|value| value.to_str().ok());
+    if cookie::is_present(cookies) {
+        return DeviceRejection::Unauthenticated.into_response();
+    }
+
+    let Some(presented) = device::presented_bearer(&parts) else {
+        return DeviceRejection::Unauthenticated.into_response();
+    };
+
+    // The shape of the token is checked in memory inside `resolve`
+    // before any query, which is what keeps an unauthenticated caller
+    // from spending a database lookup per attempt on a route whose
+    // rate limit cannot run until the device is known.
+    let resolved = match device::resolve(&state.pool, presented, UnixTime::now()).await {
+        Ok(resolved) => resolved,
+        Err(err) => {
+            tracing::error!(error = %err, "could not resolve a device");
+            return DeviceRejection::Unavailable.into_response();
+        }
+    };
+    let Some(record) = resolved else {
+        return DeviceRejection::Unauthenticated.into_response();
+    };
+
+    let mut request = Request::from_parts(parts, body);
+    request
+        .extensions_mut()
+        .insert(Arc::new(AuthDevice { device: record }));
     next.run(request).await
 }
 
@@ -147,8 +224,27 @@ pub async fn enforce_rate_limits(
                 match bucket {
                     Bucket::LoginIp => state.limits.login_ip.check(key, now),
                     Bucket::SetupIp => state.limits.setup_ip.check(key, now),
+                    Bucket::PairIp => state.limits.pair_ip.check(key, now),
                     _ => return unenforceable(*limit),
                 }
+            }
+            // One shared bucket for the whole endpoint, so there is no
+            // key to resolve and nothing about the caller to read.
+            (Bucket::PairGlobal, LimitKey::Global) => {
+                state.limits.pair_global.check(GlobalKey, now)
+            }
+            (Bucket::IngestDevice, LimitKey::Device) => {
+                let Some(auth) = parts.extensions.get::<Arc<AuthDevice>>() else {
+                    // Only reachable if the entry asked for a
+                    // device-keyed limit without a device layer, which
+                    // RouteSpec::validate refuses at startup.
+                    tracing::error!("a device-keyed rate limit ran with no resolved device");
+                    return ApiError::of(ErrorKind::InternalError).into_response();
+                };
+                state
+                    .limits
+                    .ingest_device
+                    .check(DeviceKey::new(&auth.device.id), now)
             }
             (Bucket::PwChange, LimitKey::Session) => {
                 let Some(auth) = parts.extensions.get::<Arc<AuthSession>>() else {

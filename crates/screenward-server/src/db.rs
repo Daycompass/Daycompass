@@ -377,48 +377,56 @@ mod tests {
             let id = format!("bad-{index}");
             let event_id = format!("b{index}");
             let result = match *label {
-                "zero duration" | "duration over a day" => sqlx::query(
-                    "INSERT INTO events
+                "zero duration" | "duration over a day" => {
+                    sqlx::query(
+                        "INSERT INTO events
                          (id, device_id, event_id, start_ts, duration_secs, app_id, received_at)
                      VALUES (?1, 'd1', ?2, 0, ?3, 'org.example.app', 0)",
-                )
-                .bind(&id)
-                .bind(&event_id)
-                .bind(value.parse::<i64>().expect("a number"))
-                .execute(&pool)
-                .await,
-                "empty app_id" | "app_id over 256" => sqlx::query(
-                    "INSERT INTO events
+                    )
+                    .bind(&id)
+                    .bind(&event_id)
+                    .bind(value.parse::<i64>().expect("a number"))
+                    .execute(&pool)
+                    .await
+                }
+                "empty app_id" | "app_id over 256" => {
+                    sqlx::query(
+                        "INSERT INTO events
                          (id, device_id, event_id, start_ts, duration_secs, app_id, received_at)
                      VALUES (?1, 'd1', ?2, 0, 60, ?3, 0)",
-                )
-                .bind(&id)
-                .bind(&event_id)
-                .bind(value)
-                .execute(&pool)
-                .await,
-                "label over 128" => sqlx::query(
-                    "INSERT INTO events
+                    )
+                    .bind(&id)
+                    .bind(&event_id)
+                    .bind(value)
+                    .execute(&pool)
+                    .await
+                }
+                "label over 128" => {
+                    sqlx::query(
+                        "INSERT INTO events
                          (id, device_id, event_id, start_ts, duration_secs, app_id, label,
                           received_at)
                      VALUES (?1, 'd1', ?2, 0, 60, 'org.example.app', ?3, 0)",
-                )
-                .bind(&id)
-                .bind(&event_id)
-                .bind(value)
-                .execute(&pool)
-                .await,
-                _ => sqlx::query(
-                    "INSERT INTO events
+                    )
+                    .bind(&id)
+                    .bind(&event_id)
+                    .bind(value)
+                    .execute(&pool)
+                    .await
+                }
+                _ => {
+                    sqlx::query(
+                        "INSERT INTO events
                          (id, device_id, event_id, start_ts, duration_secs, app_id, domain,
                           received_at)
                      VALUES (?1, 'd1', ?2, 0, 60, 'org.example.app', ?3, 0)",
-                )
-                .bind(&id)
-                .bind(&event_id)
-                .bind(value)
-                .execute(&pool)
-                .await,
+                    )
+                    .bind(&id)
+                    .bind(&event_id)
+                    .bind(value)
+                    .execute(&pool)
+                    .await
+                }
             };
             assert!(result.is_err(), "{label} must be refused by the schema");
         }
