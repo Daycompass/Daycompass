@@ -6,22 +6,57 @@
 //! than as axum middleware, so the rule itself can be tested without
 //! building a request.
 //!
-//! The rule:
+//! The rule, case by case:
 //!
 //! * `GET` and `HEAD` are exempt. They must not change state, so there
-//!   is nothing for a forged one to accomplish.
-//! * A present `Origin` that does not name this instance is rejected.
-//! * An **absent** `Origin` is allowed. Non-browser clients - a sync
-//!   client, curl, a script - send none, and refusing them would mean
-//!   the API only worked from a browser. A browser, by contrast, always
-//!   sends `Origin` on a cross-site state-changing request, so its
-//!   absence is not something a hostile page can arrange.
+//!   is nothing for a forged one to accomplish. This is why an
+//!   `origin_checked` entry in the route inventory still answers a
+//!   foreign origin on a `GET`.
+//! * A present `Origin` naming this instance is allowed. Both sides go
+//!   through [`PublicUrl`]'s parser first, so an equivalent spelling
+//!   matches: scheme and host are compared case-insensitively, and a
+//!   port equal to the scheme's default is dropped, which makes
+//!   `https://example.org:443` and `https://example.org` the same
+//!   origin. The comparison is exact beyond that - no suffix matching,
+//!   so `example.org.attacker.example` does not pass.
+//! * A present `Origin` that names anything else is rejected, and so is
+//!   one that does not parse as an origin at all. `null` is the case
+//!   worth naming: a browser sends it for an opaque origin - a
+//!   sandboxed iframe, a `data:` or `file:` document, some redirect
+//!   chains - and it must not be treated as "no origin", because that
+//!   is a value a hostile page *can* arrange. It parses as nothing, so
+//!   it fails the comparison.
+//! * **More than one** `Origin` header is rejected, as is a header
+//!   whose bytes are not text. No browser sends either, and choosing
+//!   one of several values would be a way to smuggle the wrong answer
+//!   past this check. That part is in `crate::routes::access`, where
+//!   the header list is still available; by the time a value reaches
+//!   this module there is exactly one.
+//! * An **absent** `Origin` is allowed, on every checked route. Non-
+//!   browser clients - a sync client, curl, a script - send none, and
+//!   refusing them would mean the API only worked from a browser. A
+//!   browser always sends `Origin` on a cross-site state-changing
+//!   request, so its absence is not something a hostile page can
+//!   arrange.
 //!
 //! Allowing an absent header is only safe because it is not the only
 //! check: every cookie-authenticated request independently requires a
-//! valid CSRF token, which a hostile page cannot read. Setup is the one
-//! state-changing endpoint with no cookie, and it is protected by the
-//! unguessable setup token instead.
+//! valid CSRF token, which a hostile page cannot read.
+//!
+//! Login is the route where that permissiveness is load-bearing, and it
+//! is worth being precise about what it does and does not cost. A
+//! command line client logging in sends no `Origin` and is allowed. A
+//! hostile page trying to log a victim into an attacker-controlled
+//! account - login CSRF - cannot do the same: its request is cross-site,
+//! so the browser attaches an `Origin`, which is then rejected. The
+//! permissive case admits only callers that are not browsers, which are
+//! the ones with no ambient cookie to abuse in the first place.
+//!
+//! Setup is the one state-changing endpoint exempt from this check
+//! altogether. It carries no cookie, so there is no ambient credential
+//! for a hostile page to ride on, and its protection is the unguessable
+//! setup token. Which routes are checked is not decided here: it is the
+//! `origin_checked` column of [`crate::routes::INVENTORY`].
 
 use crate::config::PublicUrl;
 

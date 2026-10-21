@@ -367,7 +367,9 @@ pub struct TestRequest {
     method: Method,
     uri: String,
     peer: String,
-    origin: Option<String>,
+    /// Every `Origin` header to send, in order. A list rather than one
+    /// value so a test can send two, which the server must refuse.
+    origins: Vec<String>,
     cookie: Option<String>,
     csrf: Option<String>,
     forwarded: Vec<String>,
@@ -396,7 +398,7 @@ impl TestRequest {
             method,
             uri: uri.to_owned(),
             peer: DEFAULT_PEER.to_owned(),
-            origin: None,
+            origins: Vec::new(),
             cookie: None,
             csrf: None,
             forwarded: Vec::new(),
@@ -409,8 +411,10 @@ impl TestRequest {
         self
     }
 
+    /// Adds an `Origin` header. Calling it twice sends two, which is
+    /// what the duplicate-header rejection is tested with.
     pub fn origin(mut self, origin: &str) -> Self {
-        self.origin = Some(origin.to_owned());
+        self.origins.push(origin.to_owned());
         self
     }
 
@@ -446,7 +450,7 @@ impl TestRequest {
         if self.body.is_some() {
             builder = builder.header(header::CONTENT_TYPE, "application/json");
         }
-        if let Some(origin) = &self.origin {
+        for origin in &self.origins {
             builder = builder.header(header::ORIGIN, origin);
         }
         if let Some(cookie) = &self.cookie {
