@@ -12,6 +12,32 @@
 //! while a real account takes fifty, which is a reliable account
 //! oracle - and a much easier one to exploit than most timing attacks,
 //! because the difference is enormous rather than marginal.
+//!
+//! # The order of work in a login
+//!
+//! Each step exists to keep the next one from being reachable cheaply,
+//! so the order is the protection:
+//!
+//! 1. The **`Origin` check**, as a layer attached from the route's entry
+//!    in [`crate::routes::INVENTORY`]. A present, foreign origin is
+//!    refused before anything else happens.
+//! 2. The **per-address rate limit**, also a layer from that entry. It
+//!    caps how many distinct usernames one client can even introduce,
+//!    which is what keeps step 3's map bounded.
+//! 3. The **per-username rate limit**, in the handler, because its key
+//!    is in the request body. It protects one account against a
+//!    guessing attack spread across many addresses.
+//! 4. **Input bounds**: a blank or over-long password, and a username
+//!    that could not name an account, are decided from the caller's own
+//!    input and so leak nothing.
+//! 5. The **account lookup**, then exactly one **Argon2 verification** -
+//!    against the stored hash, or against the decoy if there is no such
+//!    account. This is the only expensive step, and it is behind all of
+//!    the above plus the hasher's own semaphore and wait timeout.
+//! 6. On success, a **new session**; never a reused or refreshed one.
+//!
+//! Only then is a stored hash upgraded, if it was made with weaker
+//! parameters - the one moment the plaintext is available.
 
 use sqlx::SqlitePool;
 

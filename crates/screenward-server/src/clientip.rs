@@ -1,5 +1,10 @@
 //! Working out which address a request came from.
 //!
+//! Part of the authentication story even though it does not live under
+//! `src/auth/`: every per-address rate limit named in
+//! [`crate::routes::INVENTORY`] is counted against the answer this
+//! module gives, and [`crate::auth`] points here for that reason.
+//!
 //! Rate limiting is only as good as this answer. If a client can choose
 //! the address it is counted against, the limits mean nothing, so the
 //! rules here are deliberately strict:

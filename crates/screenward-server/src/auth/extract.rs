@@ -6,7 +6,7 @@
 //! authenticated state-changing request without CSRF protection,
 //! because the same thing that gives it the user also enforces it.
 //!
-//! The `Origin` check is separate, in [`crate::routes::access`],
+//! The `Origin` check is separate, in `crate::routes::access`,
 //! because it applies to requests that have no session yet - login
 //! above all. That module also carries the layer that attaches this
 //! extractor's work to a route from the route inventory; the CSRF rule
@@ -51,9 +51,11 @@ impl AuthSession {
     /// Returns the user if they are an admin, otherwise a rejection that
     /// becomes a 403.
     ///
-    /// No endpoint calls this yet - admin-only routes are a later
-    /// milestone - so it is covered by its own tests rather than through
-    /// a request.
+    /// Reads the role from the account record resolved for *this*
+    /// request, which is what makes a demotion take effect immediately
+    /// rather than when the session next expires. Called from the access
+    /// layer built from a route's inventory entry, and again by the
+    /// `AdminContext` extractor as the second line.
     pub fn require_admin(&self) -> Result<&UserRecord, AuthRejection> {
         if self.user.role.is_admin() {
             Ok(&self.user)
@@ -187,9 +189,9 @@ mod tests {
     use crate::auth::token::{Token, TokenKind};
     use crate::auth::username::Username;
 
-    /// Builds an [`AuthSession`] directly. No admin-only endpoint exists
-    /// yet - those are a later milestone - so the role helper is covered
-    /// here rather than through a request.
+    /// Builds an [`AuthSession`] directly, so the role helper can be
+    /// checked without a request. The same ground is covered over HTTP
+    /// in `tests/route_inventory.rs` and `tests/users_admin.rs`.
     fn auth_session(role: Role) -> (AuthSession, Token) {
         let token = Token::generate(TokenKind::Session).expect("CSPRNG must be available");
         let session = SessionRecord {
