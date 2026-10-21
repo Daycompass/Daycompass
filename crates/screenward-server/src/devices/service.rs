@@ -193,6 +193,23 @@ pub async fn pair_device(
     }
 }
 
+/// Deletes every pairing code that is spent or expired.
+///
+/// Run by the background sweep. [`store::insert_pairing_code_guarded`]
+/// already collects the *minting* account's dead codes, which bounds
+/// what one person can accumulate while they are active; this is what
+/// collects the codes of somebody who minted one and never came back.
+///
+/// Deliberately a separate entry point from
+/// [`crate::auth::session::sweep_expired`] rather than a line added to
+/// it: that function sweeps the auth tables, this one sweeps a device
+/// table, and the cleanup task calls both. Reaching across the module
+/// boundary to save one call would make `auth` responsible for rows it
+/// knows nothing about.
+pub async fn sweep_expired_codes(pool: &SqlitePool, now: UnixTime) -> Result<u64, StoreError> {
+    store::delete_stale_pairing_codes(pool, now).await
+}
+
 // --- management -------------------------------------------------------
 
 /// One owner's devices, revoked ones included.

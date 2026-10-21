@@ -176,6 +176,115 @@ stolen one. The cost of that choice is that the limit bounds Argon2 work
 per session rather than per account; opening more sessions means more
 budget, which the login limits bound in turn.
 
+## Devices and events
+
+A device is a client - a phone, a laptop - paired to one account. It
+authenticates with its own bearer token and reports what applications
+were in use for how long.
+
+The full request and response format is in
+[docs/wire-format.md](docs/wire-format.md), which is the reference for
+client repositories. This section is the shape of it and the reasoning
+behind the parts that are not obvious.
+
+| Endpoint | Purpose |
+| --- | --- |
+| `POST /api/v1/pairing-codes` | Mint a code for your own account. Session. |
+| `POST /api/v1/pair` | Redeem a code, receive a device token. Public. |
+| `POST /api/v1/events` | Report events. Device. |
+| `GET /api/v1/device/me` | Identity and the server's clock. Device. |
+| `GET /api/v1/devices` | Your own devices. Session. |
+| `PATCH /api/v1/devices/{id}` | Rename your own device. Session. |
+| `POST /api/v1/devices/{id}/revoke` | Revoke your own device. Session. |
+| `GET /api/v1/admin/devices` | Every device, metadata only. Admin. |
+| `POST /api/v1/admin/devices/{id}/revoke` | Revoke any device. Admin. |
+
+### Pairing
+
+A logged-in person mints a ten-character code, reads it to the new
+device, and the device redeems it for a token. The code is single use,
+expires after ten minutes, and only its hash is stored. At most five
+live codes and twenty live devices per account; both are configurable.
+
+The code is short because somebody types it on a phone, which is a real
+trade-off and the reason the ten-minute expiry is not negotiable: a
+leaked hash is only worth cracking while the code is still redeemable.
+Ambiguous characters are left out of the alphabet, so `I`, `L`, `O` and
+`U` are never generated and the first three are folded onto the digits
+they are mistaken for.
+
+An unknown, expired, used and malformed code all produce the same
+answer. Hitting the device cap is reported differently, which is safe
+because it takes a valid code to get there - and that case leaves the
+code **unspent**, so revoking an old device and retrying the same code
+works.
+
+### Two kinds of caller
+
+The dashboard authenticates with a cookie; a device authenticates with
+`Authorization: Bearer`. They are not interchangeable, and the server
+refuses requests that are confused about which they are: a device route
+rejects any request carrying the session cookie, and a session route
+rejects any bearer credential.
+
+`POST /api/v1/pair`, `POST /api/v1/events` and `GET /api/v1/device/me`
+are exempt from the `Origin` check, because native clients send no
+`Origin` header. That is only safe because none of them has ambient
+cookie authority in either direction - they do not authenticate by
+cookie and they do not hand one out. The exemption is a named property
+of each route's entry in the route inventory rather than a per-route
+flag, and the inventory refuses to let it be attached to anything else.
+Login, in particular, cannot have it.
+
+### Reporting events
+
+A batch of up to 500 events, in a body of up to 512 KiB. Each event
+carries a client-generated id, and deduplication is per event on
+`(device, id)` - so **resending is always safe**, and a client never has
+to track what it has already delivered.
+
+The response is `200` with one result per event: accepted, duplicate, or
+rejected with a machine-readable reason. Only a malformed request fails
+as a whole. A client that could not get rid of one bad event would
+otherwise retry the same batch forever.
+
+Events carry no category. Categories are assigned at query time from
+rules, so recategorising does not rewrite history.
+
+Events record an application id, an optional label, and an optional
+**bare hostname** for browser activity. There is no column for a window
+title or a URL, and the hostname field rejects anything carrying a
+scheme, port, path or query - a screen time tool does not need a
+browsing history, so it does not store one.
+
+Overlapping events are kept as reported. One device reporting a
+foreground application and a browser domain at once is normal, as is
+two devices covering the same span; deciding what an overlap means is a
+query-time question.
+
+### Revoking
+
+Revoking keeps the device row and every event it reported - it is not a
+delete. The token stops working on the device's very next request,
+because the row is re-read every time and nothing is cached. Revoking
+twice is not an error.
+
+A revoked device is indistinguishable from an unknown one in the
+response, so neither can be used to probe the other.
+
+### What an admin can and cannot see here
+
+An admin can list every device on the instance and revoke any of them,
+and sees metadata only: id, owner, name, platform, and the three
+timestamps.
+
+An admin has **no way to read anyone's events**. There is no endpoint,
+no service function and no query that returns one - in fact M2 has no
+event read path for anybody at all, including a device's own owner.
+That is checked rather than remembered: a test fails if a route
+touching events appears in the inventory, if any file outside the ingest
+store queries the table, or if either device view grows a field.
+
 ## License
 
 AGPL-3.0-only. See [LICENSE](LICENSE).

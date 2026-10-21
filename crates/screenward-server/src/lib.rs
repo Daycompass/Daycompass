@@ -84,22 +84,45 @@ where
 /// back for.
 const CLEANUP_INTERVAL: std::time::Duration = std::time::Duration::from_secs(60 * 60);
 
-/// Spawns the task that deletes expired sessions and spent setup tokens.
+/// Spawns the task that deletes expired sessions, spent setup tokens
+/// and dead pairing codes.
 ///
 /// Runs one sweep immediately, so a restart cleans up whatever expired
 /// while the process was down, then on a fixed interval. A failed sweep
 /// is logged and retried at the next tick rather than ending the task,
 /// since a transient database error must not silently stop cleanup for
 /// the lifetime of the process.
+///
+/// Two sweeps, not one: [`auth::session::sweep_expired`] owns the auth
+/// tables and [`devices::service::sweep_expired_codes`] owns the
+/// pairing codes. Each is reported separately and a failure in one
+/// does not skip the other, so a problem with one table cannot quietly
+/// stop the other from being collected.
+///
+/// Expiry does not depend on this task. A session is checked and
+/// deleted on every request that presents it, and a pairing code's
+/// `expires_at` is compared inside the redemption transaction, so a
+/// code that outlives the sweep is still unusable. This only reclaims
+/// the rows nobody comes back for.
 pub fn spawn_cleanup_task(pool: SqlitePool, policy: auth::session::SessionPolicy) {
     tokio::spawn(async move {
         let mut ticker = tokio::time::interval(CLEANUP_INTERVAL);
         loop {
             ticker.tick().await;
-            match auth::session::sweep_expired(&pool, policy, auth::time::UnixTime::now()).await {
+            let now = auth::time::UnixTime::now();
+
+            match auth::session::sweep_expired(&pool, policy, now).await {
                 Ok(0) => {}
-                Ok(removed) => tracing::info!(removed, "cleaned up expired rows"),
-                Err(err) => tracing::error!(error = %err, "the cleanup sweep failed"),
+                Ok(removed) => tracing::info!(removed, "cleaned up expired auth rows"),
+                Err(err) => tracing::error!(error = %err, "the auth cleanup sweep failed"),
+            }
+
+            match devices::service::sweep_expired_codes(&pool, now).await {
+                Ok(0) => {}
+                Ok(removed) => tracing::info!(removed, "cleaned up dead pairing codes"),
+                Err(err) => {
+                    tracing::error!(error = %err, "the pairing code cleanup sweep failed");
+                }
             }
         }
     });

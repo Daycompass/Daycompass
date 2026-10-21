@@ -165,23 +165,6 @@ pub async fn insert_pairing_code_guarded(
     Ok(NewCodeOutcome::Created)
 }
 
-/// How many live codes `user_id` has. For tests and diagnostics.
-pub async fn count_active_codes(
-    pool: &SqlitePool,
-    user_id: &str,
-    now: UnixTime,
-) -> Result<i64, StoreError> {
-    let (count,): (i64,) = sqlx::query_as(
-        "SELECT COUNT(*) FROM pairing_codes
-         WHERE user_id = ?1 AND used_at IS NULL AND expires_at > ?2",
-    )
-    .bind(user_id)
-    .bind(now.as_secs())
-    .fetch_one(pool)
-    .await?;
-    Ok(count)
-}
-
 /// Removes pairing codes that are expired or already redeemed.
 ///
 /// The instance-wide counterpart to the per-owner delete inside
@@ -380,16 +363,6 @@ pub async fn list_all_devices(pool: &SqlitePool) -> Result<Vec<DeviceWithOwner>,
             })
         })
         .collect()
-}
-
-/// How many live devices `user_id` has. For tests and diagnostics.
-pub async fn count_live_devices(pool: &SqlitePool, user_id: &str) -> Result<i64, StoreError> {
-    let (count,): (i64,) =
-        sqlx::query_as("SELECT COUNT(*) FROM devices WHERE user_id = ?1 AND revoked_at IS NULL")
-            .bind(user_id)
-            .fetch_one(pool)
-            .await?;
-    Ok(count)
 }
 
 /// Which devices an operation is allowed to touch.

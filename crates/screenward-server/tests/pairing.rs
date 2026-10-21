@@ -160,6 +160,57 @@ async fn minting_collects_the_accounts_dead_codes() {
     );
 }
 
+/// The per-owner collection above only runs when that owner mints
+/// again. The background sweep is what collects the codes of somebody
+/// who minted one and never came back.
+#[tokio::test]
+async fn the_sweep_collects_dead_codes_from_every_account() {
+    use screenward_server::auth::time::UnixTime;
+    use screenward_server::devices::service;
+
+    let app = TestApp::new().await;
+    let (_credentials, admin) = app.provisioned_admin().await;
+    let (_id, bob_credentials) = app.create_account(&admin, "bob", "user").await;
+    let bob = app.log_in(&bob_credentials).await;
+    let (_id, carol_credentials) = app.create_account(&admin, "carol", "user").await;
+    let carol = app.log_in(&carol_credentials).await;
+
+    // A spent code on one account.
+    let spent = app.issue_pairing_code(&admin).await;
+    app.send(pair_request(&spent)).await;
+
+    // An expired one on another. Aged through SQL, because the expiry
+    // is ten minutes and the rule under test is the comparison.
+    app.issue_pairing_code(&bob).await;
+    sqlx::query("UPDATE pairing_codes SET expires_at = 1 WHERE used_at IS NULL")
+        .execute(&app.pool)
+        .await
+        .expect("ageing must succeed");
+
+    // And a live one on a third account. It has to be a third
+    // account: minting collects the *minting* owner's dead codes, so
+    // reusing either of the two above would quietly remove the row
+    // this test is about before the sweep ever ran.
+    let live = app.issue_pairing_code(&carol).await;
+    assert_eq!(app.count_pairing_codes().await, 3);
+
+    let removed = service::sweep_expired_codes(&app.pool, UnixTime::now())
+        .await
+        .expect("the sweep must succeed");
+    assert_eq!(removed, 2, "the spent and the expired code must both go");
+    assert_eq!(app.count_pairing_codes().await, 1);
+
+    // And the survivor still works, so the sweep is not collecting
+    // live codes.
+    let response = app.send(pair_request(&live)).await;
+    assert_eq!(
+        response.status,
+        StatusCode::CREATED,
+        "a live code must survive the sweep: {:?}",
+        response.body
+    );
+}
+
 // --- redeeming --------------------------------------------------------
 
 #[tokio::test]
