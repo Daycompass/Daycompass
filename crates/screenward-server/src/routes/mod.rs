@@ -185,8 +185,15 @@ impl RateLimit {
         Self { bucket, key }
     }
 
-    /// Whether a layer enforces this one, as opposed to the handler.
-    pub const fn enforced_by_layer(self) -> bool {
+    /// Whether the shared rate-limit layer enforces this one.
+    ///
+    /// Not "whether a layer does": an access layer is a layer too, and
+    /// once a second enforcer exists the old name is a lie. A limit
+    /// this returns `false` for is enforced somewhere else that the
+    /// [`LimitKey`] variant names - the handler, or the access layer -
+    /// and is skipped by the shared layer's loop rather than being
+    /// unenforced.
+    pub const fn enforced_by_shared_layer(self) -> bool {
         !matches!(self.key, LimitKey::Body)
     }
 }
@@ -682,7 +689,7 @@ impl RouteTable {
         if spec
             .rate_limits
             .iter()
-            .any(|limit| limit.enforced_by_layer())
+            .any(|limit| limit.enforced_by_shared_layer())
         {
             route = route.layer(axum::middleware::from_fn_with_state(
                 (self.state.clone(), spec),

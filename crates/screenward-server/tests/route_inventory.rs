@@ -598,7 +598,7 @@ async fn every_layer_enforced_rate_limit_refuses_when_reached() {
     for spec in INVENTORY.iter().filter(|spec| {
         spec.rate_limits
             .iter()
-            .any(|limit| limit.enforced_by_layer())
+            .any(|limit| limit.enforced_by_shared_layer())
     }) {
         let app = TestApp::with_vars(tight).await;
         let (credentials, admin) = app.provisioned_admin().await;
