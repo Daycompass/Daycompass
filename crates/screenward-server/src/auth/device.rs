@@ -36,15 +36,24 @@
 //! the token itself, so a revocation takes effect on the device's very
 //! next call.
 //!
-//! # Why malformed tokens never reach the database
+//! # What bounds an unauthenticated caller
 //!
-//! `/api/v1/events` is rate limited per device, which means the
-//! limiter cannot run until the device is known. An unauthenticated
-//! caller is therefore bounded by nothing but the connection itself,
-//! so the cheap checks come first: the prefix, the length and the
-//! base64url shape are all verified in memory by
-//! [`TokenHash::of_presented`], and only a token that could possibly
-//! exist costs a query.
+//! Two things, and they are different.
+//!
+//! The per-device ingest limit is **not** one of them: it keys on the
+//! device this module resolves, so it only ever applies once
+//! authentication has already succeeded.
+//!
+//! What does apply is the per-address failure limit in
+//! [`crate::routes::access::enforce_device_access`], which is peeked
+//! before this module is called and charged on every failure it
+//! returns. That is the actual bound.
+//!
+//! Underneath it, the cheap checks still come first: the prefix, the
+//! length and the base64url shape are all verified in memory by
+//! [`TokenHash::of_presented`], so a malformed token costs no query
+//! even while it does spend from the failure budget. Only a token
+//! that could possibly exist reaches the database.
 
 use std::fmt;
 use std::sync::Arc;
@@ -188,11 +197,18 @@ pub async fn resolve(
         return Ok(None);
     };
 
-    let Some(device) = device_store::find_device_by_token_hash(pool, &token_hash).await? else {
+    // The query itself excludes revoked devices, so this returns
+    // `None` for one.
+    let Some(device) = device_store::find_live_device_by_token_hash(pool, &token_hash).await?
+    else {
         return Ok(None);
     };
 
-    // Read from the row, every request, nothing cached.
+    // The second line, and deliberately redundant with that `WHERE`.
+    // Revocation is the one property here whose failure is silent -
+    // a revoked token that still works looks exactly like a working
+    // one - so it is checked in both places, and `last_seen_at`
+    // below is never written for a device that fails either.
     if !device.is_live() {
         return Ok(None);
     }
@@ -387,6 +403,78 @@ mod tests {
                 "{candidate:?} must not resolve"
             );
         }
+    }
+
+    /// The store query itself must exclude a revoked device, not
+    /// merely the Rust check above it. Tested against the store
+    /// directly, so it fails if the `WHERE` clause loses its
+    /// `revoked_at IS NULL` even while `resolve` still happens to
+    /// filter correctly.
+    #[tokio::test]
+    async fn the_store_does_not_return_a_revoked_device() {
+        let (pool, token, device_id) = pool_with_device().await;
+
+        // Present while live.
+        assert!(
+            device_store::find_live_device_by_token_hash(&pool, &token.hash())
+                .await
+                .expect("the lookup must succeed")
+                .is_some()
+        );
+
+        sqlx::query("UPDATE devices SET revoked_at = 1001 WHERE id = ?1")
+            .bind(&device_id)
+            .execute(&pool)
+            .await
+            .expect("revoking must succeed");
+
+        assert!(
+            device_store::find_live_device_by_token_hash(&pool, &token.hash())
+                .await
+                .expect("the lookup must succeed")
+                .is_none(),
+            "the query must exclude a revoked device by itself"
+        );
+
+        // And the row is still there - revoking is not deleting.
+        let (count,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM devices")
+            .fetch_one(&pool)
+            .await
+            .expect("counting must succeed");
+        assert_eq!(count, 1);
+    }
+
+    /// A revoked device must leave no trace of having tried. If
+    /// `last_seen_at` moved, a revoked token would still be writing
+    /// to the row it is no longer allowed to use.
+    #[tokio::test]
+    async fn last_seen_at_is_never_touched_for_a_revoked_device() {
+        let (pool, token, device_id) = pool_with_device().await;
+
+        sqlx::query("UPDATE devices SET revoked_at = 1001 WHERE id = ?1")
+            .bind(&device_id)
+            .execute(&pool)
+            .await
+            .expect("revoking must succeed");
+
+        // Far enough past the touch interval that a live device
+        // would certainly have been written.
+        for at in [1_002, 2_000, 10_000] {
+            assert!(resolve(&pool, token.expose(), UnixTime::from_secs(at))
+                .await
+                .expect("the lookup must succeed")
+                .is_none());
+        }
+
+        let stored: i64 = sqlx::query_scalar("SELECT last_seen_at FROM devices WHERE id = ?1")
+            .bind(&device_id)
+            .fetch_one(&pool)
+            .await
+            .expect("the device must exist");
+        assert_eq!(
+            stored, 1_000,
+            "a revoked device must not be able to write last_seen_at"
+        );
     }
 
     #[tokio::test]

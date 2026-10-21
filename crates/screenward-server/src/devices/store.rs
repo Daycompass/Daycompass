@@ -278,19 +278,26 @@ pub async fn redeem_code_and_create_device(
 
 // --- device authentication -------------------------------------------
 
-/// Looks a device up by the hash of its token.
+/// Looks a **live** device up by the hash of its token.
 ///
-/// Returns revoked devices too. The caller decides what to do with
-/// them, so that revocation is enforced in one obvious place
-/// ([`crate::auth::device`]) rather than being an implicit property of
-/// this query's `WHERE` clause.
-pub async fn find_device_by_token_hash(
+/// A revoked device is not returned, and the name says so: this is
+/// the query device authentication runs, and the one place where
+/// getting revocation wrong would mean a revoked token still works.
+///
+/// `revoked_at IS NULL` is in the `WHERE` rather than left to the
+/// caller. An earlier version returned revoked rows and relied on
+/// [`crate::auth::device::resolve`] to filter them, which was correct
+/// but fragile: a second caller that forgot the check would
+/// authenticate a revoked device, and nothing would have failed. The
+/// Rust check stays as a second line - see `resolve` - so the two
+/// have to agree for a revoked device to get through.
+pub async fn find_live_device_by_token_hash(
     pool: &SqlitePool,
     token_hash: &TokenHash,
 ) -> Result<Option<DeviceRecord>, StoreError> {
     let row = sqlx::query(
         "SELECT id, user_id, name, platform, created_at, last_seen_at, revoked_at
-         FROM devices WHERE token_hash = ?1",
+         FROM devices WHERE token_hash = ?1 AND revoked_at IS NULL",
     )
     .bind(token_hash.as_bytes())
     .fetch_optional(pool)
