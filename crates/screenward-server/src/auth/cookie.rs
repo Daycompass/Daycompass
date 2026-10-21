@@ -72,6 +72,25 @@ pub fn read<'a>(headers: impl Iterator<Item = &'a str>) -> Option<&'a str> {
     found.filter(|value| !value.is_empty())
 }
 
+/// Whether the session cookie appears on the request at all.
+///
+/// Used by the access layer to refuse a session cookie on a device
+/// route. Deliberately not expressed as `read(..).is_some()`: `read`
+/// returns `None` for a *duplicated* cookie, which would make two
+/// copies of the cookie a way to slip past that refusal. A request
+/// carrying this cookie should be refused by a device route whether or
+/// not the value is usable.
+///
+/// It is also deliberately specific to this one cookie. A reverse
+/// proxy or CDN that attaches cookies of its own must not break device
+/// authentication, so "any cookie at all" would be the wrong rule.
+pub fn is_present<'a>(headers: impl Iterator<Item = &'a str>) -> bool {
+    headers.flat_map(|header| header.split(';')).any(|pair| {
+        pair.split_once('=')
+            .is_some_and(|(name, _)| name.trim() == COOKIE_NAME)
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -166,5 +185,36 @@ mod tests {
             read(["__Host-sws=first", "__Host-sws=second"].into_iter()),
             None
         );
+    }
+
+    /// The presence check is what a device route refuses on, so it has
+    /// to see the cases `read` deliberately turns into `None`.
+    #[test]
+    fn presence_notices_a_cookie_read_refuses_to_use() {
+        // A duplicate is unusable, but it is still present. Without
+        // this, sending the cookie twice would slip past a device
+        // route's refusal.
+        assert_eq!(read(["__Host-sws=a", "__Host-sws=b"].into_iter()), None);
+        assert!(is_present(["__Host-sws=a", "__Host-sws=b"].into_iter()));
+
+        // So is a cleared one, which has an empty value.
+        assert_eq!(read(["__Host-sws="].into_iter()), None);
+        assert!(is_present(["__Host-sws="].into_iter()));
+
+        assert!(is_present(["__Host-sws=abc"].into_iter()));
+        assert!(is_present(["other=1; __Host-sws=abc; third=2"].into_iter()));
+    }
+
+    /// Only this cookie counts. A proxy or CDN attaching its own
+    /// cookies must not be read as a Screenward session.
+    #[test]
+    fn presence_ignores_every_other_cookie() {
+        assert!(!is_present([].into_iter()));
+        assert!(!is_present([""].into_iter()));
+        assert!(!is_present(["cf_bm=abc; _ga=1; sessionid=2"].into_iter()));
+        assert!(!is_present(["__Host-sws_other=abc"].into_iter()));
+        assert!(!is_present(["x__Host-sws=abc"].into_iter()));
+        // A bare name with no "=" is not a cookie pair.
+        assert!(!is_present(["__Host-sws"].into_iter()));
     }
 }

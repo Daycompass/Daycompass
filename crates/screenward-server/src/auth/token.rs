@@ -41,6 +41,12 @@ pub enum TokenKind {
     Session,
     /// Bootstrap token that redeems once to create the first admin.
     Setup,
+    /// Device token, carried in an `Authorization: Bearer` header by a
+    /// paired client. Never in a cookie, and never accepted on a route
+    /// that authenticates by session - the distinct prefix below is
+    /// what makes that structural rather than a matter of discipline,
+    /// since the prefix is part of what gets hashed.
+    Device,
 }
 
 impl TokenKind {
@@ -48,6 +54,7 @@ impl TokenKind {
         match self {
             Self::Session => "sws_",
             Self::Setup => "swb_",
+            Self::Device => "swd_",
         }
     }
 }
@@ -177,7 +184,7 @@ impl fmt::Debug for TokenHash {
 mod tests {
     use super::*;
 
-    const EVERY_KIND: [TokenKind; 2] = [TokenKind::Session, TokenKind::Setup];
+    const EVERY_KIND: [TokenKind; 3] = [TokenKind::Session, TokenKind::Setup, TokenKind::Device];
 
     #[test]
     fn generated_tokens_have_the_documented_shape() {
@@ -196,13 +203,43 @@ mod tests {
         }
     }
 
+    /// Distinct prefixes are the whole mechanism keeping one kind of
+    /// token from being accepted as another, so every pair is checked
+    /// rather than just the two that happen to be adjacent.
     #[test]
-    fn the_two_kinds_use_distinct_prefixes() {
-        assert_ne!(TokenKind::Session.prefix(), TokenKind::Setup.prefix());
+    fn every_kind_uses_a_distinct_prefix() {
+        for (index, first) in EVERY_KIND.iter().enumerate() {
+            for second in &EVERY_KIND[index + 1..] {
+                assert_ne!(
+                    first.prefix(),
+                    second.prefix(),
+                    "{first:?} and {second:?} share a prefix"
+                );
+            }
+        }
         // A CSRF prefix used to exist here. CSRF tokens are now derived
         // from the session token instead of generated, so there is no
-        // third kind.
-        assert_eq!(EVERY_KIND.len(), 2);
+        // kind for them.
+        assert_eq!(EVERY_KIND.len(), 3);
+    }
+
+    /// The pairwise sweep of what `a_token_is_not_accepted_as_the_other
+    /// _kind` checks for one pair: no kind's token may be read as any
+    /// other kind's. A device token presented as a session token is the
+    /// case that matters most, and it fails here before any lookup.
+    #[test]
+    fn no_token_is_accepted_as_a_different_kind() {
+        for issued in EVERY_KIND {
+            let token = Token::generate(issued).expect("the OS CSPRNG must be available");
+            for presented_as in EVERY_KIND {
+                let accepted = TokenHash::of_presented(presented_as, token.expose()).is_some();
+                assert_eq!(
+                    accepted,
+                    issued == presented_as,
+                    "a {issued:?} token read as {presented_as:?}"
+                );
+            }
+        }
     }
 
     #[test]

@@ -218,6 +218,45 @@ impl SessionKey {
     }
 }
 
+/// A rate limit key for one paired device.
+///
+/// Hashed like [`SessionKey`], and for the same two reasons: every
+/// entry is one fixed small size, and the limiter's state is not a
+/// list of which devices have been reporting.
+///
+/// Keyed by device rather than by account, because a device is what
+/// the token authenticates and what the limit is meant to bound. An
+/// account-wide bucket would let one misbehaving device spend the
+/// budget its owner's other devices need to sync.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct DeviceKey([u8; 16]);
+
+impl DeviceKey {
+    pub fn new(device_id: &str) -> Self {
+        let digest = Sha256::digest(device_id.as_bytes());
+        let mut key = [0u8; 16];
+        key.copy_from_slice(&digest[..16]);
+        Self(key)
+    }
+}
+
+/// The key for a limit that counts an endpoint as a whole rather than
+/// any particular caller.
+///
+/// A unit type, so there is exactly one bucket and the limiter holds
+/// exactly one entry. That is the point: it is a ceiling on how much
+/// work an endpoint can be made to do in total, used where the
+/// per-caller limit alone would let a flood from many addresses
+/// through.
+///
+/// Note what it costs. A shared bucket is also a lever: whoever fills
+/// it blocks everyone until the window rolls over. It is only
+/// appropriate where the limit can be set far above legitimate use -
+/// see the pairing ceiling in [`crate::config`] - and never as the
+/// primary defence for anything.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub struct GlobalKey;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -455,5 +494,67 @@ mod tests {
                 at(0)
             )
             .is_allowed());
+    }
+
+    // --- device keys --------------------------------------------------
+
+    #[test]
+    fn device_keys_are_per_device_and_fixed_size() {
+        let key = DeviceKey::new("00000000-0000-7000-8000-00000000000a");
+        assert_eq!(key, DeviceKey::new("00000000-0000-7000-8000-00000000000a"));
+        assert_ne!(key, DeviceKey::new("00000000-0000-7000-8000-00000000000b"));
+
+        let huge: String = std::iter::repeat_n('x', 100_000).collect();
+        assert_eq!(std::mem::size_of_val(&DeviceKey::new(&huge)), 16);
+    }
+
+    #[test]
+    fn a_device_key_does_not_contain_the_id() {
+        let id = "00000000-0000-7000-8000-00000000000a";
+        assert!(!format!("{:?}", DeviceKey::new(id)).contains(id));
+    }
+
+    /// One device hitting its ingest limit must not stop another
+    /// device of the same owner from syncing.
+    #[test]
+    fn one_devices_budget_is_not_another_devices() {
+        let limiter = RateLimiter::new(rule(1, 60), 100);
+        assert!(limiter.check(DeviceKey::new("device-a"), at(0)).is_allowed());
+        assert!(!limiter.check(DeviceKey::new("device-a"), at(0)).is_allowed());
+        assert!(
+            limiter.check(DeviceKey::new("device-b"), at(0)).is_allowed(),
+            "a second device starts with its own budget"
+        );
+    }
+
+    // --- the global key -----------------------------------------------
+
+    /// Every caller shares one bucket, which is what makes this a
+    /// ceiling on the endpoint rather than a per-caller limit.
+    #[test]
+    fn the_global_key_is_one_shared_bucket() {
+        let limiter = RateLimiter::new(rule(2, 60), 10);
+
+        assert!(limiter.check(GlobalKey, at(0)).is_allowed());
+        assert!(limiter.check(GlobalKey, at(0)).is_allowed());
+        assert!(
+            !limiter.check(GlobalKey, at(0)).is_allowed(),
+            "the ceiling must apply across callers"
+        );
+        assert_eq!(limiter.tracked(), 1, "one key means one entry, ever");
+    }
+
+    /// Being a ceiling, it must still be a *fixed window* and never a
+    /// lockout: whoever fills it blocks everyone, so the block has to
+    /// clear on its own.
+    #[test]
+    fn the_global_ceiling_always_clears_itself() {
+        let limiter = RateLimiter::new(rule(1, 60), 10);
+        assert!(limiter.check(GlobalKey, at(1_000)).is_allowed());
+        assert!(!limiter.check(GlobalKey, at(1_059)).is_allowed());
+        assert!(
+            limiter.check(GlobalKey, at(1_060)).is_allowed(),
+            "a shared bucket must never need an administrator to clear"
+        );
     }
 }

@@ -44,6 +44,11 @@ const VAR_RATE_LIMIT_LOGIN_USERNAME: &str = "SCREENWARD_RATE_LIMIT_LOGIN_USERNAM
 const VAR_RATE_LIMIT_SETUP_IP: &str = "SCREENWARD_RATE_LIMIT_SETUP_IP";
 const VAR_RATE_LIMIT_PW_CHANGE: &str = "SCREENWARD_RATE_LIMIT_PW_CHANGE";
 const VAR_RATE_LIMIT_MAX_ENTRIES: &str = "SCREENWARD_RATE_LIMIT_MAX_ENTRIES";
+const VAR_MAX_DEVICES_PER_USER: &str = "SCREENWARD_MAX_DEVICES_PER_USER";
+const VAR_EVENT_MAX_AGE: &str = "SCREENWARD_EVENT_MAX_AGE_SECS";
+const VAR_RATE_LIMIT_PAIR_IP: &str = "SCREENWARD_RATE_LIMIT_PAIR_IP";
+const VAR_RATE_LIMIT_PAIR_GLOBAL: &str = "SCREENWARD_RATE_LIMIT_PAIR_GLOBAL";
+const VAR_RATE_LIMIT_INGEST_DEVICE: &str = "SCREENWARD_RATE_LIMIT_INGEST_DEVICE";
 
 const DEFAULT_BIND_ADDR: &str = "127.0.0.1:8080";
 const DEFAULT_DATA_DIR: &str = "./data";
@@ -92,6 +97,53 @@ const DEFAULT_RATE_LIMIT_PW_CHANGE: &str = "5/900";
 /// used to exhaust memory.
 const DEFAULT_RATE_LIMIT_MAX_ENTRIES: usize = 10_000;
 
+/// How many live devices one account may have paired at once.
+///
+/// Revoked devices do not count. Counting them would let somebody who
+/// had cycled through twenty devices lock themselves out for good,
+/// with no way back that does not involve an administrator.
+const DEFAULT_MAX_DEVICES_PER_USER: usize = 20;
+
+/// Ninety days. How far back an event may be dated.
+///
+/// Configurable because it is a *limit* on what a device may write,
+/// not a correctness rule - unlike the clock-skew allowance, which is
+/// compiled in. A device that has been offline longer than this cannot
+/// backfill the whole gap.
+const DEFAULT_EVENT_MAX_AGE_SECS: u64 = 90 * 24 * 60 * 60;
+
+/// Ten pairing attempts per five minutes from one client address.
+///
+/// Every attempt counts, not only the failures: counting successes too
+/// costs a legitimate person nothing (pairing a device is rare) and
+/// means the limit cannot be sidestepped by interleaving valid calls.
+const DEFAULT_RATE_LIMIT_PAIR_IP: &str = "10/300";
+
+/// Six hundred pairing attempts per minute across the whole instance.
+///
+/// A ceiling, not a guessing defence - against 2^50 possible codes
+/// even an unlimited attacker gets nowhere, and the per-address bucket
+/// above is what shapes ordinary abuse. This exists so that a flood
+/// from many addresses cannot turn pairing into unbounded database
+/// work.
+///
+/// Deliberately generous, because a single shared bucket is also a
+/// denial-of-service lever: whoever fills it blocks pairing for
+/// everybody until the window rolls over. That trade-off is accepted
+/// on two grounds - the limiter is a fixed window and never a lockout,
+/// so the block always clears on its own, and a real instance pairs a
+/// handful of devices a day, nowhere near this. Lowering it buys no
+/// security and makes that lever cheaper to pull.
+const DEFAULT_RATE_LIMIT_PAIR_GLOBAL: &str = "600/60";
+
+/// Thirty ingest requests per minute for one device.
+///
+/// At the 500-event batch cap that is fifteen thousand events a
+/// minute, which is far more than a client catching up after a week
+/// offline needs, while still bounding what one paired device can
+/// spend.
+const DEFAULT_RATE_LIMIT_INGEST_DEVICE: &str = "30/60";
+
 const VALID_LOG_LEVELS: &[&str] = &["error", "warn", "info", "debug", "trace"];
 
 /// Backend configuration. Construct with [`Config::from_env`].
@@ -115,6 +167,16 @@ pub struct Config {
     /// Password changes per session, per window.
     pub rate_limit_pw_change: RateLimitRule,
     pub rate_limit_max_entries: usize,
+    /// Live devices one account may hold.
+    pub max_devices_per_user: usize,
+    /// How far back a reported event may be dated.
+    pub event_max_age: Duration,
+    /// Pairing attempts from one client address, per window.
+    pub rate_limit_pair_ip: RateLimitRule,
+    /// Pairing attempts across the whole instance, per window.
+    pub rate_limit_pair_global: RateLimitRule,
+    /// Ingest requests from one device, per window.
+    pub rate_limit_ingest_device: RateLimitRule,
 }
 
 /// Failed to load configuration. Messages name the offending variable but
@@ -327,6 +389,24 @@ impl Config {
             DEFAULT_RATE_LIMIT_MAX_ENTRIES,
         )?;
 
+        let max_devices_per_user = at_least_one(
+            source,
+            VAR_MAX_DEVICES_PER_USER,
+            DEFAULT_MAX_DEVICES_PER_USER,
+        )?;
+        let event_max_age = seconds(source, VAR_EVENT_MAX_AGE, DEFAULT_EVENT_MAX_AGE_SECS)?;
+        let rate_limit_pair_ip = rule(source, VAR_RATE_LIMIT_PAIR_IP, DEFAULT_RATE_LIMIT_PAIR_IP)?;
+        let rate_limit_pair_global = rule(
+            source,
+            VAR_RATE_LIMIT_PAIR_GLOBAL,
+            DEFAULT_RATE_LIMIT_PAIR_GLOBAL,
+        )?;
+        let rate_limit_ingest_device = rule(
+            source,
+            VAR_RATE_LIMIT_INGEST_DEVICE,
+            DEFAULT_RATE_LIMIT_INGEST_DEVICE,
+        )?;
+
         Ok(Config {
             bind_addr,
             data_dir,
@@ -343,6 +423,11 @@ impl Config {
             rate_limit_setup_ip,
             rate_limit_pw_change,
             rate_limit_max_entries,
+            max_devices_per_user,
+            event_max_age,
+            rate_limit_pair_ip,
+            rate_limit_pair_global,
+            rate_limit_ingest_device,
         })
     }
 }
@@ -368,6 +453,11 @@ impl fmt::Debug for Config {
             .field("rate_limit_setup_ip", &self.rate_limit_setup_ip)
             .field("rate_limit_pw_change", &self.rate_limit_pw_change)
             .field("rate_limit_max_entries", &self.rate_limit_max_entries)
+            .field("max_devices_per_user", &self.max_devices_per_user)
+            .field("event_max_age", &self.event_max_age)
+            .field("rate_limit_pair_ip", &self.rate_limit_pair_ip)
+            .field("rate_limit_pair_global", &self.rate_limit_pair_global)
+            .field("rate_limit_ingest_device", &self.rate_limit_ingest_device)
             .finish()
     }
 }
@@ -1132,7 +1222,12 @@ mod tests {
                 "rate_limit_login_username: RateLimitRule { max: 5, window: 300s }, ",
                 "rate_limit_setup_ip: RateLimitRule { max: 5, window: 3600s }, ",
                 "rate_limit_pw_change: RateLimitRule { max: 5, window: 900s }, ",
-                "rate_limit_max_entries: 10000",
+                "rate_limit_max_entries: 10000, ",
+                "max_devices_per_user: 20, ",
+                "event_max_age: 7776000s, ",
+                "rate_limit_pair_ip: RateLimitRule { max: 10, window: 300s }, ",
+                "rate_limit_pair_global: RateLimitRule { max: 600, window: 60s }, ",
+                "rate_limit_ingest_device: RateLimitRule { max: 30, window: 60s }",
                 " }",
             )
         );

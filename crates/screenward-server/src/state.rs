@@ -14,7 +14,9 @@ use crate::auth::password::{HashError, Hasher};
 use crate::auth::session::SessionPolicy;
 use crate::clientip::ClientKey;
 use crate::config::{Config, PublicUrl, TrustedProxies};
-use crate::ratelimit::{RateLimiter, SessionKey, UsernameKey};
+use crate::devices::service::DevicePolicy;
+use crate::events::validate::EventWindow;
+use crate::ratelimit::{DeviceKey, GlobalKey, RateLimiter, SessionKey, UsernameKey};
 
 /// Cloned once per request by axum. Every field is cheap to clone: the
 /// pool and the hasher are handles to shared state rather than copies of
@@ -32,6 +34,10 @@ pub struct AppState {
     pub decoy_password_hash: Arc<String>,
     pub trusted_proxies: TrustedProxies,
     pub limits: Limits,
+    /// The device cap a pairing is subject to.
+    pub device_policy: DevicePolicy,
+    /// How far back a reported event may be dated.
+    pub event_window: EventWindow,
 }
 
 /// The rate limiters, one per bucket.
@@ -47,6 +53,16 @@ pub struct Limits {
     /// Password changes, keyed by session. See [`SessionKey`] for why
     /// the session and not the account or the address.
     pub pw_change: Arc<RateLimiter<SessionKey>>,
+    /// Pairing attempts, per client address.
+    pub pair_ip: Arc<RateLimiter<ClientKey>>,
+    /// Pairing attempts across the whole instance. One shared key, so
+    /// this is a ceiling on the endpoint rather than a per-caller
+    /// limit; see the default in [`crate::config`] for the
+    /// denial-of-service trade-off that comes with that.
+    pub pair_global: Arc<RateLimiter<GlobalKey>>,
+    /// Ingest requests, per device. Keyed on the device the access
+    /// layer resolved, so an unauthenticated caller never reaches it.
+    pub ingest_device: Arc<RateLimiter<DeviceKey>>,
 }
 
 impl Limits {
@@ -66,6 +82,17 @@ impl Limits {
             )),
             pw_change: Arc::new(RateLimiter::new(
                 config.rate_limit_pw_change,
+                config.rate_limit_max_entries,
+            )),
+            pair_ip: Arc::new(RateLimiter::new(
+                config.rate_limit_pair_ip,
+                config.rate_limit_max_entries,
+            )),
+            // One key ever, so one entry. The bound is still passed
+            // for uniformity; it can never be reached.
+            pair_global: Arc::new(RateLimiter::new(config.rate_limit_pair_global, 1)),
+            ingest_device: Arc::new(RateLimiter::new(
+                config.rate_limit_ingest_device,
                 config.rate_limit_max_entries,
             )),
         }
@@ -97,6 +124,12 @@ impl AppState {
             decoy_password_hash,
             trusted_proxies: config.trusted_proxies.clone(),
             limits: Limits::new(config),
+            device_policy: DevicePolicy {
+                max_devices_per_user: config.max_devices_per_user,
+            },
+            event_window: EventWindow {
+                max_age: config.event_max_age,
+            },
         })
     }
 }
