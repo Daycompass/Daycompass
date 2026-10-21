@@ -173,18 +173,34 @@ Device auth. Reports observed activity.
 
 | Field | Required | Rule |
 | --- | --- | --- |
-| `event_id` | yes | Client-generated. 32 hex characters, or a canonical dashed UUID. Case-insensitive; both spellings of one id are the same id. |
+| `event_id` | yes | Client-generated. **Send 32 lowercase hex characters.** A canonical dashed UUID is also accepted; it is normalized to the bare form before storage, so the two spellings of one id are the same id and will not produce two rows. Hex case is folded. |
 | `start_ts` | yes | At most 300 s in the future; not older than the server's configured window (90 days by default). |
 | `duration_secs` | yes | 1–86400. `start_ts + duration_secs` may also be at most 300 s in the future. |
 | `app_id` | yes | 1–256 characters, non-blank. Stored **exactly** as sent — never trimmed or rewritten. |
 | `label` | no | Up to 128 characters. A human-readable name. |
 | `domain` | no | Up to 253 characters, a **bare hostname**. Lowercased on storage. |
 
+### `event_id`: send the canonical form
+
+The server stores 32 lowercase hex characters. If you send a dashed
+UUID the dashes are stripped and the value is lowercased before it is
+written, so what comes back out of the database is not byte-identical
+to what you sent.
+
+That normalization exists so idempotency survives a client changing
+how it formats ids between versions — the bare and dashed spellings of
+one id collide rather than producing two rows. Send the bare lowercase
+form and the question does not arise.
+
+### `domain`: a hostname, never a URL
+
 `domain` must be a hostname and nothing else. No scheme, port, path,
 query, fragment or userinfo — all are rejected. ASCII only; punycode
 an internationalised name yourself. A single trailing dot is accepted
 and dropped. This field exists for browser tracking and is deliberately
 incapable of holding a URL.
+
+### Every string field
 
 No string may contain a control character or a bidirectional override.
 
@@ -249,6 +265,55 @@ Overlapping events are expected and are stored as reported — one device
 reporting a foreground app and a browser domain at once, or two devices
 covering the same span. The server does not merge or resolve overlaps;
 that is a query-time concern.
+
+---
+
+## Handling errors on device routes
+
+Two statuses need deliberate client behaviour. Getting these wrong is
+how a client turns a transient problem into a sustained one.
+
+### `429 Too Many Requests` — buffer locally and back off
+
+Every 429 carries a `Retry-After` header, in whole seconds. **Honour
+it.** Do not retry before it elapses, and do not treat the refused
+batch as lost.
+
+Keep the events in your local buffer and send them again after the
+delay. Ingest is idempotent per event, so resending costs nothing: the
+events that did land come back as `duplicate`, and nothing is written
+twice. A client that drops a batch on a 429 loses screen time that the
+server was willing to accept a moment later.
+
+Two different limits can produce a 429 here:
+
+- **Per device**, on how often you may call the device routes. This is
+  the one a healthy, busy client can reach. Back off and continue.
+- **Per IP address**, on *failed* authentication — see below. If you
+  are getting this one, something is already wrong.
+
+The response does not say which. Treat both the same way: wait, then
+resend the same batch.
+
+### `401 Unauthorized` — stop, do not retry in a loop
+
+The token is not valid. Either it never was, or the device has been
+revoked by its owner or an administrator. The response deliberately
+does not distinguish those.
+
+**Do not retry on a timer.** Failed device authentication is rate
+limited per IP address, so a client that loops on a 401 will exhaust
+that budget and start getting 429s — and because the budget is shared
+by everyone behind the same address, it will do that to every other
+Screenward device on the network too. On a school or household NAT
+that means one misconfigured client taking out its neighbours.
+
+The correct response to a 401 is to stop making device requests, keep
+whatever is buffered, and surface a "this device needs to be paired
+again" state to the person using it. Pairing again issues a new token.
+
+If you retry at all, retry once, well after a long delay — not on a
+sync interval.
 
 ---
 
