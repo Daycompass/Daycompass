@@ -151,7 +151,7 @@ mod tests {
             .fetch_one(&pool)
             .await
             .expect("schema_info must have exactly one row");
-        assert_eq!(version, 2);
+        assert_eq!(version, 3);
     }
 
     /// The auth tables must exist and be STRICT, so a value of the wrong
@@ -161,7 +161,14 @@ mod tests {
         let pool = memory_pool().await;
         migrate(&pool).await.expect("migrations must apply");
 
-        for table in ["users", "sessions", "setup_tokens"] {
+        for table in [
+            "users",
+            "sessions",
+            "setup_tokens",
+            "devices",
+            "pairing_codes",
+            "events",
+        ] {
             let (strict,): (i64,) = sqlx::query_as(
                 "SELECT strict FROM pragma_table_list WHERE schema = 'main' AND name = ?1",
             )
@@ -206,6 +213,265 @@ mod tests {
             .await
             .expect("counting sessions must succeed");
         assert_eq!(sessions, 0, "the session must have been cascaded away");
+    }
+
+    /// Seeds a user, a device, a pairing code and an event, so the
+    /// cascade and constraint tests below have the whole chain.
+    async fn seed_device_chain(pool: &SqlitePool) {
+        sqlx::query(
+            "INSERT INTO users (id, username, password_hash, role, created_at)
+             VALUES ('u1', 'alice', 'not-a-real-hash', 'user', 0)",
+        )
+        .execute(pool)
+        .await
+        .expect("inserting a user must succeed");
+        sqlx::query(
+            "INSERT INTO devices
+                 (id, user_id, name, platform, token_hash, created_at, last_seen_at)
+             VALUES ('d1', 'u1', 'laptop', 'linux', x'00', 0, 0)",
+        )
+        .execute(pool)
+        .await
+        .expect("inserting a device must succeed");
+        sqlx::query(
+            "INSERT INTO pairing_codes (id, user_id, code_hash, created_at, expires_at)
+             VALUES ('p1', 'u1', x'01', 0, 600)",
+        )
+        .execute(pool)
+        .await
+        .expect("inserting a pairing code must succeed");
+        sqlx::query(
+            "INSERT INTO events
+                 (id, device_id, event_id, start_ts, duration_secs, app_id, received_at)
+             VALUES ('e1', 'd1', 'aa', 0, 60, 'org.example.app', 0)",
+        )
+        .execute(pool)
+        .await
+        .expect("inserting an event must succeed");
+    }
+
+    async fn count(pool: &SqlitePool, table: &str) -> i64 {
+        let sql = match table {
+            "devices" => "SELECT COUNT(*) FROM devices",
+            "pairing_codes" => "SELECT COUNT(*) FROM pairing_codes",
+            "events" => "SELECT COUNT(*) FROM events",
+            other => panic!("unexpected table {other}"),
+        };
+        let (count,): (i64,) = sqlx::query_as(sql)
+            .fetch_one(pool)
+            .await
+            .expect("counting must succeed");
+        count
+    }
+
+    /// Deleting an account must take its devices, its outstanding
+    /// pairing codes and every event those devices reported with it.
+    /// The events hang off `devices`, not off `users`, so this is a
+    /// two-step cascade and only works because foreign keys are on.
+    #[tokio::test]
+    async fn deleting_a_user_cascades_to_devices_codes_and_events() {
+        let pool = memory_pool().await;
+        migrate(&pool).await.expect("migrations must apply");
+        seed_device_chain(&pool).await;
+
+        assert_eq!(count(&pool, "devices").await, 1);
+        assert_eq!(count(&pool, "pairing_codes").await, 1);
+        assert_eq!(count(&pool, "events").await, 1);
+
+        sqlx::query("DELETE FROM users WHERE id = 'u1'")
+            .execute(&pool)
+            .await
+            .expect("deleting the user must succeed");
+
+        assert_eq!(count(&pool, "devices").await, 0, "devices must cascade");
+        assert_eq!(count(&pool, "pairing_codes").await, 0, "codes must cascade");
+        assert_eq!(
+            count(&pool, "events").await,
+            0,
+            "events must cascade through devices"
+        );
+    }
+
+    #[tokio::test]
+    async fn devices_reject_an_unknown_platform() {
+        let pool = memory_pool().await;
+        migrate(&pool).await.expect("migrations must apply");
+        sqlx::query(
+            "INSERT INTO users (id, username, password_hash, role, created_at)
+             VALUES ('u1', 'alice', 'not-a-real-hash', 'user', 0)",
+        )
+        .execute(&pool)
+        .await
+        .expect("inserting a user must succeed");
+
+        let result = sqlx::query(
+            "INSERT INTO devices
+                 (id, user_id, name, platform, token_hash, created_at, last_seen_at)
+             VALUES ('d1', 'u1', 'laptop', 'freebsd', x'00', 0, 0)",
+        )
+        .execute(&pool)
+        .await;
+        assert!(result.is_err(), "the platform CHECK must be enforced");
+    }
+
+    /// Idempotent ingest rests on this index, so it is worth asserting
+    /// directly rather than only through the service layer.
+    #[tokio::test]
+    async fn one_event_id_may_appear_once_per_device() {
+        let pool = memory_pool().await;
+        migrate(&pool).await.expect("migrations must apply");
+        seed_device_chain(&pool).await;
+
+        let duplicate = sqlx::query(
+            "INSERT INTO events
+                 (id, device_id, event_id, start_ts, duration_secs, app_id, received_at)
+             VALUES ('e2', 'd1', 'aa', 0, 60, 'org.example.app', 0)",
+        )
+        .execute(&pool)
+        .await;
+        assert!(duplicate.is_err(), "the same id twice must be refused");
+
+        // The same id reported by a *different* device is a different
+        // event, and must be accepted: two devices legitimately observe
+        // overlapping activity.
+        sqlx::query(
+            "INSERT INTO devices
+                 (id, user_id, name, platform, token_hash, created_at, last_seen_at)
+             VALUES ('d2', 'u1', 'phone', 'android', x'02', 0, 0)",
+        )
+        .execute(&pool)
+        .await
+        .expect("a second device must be insertable");
+        sqlx::query(
+            "INSERT INTO events
+                 (id, device_id, event_id, start_ts, duration_secs, app_id, received_at)
+             VALUES ('e3', 'd2', 'aa', 0, 60, 'org.example.app', 0)",
+        )
+        .execute(&pool)
+        .await
+        .expect("the same id on another device must be accepted");
+    }
+
+    /// The bounds the validator enforces are repeated as CHECKs. Each
+    /// one has to actually bite, or the second line is decoration.
+    #[tokio::test]
+    async fn the_event_bounds_are_enforced_by_the_schema() {
+        let pool = memory_pool().await;
+        migrate(&pool).await.expect("migrations must apply");
+        seed_device_chain(&pool).await;
+
+        let too_long_app_id = "x".repeat(257);
+        let too_long_label = "x".repeat(129);
+        let too_long_domain = "x".repeat(254);
+
+        let cases: [(&str, String); 6] = [
+            ("zero duration", "0".to_owned()),
+            ("duration over a day", "86401".to_owned()),
+            ("empty app_id", String::new()),
+            ("app_id over 256", too_long_app_id),
+            ("label over 128", too_long_label),
+            ("domain over 253", too_long_domain),
+        ];
+
+        for (index, (label, value)) in cases.iter().enumerate() {
+            let id = format!("bad-{index}");
+            let event_id = format!("b{index}");
+            let result = match *label {
+                "zero duration" | "duration over a day" => sqlx::query(
+                    "INSERT INTO events
+                         (id, device_id, event_id, start_ts, duration_secs, app_id, received_at)
+                     VALUES (?1, 'd1', ?2, 0, ?3, 'org.example.app', 0)",
+                )
+                .bind(&id)
+                .bind(&event_id)
+                .bind(value.parse::<i64>().expect("a number"))
+                .execute(&pool)
+                .await,
+                "empty app_id" | "app_id over 256" => sqlx::query(
+                    "INSERT INTO events
+                         (id, device_id, event_id, start_ts, duration_secs, app_id, received_at)
+                     VALUES (?1, 'd1', ?2, 0, 60, ?3, 0)",
+                )
+                .bind(&id)
+                .bind(&event_id)
+                .bind(value)
+                .execute(&pool)
+                .await,
+                "label over 128" => sqlx::query(
+                    "INSERT INTO events
+                         (id, device_id, event_id, start_ts, duration_secs, app_id, label,
+                          received_at)
+                     VALUES (?1, 'd1', ?2, 0, 60, 'org.example.app', ?3, 0)",
+                )
+                .bind(&id)
+                .bind(&event_id)
+                .bind(value)
+                .execute(&pool)
+                .await,
+                _ => sqlx::query(
+                    "INSERT INTO events
+                         (id, device_id, event_id, start_ts, duration_secs, app_id, domain,
+                          received_at)
+                     VALUES (?1, 'd1', ?2, 0, 60, 'org.example.app', ?3, 0)",
+                )
+                .bind(&id)
+                .bind(&event_id)
+                .bind(value)
+                .execute(&pool)
+                .await,
+            };
+            assert!(result.is_err(), "{label} must be refused by the schema");
+        }
+    }
+
+    /// The reason ingest uses ON CONFLICT ... DO NOTHING rather than
+    /// INSERT OR IGNORE: the former suppresses exactly the duplicate,
+    /// while the latter would swallow a CHECK violation too and report
+    /// a dropped event as a duplicate.
+    #[tokio::test]
+    async fn on_conflict_do_nothing_suppresses_only_the_duplicate() {
+        let pool = memory_pool().await;
+        migrate(&pool).await.expect("migrations must apply");
+        seed_device_chain(&pool).await;
+
+        // The duplicate is absorbed, and reports no affected row.
+        let duplicate = sqlx::query(
+            "INSERT INTO events
+                 (id, device_id, event_id, start_ts, duration_secs, app_id, received_at)
+             VALUES ('e9', 'd1', 'aa', 0, 60, 'org.example.app', 0)
+             ON CONFLICT (device_id, event_id) DO NOTHING",
+        )
+        .execute(&pool)
+        .await
+        .expect("a duplicate must not be an error");
+        assert_eq!(duplicate.rows_affected(), 0);
+
+        // A CHECK violation still raises, even with the same clause.
+        let invalid = sqlx::query(
+            "INSERT INTO events
+                 (id, device_id, event_id, start_ts, duration_secs, app_id, received_at)
+             VALUES ('e10', 'd1', 'bb', 0, 0, 'org.example.app', 0)
+             ON CONFLICT (device_id, event_id) DO NOTHING",
+        )
+        .execute(&pool)
+        .await;
+        assert!(
+            invalid.is_err(),
+            "a CHECK violation must not be silently swallowed"
+        );
+
+        // And a fresh row still reports one affected, which is how the
+        // ingest path tells "accepted" from "duplicate".
+        let accepted = sqlx::query(
+            "INSERT INTO events
+                 (id, device_id, event_id, start_ts, duration_secs, app_id, received_at)
+             VALUES ('e11', 'd1', 'cc', 0, 60, 'org.example.app', 0)
+             ON CONFLICT (device_id, event_id) DO NOTHING",
+        )
+        .execute(&pool)
+        .await
+        .expect("a fresh event must insert");
+        assert_eq!(accepted.rows_affected(), 1);
     }
 
     /// A session row may not reference a user that does not exist.
