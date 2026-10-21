@@ -24,6 +24,7 @@
 use std::sync::Arc;
 
 use axum::extract::{FromRequestParts, Request, State};
+use axum::http::request::Parts;
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 
@@ -32,6 +33,7 @@ use crate::auth::extract::{verify_csrf, AuthRejection, AuthSession};
 use crate::auth::time::UnixTime;
 use crate::auth::{cookie, origin};
 use crate::clientip::ClientAddr;
+use crate::devices::store::DeviceRecord;
 use crate::error::{ApiError, ErrorKind};
 use crate::ratelimit::{DeviceKey, GlobalKey, SessionKey};
 use crate::routes::{rate_limited, Access, Bucket, LimitKey, RouteSpec};
@@ -150,16 +152,18 @@ pub async fn enforce_session_access(
 /// layer cannot: the policy is *peek, then charge only on failure*,
 /// and `RateLimiter::check` counts and decides in one call.
 ///
-/// The order below is what makes it worth having. The peek happens
-/// first, before the cookie check, before the bearer is parsed and
-/// before any query - so a caller who is already out of budget costs
-/// one hash-map lookup and nothing else. Every path that refuses the
-/// request then charges the bucket; the path that succeeds does not,
-/// so a working device never spends from it however much it syncs.
+/// The peek happens first, before anything [`try_authenticate_device`]
+/// does - so a caller who is already out of budget costs one hash-map
+/// lookup and nothing else.
 ///
-/// A database *error* does not charge. That is this server failing,
-/// not the caller misbehaving, and charging for it would let a
-/// database wobble lock out the clients that happened to be syncing.
+/// The charge is the other half, and it happens in exactly one place:
+/// here, once, after [`try_authenticate_device`] returns. That function
+/// has no opinion on rate limiting at all; it only classifies what went
+/// wrong, through [`DeviceRejection::charges_budget`], which is what
+/// decides whether this wrapper spends the bucket. A database *error*
+/// is classified `false` there: that is this server failing, not the
+/// caller misbehaving, and charging for it would let a database wobble
+/// lock out the clients that happened to be syncing.
 pub async fn enforce_device_access(
     State((state, _spec)): State<RouteState>,
     request: Request,
@@ -181,27 +185,46 @@ pub async fn enforce_device_access(
     let peer = client.rate_limit_key();
 
     // Read-only, and before everything. An exhausted bucket answers
-    // 429 with a Retry-After and never touches the database.
+    // 429 with a Retry-After and never touches the database. This
+    // peek never charges: see `RateLimiter::peek`.
     if let Some(error) = rate_limited(state.limits.device_auth_fail.peek(&peer, now)) {
         return error.into_response();
     }
 
-    // Charges the failure bucket and produces the one refusal every
-    // kind of authentication failure shares.
-    let refuse = || {
-        state.limits.device_auth_fail.check(peer, now);
-        DeviceRejection::Unauthenticated.into_response()
-    };
+    match try_authenticate_device(&mut parts, &state, now).await {
+        Ok(record) => {
+            let mut request = Request::from_parts(parts, body);
+            request
+                .extensions_mut()
+                .insert(Arc::new(AuthDevice { device: record }));
+            next.run(request).await
+        }
+        Err(rejection) => {
+            // The one charge point. Every caller-attributable
+            // rejection spends the bucket; `Unavailable` - this
+            // server's own failure to look a device up - does not.
+            if rejection.charges_budget() {
+                state.limits.device_auth_fail.check(peer, now);
+            }
+            rejection.into_response()
+        }
+    }
+}
 
+/// The device-authentication logic itself, with no opinion on rate
+/// limiting: it returns a typed rejection and nothing else, and
+/// [`enforce_device_access`] is the one place that turns a rejection
+/// into a charge.
+async fn try_authenticate_device(
+    parts: &mut Parts,
+    state: &AppState,
+    now: UnixTime,
+) -> Result<DeviceRecord, DeviceRejection> {
     // A device route refuses any request carrying the Screenward
     // session cookie, even one that also presents a valid token. A
     // device is a different principal with a different credential, and
     // a request arriving with both is not something a native client
     // does.
-    //
-    // It charges the bucket like any other failure: the budget is per
-    // address, and a browser that reaches a device route is a client
-    // with a bug, spending its own address's budget.
     //
     // `cookie::is_present` rather than `cookie::read(..).is_some()`:
     // `read` returns `None` for a *duplicated* cookie, so two copies
@@ -215,33 +238,25 @@ pub async fn enforce_device_access(
         .iter()
         .filter_map(|value| value.to_str().ok());
     if cookie::is_present(cookies) {
-        return refuse();
+        return Err(DeviceRejection::Unauthenticated);
     }
 
-    let Some(presented) = device::presented_bearer(&parts) else {
-        return refuse();
+    let Some(presented) = device::presented_bearer(parts) else {
+        return Err(DeviceRejection::Unauthenticated);
     };
 
     // The shape of the token is checked in memory inside `resolve`
     // before any query, so a malformed token costs no lookup even
-    // while it does spend from the failure budget.
-    let resolved = match device::resolve(&state.pool, presented, now).await {
-        Ok(resolved) => resolved,
+    // while it does still spend from the failure budget, through the
+    // classification above.
+    match device::resolve(&state.pool, presented, now).await {
+        Ok(Some(record)) => Ok(record),
+        Ok(None) => Err(DeviceRejection::Unauthenticated),
         Err(err) => {
-            // Not charged: see the note above.
             tracing::error!(error = %err, "could not resolve a device");
-            return DeviceRejection::Unavailable.into_response();
+            Err(DeviceRejection::Unavailable)
         }
-    };
-    let Some(record) = resolved else {
-        return refuse();
-    };
-
-    let mut request = Request::from_parts(parts, body);
-    request
-        .extensions_mut()
-        .insert(Arc::new(AuthDevice { device: record }));
-    next.run(request).await
+    }
 }
 
 /// Applies the layer-enforced limiters named in the entry.

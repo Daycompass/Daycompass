@@ -122,6 +122,25 @@ impl IntoResponse for DeviceRejection {
     }
 }
 
+impl DeviceRejection {
+    /// Whether this rejection should spend the caller's peer failure
+    /// budget, in [`crate::routes::access::enforce_device_access`].
+    ///
+    /// Exhaustive on purpose, with no wildcard arm: a new variant has
+    /// to decide this consciously. Getting it wrong in either
+    /// direction is a real hole - charging [`Self::Unavailable`] would
+    /// let a database wobble lock out callers who did nothing wrong,
+    /// and a future caller-attributable variant that fell through
+    /// uncharged would silently stop counting against the budget it
+    /// exists to protect.
+    pub const fn charges_budget(self) -> bool {
+        match self {
+            Self::Unauthenticated => true,
+            Self::Unavailable => false,
+        }
+    }
+}
+
 /// The bearer credential on a request, if there is one.
 ///
 /// Returns the token part of exactly one `Authorization` header whose
@@ -576,5 +595,22 @@ mod tests {
 
         let response = handler.call(request, state).await;
         assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    /// Pins the charge classification of every rejection variant. The
+    /// match in `charges_budget` has no wildcard arm, so a new variant
+    /// already fails the build before this test runs; this is the
+    /// readable, regression-visible statement of what today's two
+    /// variants decide.
+    #[test]
+    fn device_rejection_charge_classification_is_pinned() {
+        assert!(
+            DeviceRejection::Unauthenticated.charges_budget(),
+            "a caller-attributable rejection must spend the peer's budget"
+        );
+        assert!(
+            !DeviceRejection::Unavailable.charges_budget(),
+            "the server's own failure to look a device up must not"
+        );
     }
 }
