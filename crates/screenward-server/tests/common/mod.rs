@@ -37,37 +37,76 @@ pub const GOOD_ORIGIN: &str = "http://127.0.0.1:8080";
 /// An origin that is not this instance.
 pub const BAD_ORIGIN: &str = "https://attacker.example";
 
+/// Rate limits high enough that a test which is not about rate limiting
+/// never trips one.
+pub const GENEROUS_LIMITS: &[(&str, &str)] = &[
+    ("SCREENWARD_RATE_LIMIT_LOGIN_IP", "1000/300"),
+    ("SCREENWARD_RATE_LIMIT_LOGIN_USERNAME", "1000/300"),
+    ("SCREENWARD_RATE_LIMIT_SETUP_IP", "1000/3600"),
+    ("SCREENWARD_RATE_LIMIT_PASSWORD_USER", "1000/900"),
+];
+
 /// A running app plus the pool behind it.
 pub struct TestApp {
     router: Router,
     pub pool: SqlitePool,
+    /// Set for a file-backed app; removed on drop.
+    data_dir: Option<std::path::PathBuf>,
 }
 
 impl TestApp {
     /// An app with generous rate limits, so a test that is not about
     /// rate limiting never trips one.
     pub async fn new() -> Self {
-        Self::with_vars(&[
-            ("SCREENWARD_RATE_LIMIT_LOGIN_IP", "1000/300"),
-            ("SCREENWARD_RATE_LIMIT_LOGIN_USERNAME", "1000/300"),
-            ("SCREENWARD_RATE_LIMIT_SETUP_IP", "1000/3600"),
-        ])
-        .await
+        Self::with_vars(GENEROUS_LIMITS).await
     }
 
     /// An app configured by explicit environment variables, without
     /// touching the real process environment.
     pub async fn with_vars(vars: &[(&str, &str)]) -> Self {
+        let pool = connect(&DbTarget::Memory)
+            .await
+            .expect("in-memory pool must connect");
+        migrate(&pool).await.expect("migrations must apply");
+        Self::over(pool, None, vars).await
+    }
+
+    /// An app over a file-backed database in a fresh temporary
+    /// directory.
+    ///
+    /// Needed wherever two requests have to be in flight at once: the
+    /// in-memory pool is capped at a single connection, so concurrent
+    /// requests would queue on the pool and never contend for SQLite's
+    /// write lock - which is the thing a race test is about.
+    pub async fn with_file_db() -> Self {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        static COUNTER: AtomicU32 = AtomicU32::new(0);
+
+        let unique = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let data_dir = std::env::temp_dir().join(format!(
+            "screenward-http-test-{}-{unique}",
+            std::process::id()
+        ));
+        let pool = connect(&DbTarget::File {
+            data_dir: data_dir.clone(),
+        })
+        .await
+        .expect("file pool must connect");
+        migrate(&pool).await.expect("migrations must apply");
+
+        Self::over(pool, Some(data_dir), GENEROUS_LIMITS).await
+    }
+
+    async fn over(
+        pool: SqlitePool,
+        data_dir: Option<std::path::PathBuf>,
+        vars: &[(&str, &str)],
+    ) -> Self {
         let map: HashMap<String, String> = vars
             .iter()
             .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
             .collect();
         let config = Config::for_test(&map).expect("the test configuration must be valid");
-
-        let pool = connect(&DbTarget::Memory)
-            .await
-            .expect("in-memory pool must connect");
-        migrate(&pool).await.expect("migrations must apply");
 
         let state = AppState::new(pool.clone(), &config)
             .await
@@ -76,6 +115,7 @@ impl TestApp {
         Self {
             router: screenward_server::build_app(state),
             pool,
+            data_dir,
         }
     }
 
@@ -186,6 +226,55 @@ impl TestApp {
         }
     }
 
+    /// Creates an account over HTTP as `admin`, and returns its id with
+    /// the credentials it was created with.
+    pub async fn create_account(
+        &self,
+        admin: &Session,
+        username: &str,
+        role: &str,
+    ) -> (String, Credentials) {
+        let credentials = Credentials::generate(username);
+        let response = self
+            .send(
+                TestRequest::post("/api/v1/users")
+                    .origin(GOOD_ORIGIN)
+                    .authenticated(admin)
+                    .json(json!({
+                        "username": credentials.username,
+                        "password": credentials.password,
+                        "role": role,
+                    })),
+            )
+            .await;
+        assert_eq!(
+            response.status,
+            StatusCode::CREATED,
+            "creating {username} must succeed: {:?}",
+            response.body
+        );
+        let id = response.body["user"]["id"]
+            .as_str()
+            .expect("the created account's id")
+            .to_owned();
+        (id, credentials)
+    }
+
+    /// Provisions the first admin and logs it in, which is the starting
+    /// point of nearly every account-management test.
+    pub async fn provisioned_admin(&self) -> (Credentials, Session) {
+        let credentials = self.provision_admin().await;
+        let session = self.log_in(&credentials).await;
+        (credentials, session)
+    }
+
+    /// Adds a second admin and logs it in.
+    pub async fn second_admin(&self, admin: &Session, username: &str) -> (String, Session) {
+        let (id, credentials) = self.create_account(admin, username, "admin").await;
+        let session = self.log_in(&credentials).await;
+        (id, session)
+    }
+
     /// Dumps every value in every table as text, for the no-plaintext
     /// scan.
     pub async fn dump_all_values(&self) -> Vec<String> {
@@ -228,6 +317,14 @@ impl TestApp {
             }
         }
         values
+    }
+}
+
+impl Drop for TestApp {
+    fn drop(&mut self) {
+        if let Some(dir) = &self.data_dir {
+            std::fs::remove_dir_all(dir).ok();
+        }
     }
 }
 
@@ -284,6 +381,14 @@ impl TestRequest {
 
     pub fn post(uri: &str) -> Self {
         Self::new(Method::POST, uri)
+    }
+
+    pub fn patch(uri: &str) -> Self {
+        Self::new(Method::PATCH, uri)
+    }
+
+    pub fn delete(uri: &str) -> Self {
+        Self::new(Method::DELETE, uri)
     }
 
     pub fn new(method: Method, uri: &str) -> Self {
