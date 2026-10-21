@@ -1,10 +1,17 @@
-//! `POST /api/v1/auth/login`, `POST /api/v1/auth/logout` and
-//! `GET /api/v1/auth/me`.
+//! `POST /api/v1/auth/login`, `POST /api/v1/auth/logout`,
+//! `GET /api/v1/auth/me` and `POST /api/v1/auth/password`.
 //!
 //! These handlers parse input, call [`crate::auth`], and map the result
 //! onto HTTP. The rules - no account enumeration, how a session expires,
-//! what the cookie looks like - all live in the service layer, so the
-//! later dashboard can reuse them unchanged.
+//! what the cookie looks like, what a password change revokes - all live
+//! in the service layer, so the later dashboard can reuse them
+//! unchanged.
+//!
+//! Every rate limit on these routes except one is attached from the
+//! route's entry in [`crate::routes::INVENTORY`]. The exception is the
+//! per-username login bucket, whose key is a field of the request body:
+//! a layer cannot see the body without buffering it, so [`log_in`] is
+//! the first place that key exists.
 
 use axum::extract::State;
 use axum::http::{header, StatusCode};
@@ -13,16 +20,15 @@ use axum::Json;
 use serde::{Deserialize, Serialize};
 
 use crate::auth::cookie;
-use crate::auth::extract::AuthSession;
 use crate::auth::login::{self, LoginError};
-use crate::auth::password::HashError;
+use crate::auth::password::{HashError, PasswordPolicyError};
 use crate::auth::secret::SecretString;
 use crate::auth::session;
 use crate::auth::time::UnixTime;
-use crate::clientip::ClientAddr;
+use crate::auth::users::{self, PasswordChangeError};
 use crate::error::{ApiError, ErrorKind};
 use crate::ratelimit::UsernameKey;
-use crate::routes::{rate_limited, UserView};
+use crate::routes::{rate_limited, SessionContext, UserView};
 use crate::state::AppState;
 
 #[derive(Deserialize)]
@@ -45,21 +51,17 @@ struct SessionResponse {
 
 pub async fn log_in(
     State(state): State<AppState>,
-    client: ClientAddr,
     Json(request): Json<LoginRequest>,
 ) -> Response {
     let now = UnixTime::now();
 
-    // Order matters. The per-address bucket is checked first so that
-    // invented usernames cannot flood the per-username map before
-    // anything bounds them - the address limit is what caps how many
-    // distinct usernames one client can even introduce.
-    if let Some(error) = rate_limited(state.limits.login_ip.check(client.rate_limit_key(), now)) {
-        return error.into_response();
-    }
-
-    // Then the per-username bucket, which protects one account against
-    // a guessing attack spread across many addresses.
+    // The per-address bucket has already been checked by the layer the
+    // route's inventory entry attached, which is what caps how many
+    // distinct usernames one client can even introduce before anything
+    // bounds them.
+    //
+    // This is the per-username bucket, which protects one account
+    // against a guessing attack spread across many addresses.
     if let Some(error) = rate_limited(
         state
             .limits
@@ -126,9 +128,12 @@ fn invalid_credentials() -> ApiError {
 
 /// Ends the session server side and clears the cookie.
 ///
-/// Taking [`AuthSession`] is what makes this require a valid CSRF token:
-/// the extractor checks it before the handler runs.
-pub async fn log_out(State(state): State<AppState>, auth: AuthSession) -> Response {
+/// The session, the CSRF check and the `Origin` check all come from the
+/// route's inventory entry; [`SessionContext`] is how this handler reads
+/// the result, and it fails closed if no access layer ran.
+pub async fn log_out(State(state): State<AppState>, session_context: SessionContext) -> Response {
+    let auth = session_context.auth();
+
     if let Err(err) = session::end(&state.pool, &auth.session.id).await {
         tracing::error!(error = %err, "could not delete a session on logout");
         return ApiError::of(ErrorKind::InternalError).into_response();
@@ -151,10 +156,100 @@ pub async fn log_out(State(state): State<AppState>, auth: AuthSession) -> Respon
 /// reload or a new tab: the value is derived from the session cookie, so
 /// any tab holding the cookie can ask for it. Same-origin policy keeps
 /// another origin from reading this response.
-pub async fn me(auth: AuthSession) -> Response {
+pub async fn me(session_context: SessionContext) -> Response {
+    let auth = session_context.auth();
     let body = SessionResponse {
+        // Both read from the account row this request resolved, so a
+        // role changed a moment ago is reported correctly here.
         user: UserView::from(&auth.user),
         csrf_token: auth.csrf_token(),
     };
     (StatusCode::OK, Json(body)).into_response()
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ChangePasswordRequest {
+    current_password: SecretString,
+    new_password: SecretString,
+}
+
+/// What a successful password change reports.
+#[derive(Serialize)]
+struct PasswordChangeResponse {
+    /// How many other sessions of this account were ended. The one that
+    /// made the request is not counted, and still works.
+    other_sessions_ended: u64,
+}
+
+/// Changes the caller's own password.
+///
+/// Only ever the caller's own: there is no account parameter, so no
+/// request can aim this at somebody else. An admin resetting another
+/// account's password is deliberately not part of this - it would need
+/// its own endpoint and its own decisions about what to revoke.
+///
+/// The per-account rate limit, the CSRF check and the `Origin` check are
+/// attached from the route's inventory entry, and the limit is counted
+/// before this handler runs - that is, before the Argon2 semaphore is
+/// reached.
+pub async fn change_password(
+    State(state): State<AppState>,
+    session_context: SessionContext,
+    Json(request): Json<ChangePasswordRequest>,
+) -> Response {
+    let auth = session_context.auth();
+
+    let result = users::change_own_password(
+        &state.pool,
+        &state.hasher,
+        &auth.user.id,
+        &auth.session.id,
+        request.current_password,
+        request.new_password,
+    )
+    .await;
+
+    match result {
+        Ok(report) => (
+            StatusCode::OK,
+            Json(PasswordChangeResponse {
+                other_sessions_ended: report.other_sessions_ended,
+            }),
+        )
+            .into_response(),
+
+        Err(PasswordChangeError::CurrentPasswordInvalid) => {
+            // No username, no password, no indication of which account
+            // in the message - only the id, and only in the log.
+            tracing::info!(user_id = %auth.user.id, "password change refused");
+            ApiError::of(ErrorKind::CurrentPasswordInvalid).into_response()
+        }
+
+        Err(PasswordChangeError::InvalidNewPassword(reason)) => ApiError::of(match reason {
+            PasswordPolicyError::Blank => ErrorKind::PasswordBlank,
+            PasswordPolicyError::Length => ErrorKind::PasswordLength,
+        })
+        .into_response(),
+
+        Err(PasswordChangeError::Conflict) => {
+            ApiError::of(ErrorKind::PasswordChangeConflict).into_response()
+        }
+
+        // The account was deleted between the session being resolved
+        // and the change being applied. The caller is no longer
+        // authenticated by anything.
+        Err(PasswordChangeError::AccountGone) => {
+            ApiError::of(ErrorKind::Unauthenticated).into_response()
+        }
+
+        Err(PasswordChangeError::Hash(HashError::Busy)) => ApiError::of(ErrorKind::ServerBusy)
+            .retry_after(state.hasher.wait_timeout())
+            .into_response(),
+
+        Err(err) => {
+            tracing::error!(error = %err, "changing a password failed");
+            ApiError::of(ErrorKind::InternalError).into_response()
+        }
+    }
 }

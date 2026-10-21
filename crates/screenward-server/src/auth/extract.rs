@@ -6,8 +6,12 @@
 //! authenticated state-changing request without CSRF protection,
 //! because the same thing that gives it the user also enforces it.
 //!
-//! The `Origin` check is separate, in [`crate::middleware`], because it
-//! applies to requests that have no session yet - login above all.
+//! The `Origin` check is separate, in [`crate::routes::access`],
+//! because it applies to requests that have no session yet - login
+//! above all. That module also carries the layer that attaches this
+//! extractor's work to a route from the route inventory; the CSRF rule
+//! itself is [`verify_csrf`] below, called from both places so there is
+//! only ever one implementation of it.
 
 use std::fmt;
 
@@ -106,6 +110,40 @@ impl IntoResponse for AuthRejection {
     }
 }
 
+/// The session token in the request's cookies, if there is one.
+fn presented_session_token(parts: &Parts) -> Option<&str> {
+    let cookies = parts
+        .headers
+        .get_all(header::COOKIE)
+        .iter()
+        .filter_map(|value| value.to_str().ok());
+    cookie::read(cookies)
+}
+
+/// Checks the `X-CSRF-Token` header against the session cookie.
+///
+/// The only implementation of the CSRF rule. It is called from two
+/// places - this extractor, for any unsafe method, and the access layer
+/// built from a route's inventory entry - so that the table can make the
+/// check mandatory for a route without there being a second copy of the
+/// logic to drift from this one.
+///
+/// Needs only the two values the client sent, so a forged request is
+/// refused without spending a database query on it, and the outcome
+/// still says nothing about whether the session is real.
+pub fn verify_csrf(parts: &Parts) -> Result<(), AuthRejection> {
+    let token = presented_session_token(parts).ok_or(AuthRejection::Unauthenticated)?;
+    let presented = parts
+        .headers
+        .get(CSRF_HEADER)
+        .and_then(|value| value.to_str().ok())
+        .ok_or(AuthRejection::CsrfMissing)?;
+    if !csrf::verify(token, presented) {
+        return Err(AuthRejection::CsrfInvalid);
+    }
+    Ok(())
+}
+
 impl FromRequestParts<AppState> for AuthSession {
     type Rejection = AuthRejection;
 
@@ -113,28 +151,14 @@ impl FromRequestParts<AppState> for AuthSession {
         parts: &mut Parts,
         state: &AppState,
     ) -> Result<Self, Self::Rejection> {
-        let cookies = parts
-            .headers
-            .get_all(header::COOKIE)
-            .iter()
-            .filter_map(|value| value.to_str().ok());
-        let token = cookie::read(cookies)
+        let token = presented_session_token(parts)
             .ok_or(AuthRejection::Unauthenticated)?
             .to_owned();
 
-        // CSRF before the database lookup. The check needs only the two
-        // values the client sent, so a forged request is refused without
-        // spending a query on it - and the outcome still says nothing
-        // about whether the session is real.
+        // CSRF before the database lookup, for any method that is not
+        // safe - whether or not a route's entry also demands it.
         if !origin::is_safe_method(parts.method.as_str()) {
-            let presented = parts
-                .headers
-                .get(CSRF_HEADER)
-                .and_then(|value| value.to_str().ok())
-                .ok_or(AuthRejection::CsrfMissing)?;
-            if !csrf::verify(&token, presented) {
-                return Err(AuthRejection::CsrfInvalid);
-            }
+            verify_csrf(parts)?;
         }
 
         let resolved = session::resolve(&state.pool, &token, state.session_policy, UnixTime::now())
