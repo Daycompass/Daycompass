@@ -137,13 +137,19 @@ const DEFAULT_RATE_LIMIT_PAIR_IP: &str = "10/300";
 /// security and makes that lever cheaper to pull.
 const DEFAULT_RATE_LIMIT_PAIR_GLOBAL: &str = "600/60";
 
-/// Sixty *failed* device authentications per minute from one client
-/// address.
+/// Six hundred *failed* device authentications per minute from one
+/// client address.
 ///
 /// The one limiter consulted before anything is authenticated, and
 /// therefore the only thing bounding what an anonymous caller can
 /// make the device routes do. Without it a well-formed but unknown
 /// bearer token costs one indexed lookup per request, forever.
+///
+/// What this caps is unauthenticated database reads per peer, about
+/// ten a second, not guessing. Guessing a device token is stopped by
+/// the token's length, not by this - see `crate::auth::token` - so
+/// this limit only has to be tight enough that a flood of well-formed
+/// nonsense cannot turn into unbounded lookup cost.
 ///
 /// Only failures count. A paired device that is working never touches
 /// this budget however much it syncs, which is what makes the limit
@@ -156,11 +162,14 @@ const DEFAULT_RATE_LIMIT_PAIR_GLOBAL: &str = "600/60";
 /// rolls over. Behind a NAT one misconfigured client can therefore
 /// lock out its neighbours for up to a minute. That is accepted for
 /// the same two reasons - the window is fixed and always clears
-/// itself, with no administrator needed, and sixty failures a minute
-/// is far above what a working client produces. A client that is
-/// failing to authenticate sixty times a minute is broken or hostile,
-/// and either way should be made to slow down.
-const DEFAULT_RATE_LIMIT_DEVICE_AUTH_FAIL: &str = "60/60";
+/// itself, with no administrator needed, and six hundred failures a
+/// minute is far above what a working client produces.
+///
+/// `60/60` was the first value here and proved too tight in practice:
+/// a school NAT with many stale or re-pairing clients behind one
+/// address burned through it on ordinary churn, not abuse, which is
+/// not the caller this limit exists to slow down.
+const DEFAULT_RATE_LIMIT_DEVICE_AUTH_FAIL: &str = "600/60";
 
 /// Thirty ingest requests per minute for one device.
 ///
@@ -1266,7 +1275,7 @@ mod tests {
                 "rate_limit_pair_ip: RateLimitRule { max: 10, window: 300s }, ",
                 "rate_limit_pair_global: RateLimitRule { max: 600, window: 60s }, ",
                 "rate_limit_ingest_device: RateLimitRule { max: 30, window: 60s }, ",
-                "rate_limit_device_auth_fail: RateLimitRule { max: 60, window: 60s }",
+                "rate_limit_device_auth_fail: RateLimitRule { max: 600, window: 60s }",
                 " }",
             )
         );
