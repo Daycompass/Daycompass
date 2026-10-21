@@ -173,7 +173,11 @@ async fn two_hundred_successful_requests_do_not_spend_the_failure_budget() {
 /// is a client with a bug spending its own address's budget.
 #[tokio::test]
 async fn every_kind_of_auth_failure_charges_the_budget() {
-    let cases: [(&str, fn(&Device, &str) -> TestRequest); 4] = [
+    /// Builds one flavour of failing request from a paired device and
+    /// a session cookie, so the cases below stay a flat table.
+    type BuildFailure = fn(&Device, &str) -> TestRequest;
+
+    let cases: [(&str, BuildFailure); 4] = [
         ("no credential", |_device, _cookie| {
             TestRequest::get("/api/v1/device/me")
         }),
