@@ -404,6 +404,25 @@ async fn a_device_route_refuses_the_session_cookie_however_it_arrives() {
 async fn the_bearer_scheme_is_case_insensitive_on_both_kinds_of_route() {
     let fixture = Fixture::new().await;
 
+    // The control: the same session, with no Authorization header at
+    // all, must work. Without this, a 401 inside the loop below could
+    // just as easily mean the session or CSRF setup is broken, rather
+    // than proving the bearer header is what gets refused.
+    let control = fixture
+        .app
+        .send(
+            TestRequest::get("/api/v1/auth/me")
+                .origin(GOOD_ORIGIN)
+                .authenticated(&fixture.user),
+        )
+        .await;
+    assert_eq!(
+        control.status,
+        StatusCode::OK,
+        "the session alone must work, with nothing to compare the bearer cases against: {:?}",
+        control.body
+    );
+
     for scheme in ["Bearer", "bearer", "BEARER", "BeArEr"] {
         let accepted = fixture
             .app
