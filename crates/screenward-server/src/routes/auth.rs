@@ -186,7 +186,7 @@ struct PasswordChangeResponse {
 /// account's password is deliberately not part of this - it would need
 /// its own endpoint and its own decisions about what to revoke.
 ///
-/// The per-account rate limit, the CSRF check and the `Origin` check are
+/// The per-session rate limit, the CSRF check and the `Origin` check are
 /// attached from the route's inventory entry, and the limit is counted
 /// before this handler runs - that is, before the Argon2 semaphore is
 /// reached.

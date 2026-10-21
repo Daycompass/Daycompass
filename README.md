@@ -162,11 +162,19 @@ Two changes in flight at once leave exactly one in effect: the write
 applies only if the stored hash is still the one that was verified, and
 the other request is answered 409 `password_change_conflict`.
 
-The endpoint is rate limited per account, in front of the Argon2
+The endpoint is rate limited **per session**, in front of the Argon2
 semaphore, because each attempt costs one verification plus one hash -
-the most expensive thing an authenticated account can ask for. Every
+the most expensive thing an authenticated caller can ask for. Every
 attempt counts, including successful ones. See
-`SCREENWARD_RATE_LIMIT_PASSWORD_USER` in `.env.example`.
+`SCREENWARD_RATE_LIMIT_PW_CHANGE` in `.env.example`.
+
+Per session rather than per account on purpose: someone who has stolen
+a session cannot exhaust the budget the owner needs to lock them out.
+Logging in again yields a fresh session with its own budget, and
+changing the password there ends every other session including the
+stolen one. The cost of that choice is that the limit bounds Argon2 work
+per session rather than per account; opening more sessions means more
+budget, which the login limits bound in turn.
 
 ## License
 

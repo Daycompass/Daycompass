@@ -293,7 +293,7 @@ async fn every_layer_enforced_rate_limit_refuses_when_reached() {
         ("SCREENWARD_RATE_LIMIT_LOGIN_IP", "2/300"),
         ("SCREENWARD_RATE_LIMIT_LOGIN_USERNAME", "1000/300"),
         ("SCREENWARD_RATE_LIMIT_SETUP_IP", "2/3600"),
-        ("SCREENWARD_RATE_LIMIT_PASSWORD_USER", "2/900"),
+        ("SCREENWARD_RATE_LIMIT_PW_CHANGE", "2/900"),
     ];
 
     for spec in INVENTORY.iter().filter(|spec| {
@@ -398,46 +398,92 @@ async fn nothing_outside_the_inventory_is_served() {
     assert_eq!(response.status, StatusCode::METHOD_NOT_ALLOWED);
 }
 
-/// The structural guard: a route may only be registered in the one
-/// helper that looks its entry up in the inventory first.
+/// Calls that attach request-handling surface which no inventory entry
+/// would describe. None of them may appear anywhere in the sources.
+///
+/// `.route(` is not in this list because it is how the one helper
+/// registers a listed route; it is checked separately below. The rest
+/// have no legitimate use in this server: `.merge(` and `.nest(` graft
+/// in whole routers, and the `_service` variants do the same with a
+/// bare tower service, which would not pass through the helper and so
+/// would carry none of the layers an entry attaches.
+const FORBIDDEN_ANYWHERE: &[&str] = &[
+    ".merge(",
+    ".nest(",
+    ".nest_service(",
+    ".route_service(",
+    ".fallback_service(",
+];
+
+/// Calls allowed only in `routes/mod.rs`, with how many times.
+///
+/// `.route(` is the single registration in the helper. `.fallback(` is
+/// the 404 catch-all, which is not a route at all - but it is route
+/// table surface, so it belongs in the same file under the same eyes.
+const CONFINED_TO_THE_ROUTE_TABLE: &[(&str, usize)] = &[(".route(", 1), (".fallback(", 1)];
+
+/// The structural guard: request-handling surface may only be attached
+/// in the one helper that looks its entry up in the inventory first.
 ///
 /// Without this, someone could add a perfectly working route that no
 /// entry describes and nothing above would notice, because every test
 /// here starts from the table.
+///
+/// It is a textual check, so be clear about its limits: it skips
+/// comment lines, and it cannot see a call assembled in a macro or out
+/// of a string. It catches the ordinary mistake - someone reaching for
+/// `.merge(` or `.nest(` because it is the obvious way to add a route -
+/// not a determined author.
 #[test]
-fn no_source_file_registers_a_route_outside_the_inventory_helper() {
+fn no_source_file_attaches_routes_outside_the_inventory_helper() {
     let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-    let mut found = Vec::new();
+    let sources = rust_sources(&src);
+    assert!(!sources.is_empty(), "the scan must read something");
 
-    for path in rust_sources(&src) {
-        let text = std::fs::read_to_string(&path).expect("a source file must be readable");
-        // Comment lines are skipped: prose about route registration -
-        // including the comments explaining this very rule - is not a
-        // registration.
+    for needle in FORBIDDEN_ANYWHERE {
+        let found = occurrences(&sources, needle);
+        assert!(
+            found.is_empty(),
+            "{needle} attaches routing surface the inventory cannot describe, found {found:?}"
+        );
+    }
+
+    for (needle, allowed) in CONFINED_TO_THE_ROUTE_TABLE {
+        let found = occurrences(&sources, needle);
+        assert_eq!(
+            found.len(),
+            1,
+            "{needle} must appear in exactly one file, found {found:?}"
+        );
+        let (path, count) = &found[0];
+        assert!(
+            path.ends_with("routes/mod.rs"),
+            "{needle} must only appear in routes/mod.rs, found it in {path:?}"
+        );
+        assert_eq!(
+            count, allowed,
+            "{needle} must appear {allowed} time(s) in routes/mod.rs, found {count}"
+        );
+    }
+}
+
+/// Which files contain `needle`, and how often, ignoring comment lines:
+/// prose about route registration - including the comments explaining
+/// this very rule - is not a registration.
+fn occurrences(sources: &[std::path::PathBuf], needle: &str) -> Vec<(std::path::PathBuf, usize)> {
+    let mut found = Vec::new();
+    for path in sources {
+        let text = std::fs::read_to_string(path).expect("a source file must be readable");
         let count = text
             .lines()
             .filter(|line| !line.trim_start().starts_with("//"))
-            .filter(|line| line.contains(".route("))
+            .filter(|line| line.contains(needle))
             .count();
         if count > 0 {
-            found.push((path, count));
+            found.push((path.clone(), count));
         }
     }
-
-    assert_eq!(
-        found.len(),
-        1,
-        ".route( must appear in exactly one file, found {found:?}"
-    );
-    let (path, count) = &found[0];
-    assert!(
-        path.ends_with("routes/mod.rs"),
-        ".route( must only appear in routes/mod.rs, found it in {path:?}"
-    );
-    assert_eq!(
-        *count, 1,
-        "routes/mod.rs must register routes in exactly one place"
-    );
+    found
 }
 
 /// Every `.rs` file under `dir`, recursively.

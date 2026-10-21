@@ -24,7 +24,6 @@
 use std::sync::Arc;
 
 use axum::extract::{FromRequestParts, Request, State};
-use axum::http::request::Parts;
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 
@@ -33,7 +32,7 @@ use crate::auth::origin;
 use crate::auth::time::UnixTime;
 use crate::clientip::ClientAddr;
 use crate::error::{ApiError, ErrorKind};
-use crate::ratelimit::UserKey;
+use crate::ratelimit::SessionKey;
 use crate::routes::{rate_limited, Access, Bucket, LimitKey, RouteSpec};
 use crate::state::AppState;
 
@@ -122,7 +121,7 @@ pub async fn enforce_access(
 
 /// Applies the layer-enforced limiters named in the entry.
 ///
-/// Attached inside `enforce_access`, so an account-keyed limit can key
+/// Attached inside `enforce_access`, so a session-keyed limit can key
 /// on the session that layer resolved - and so a password change is
 /// counted *before* it reaches the Argon2 semaphore, which is the point
 /// of limiting it at all. Every request that gets this far counts,
@@ -151,18 +150,20 @@ pub async fn enforce_rate_limits(
                     _ => return unenforceable(*limit),
                 }
             }
-            (Bucket::PasswordUser, LimitKey::Account) => {
+            (Bucket::PwChange, LimitKey::Session) => {
                 let Some(auth) = parts.extensions.get::<Arc<AuthSession>>() else {
-                    // Only reachable if the entry asked for an
-                    // account-keyed limit without a session layer, which
+                    // Only reachable if the entry asked for a
+                    // session-keyed limit without a session layer, which
                     // RouteSpec::validate refuses at startup.
-                    tracing::error!("an account-keyed rate limit ran with no resolved session");
+                    tracing::error!("a session-keyed rate limit ran with no resolved session");
                     return ApiError::of(ErrorKind::InternalError).into_response();
                 };
+                // The session id, not the account id: another session of
+                // the same account has its own budget.
                 state
                     .limits
-                    .password_user
-                    .check(UserKey::new(&auth.user.id), now)
+                    .pw_change
+                    .check(SessionKey::new(&auth.session.id), now)
             }
             // The handler owns this one: its key is in the request body.
             (_, LimitKey::Body) => continue,
@@ -191,122 +192,10 @@ fn unenforceable(limit: crate::routes::RateLimit) -> Response {
     ApiError::of(ErrorKind::InternalError).into_response()
 }
 
-/// The session `enforce_access` resolved for this request.
-///
-/// A handler cannot construct one: the only way to get it is to read
-/// what the layer stored, and a route with no access layer therefore
-/// fails closed with a 500 and a log line rather than running the
-/// handler unauthenticated.
-pub struct SessionContext(Arc<AuthSession>);
-
-impl SessionContext {
-    pub fn auth(&self) -> &AuthSession {
-        &self.0
-    }
-}
-
-impl FromRequestParts<AppState> for SessionContext {
-    type Rejection = AuthRejection;
-
-    async fn from_request_parts(
-        parts: &mut Parts,
-        _state: &AppState,
-    ) -> Result<Self, Self::Rejection> {
-        match parts.extensions.get::<Arc<AuthSession>>() {
-            Some(auth) => Ok(Self(Arc::clone(auth))),
-            None => {
-                tracing::error!(
-                    "a handler asked for a session on a route with no access layer attached"
-                );
-                Err(AuthRejection::Unavailable)
-            }
-        }
-    }
-}
-
-/// Like [`SessionContext`], and the account is an admin.
-///
-/// The role is re-checked here against the record resolved for this
-/// request. `enforce_access` has already checked it for an
-/// `Access::Admin` route; this is the second line, so a handler that
-/// asks for admin rights gets them only if the account really has them
-/// now, whatever the route was registered as.
-pub struct AdminContext(Arc<AuthSession>);
-
-impl AdminContext {
-    pub fn auth(&self) -> &AuthSession {
-        &self.0
-    }
-}
-
-impl FromRequestParts<AppState> for AdminContext {
-    type Rejection = AuthRejection;
-
-    async fn from_request_parts(
-        parts: &mut Parts,
-        state: &AppState,
-    ) -> Result<Self, Self::Rejection> {
-        let session = SessionContext::from_request_parts(parts, state).await?;
-        session.auth().require_admin()?;
-        Ok(Self(session.0))
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use axum::body::Body;
-    use axum::handler::Handler;
-    use axum::http::{Request as HttpRequest, StatusCode};
-
-    use super::*;
-
-    /// A handler asking for a session on a route that has no access
-    /// layer must fail, not run. This is the fail-closed half of the
-    /// table driving the layers: forgetting the entry's flag cannot
-    /// produce an unauthenticated call into a handler that believes it
-    /// is authenticated.
-    ///
-    /// The handlers are called directly rather than through a router,
-    /// because registering a route anywhere but in
-    /// [`crate::routes::RouteTable::add`] is what the inventory test
-    /// forbids.
-    #[tokio::test]
-    async fn a_session_handler_without_its_layer_fails_closed() {
-        async fn handler(_session: SessionContext) -> &'static str {
-            "this must never be reached"
-        }
-
-        let response = handler.call(probe_request(), test_state().await).await;
-        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
-    }
-
-    #[tokio::test]
-    async fn an_admin_handler_without_its_layer_fails_closed() {
-        async fn handler(_admin: AdminContext) -> &'static str {
-            "this must never be reached"
-        }
-
-        let response = handler.call(probe_request(), test_state().await).await;
-        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
-    }
-
-    fn probe_request() -> HttpRequest<Body> {
-        HttpRequest::builder()
-            .uri("/probe")
-            .body(Body::empty())
-            .expect("the request must be valid")
-    }
-
-    async fn test_state() -> AppState {
-        use crate::config::Config;
-        use crate::db::{self, DbTarget};
-
-        let pool = db::connect(&DbTarget::Memory)
-            .await
-            .expect("in-memory pool must connect");
-        db::migrate(&pool).await.expect("migrations must apply");
-        AppState::new(pool, &Config::defaults())
-            .await
-            .expect("building the state must succeed")
-    }
-}
+// The types a handler reads the resolved session with -
+// [`crate::auth::extract::SessionContext`] and `AdminContext` - are
+// deliberately defined in the auth module rather than here. Both wrap a
+// private field, so only the module defining them can construct one,
+// and that module is the one that owns authentication. This layer's
+// side of the arrangement is the `Arc<AuthSession>` it inserts above;
+// it cannot mint a context either.

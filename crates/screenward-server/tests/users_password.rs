@@ -247,16 +247,16 @@ async fn two_parallel_changes_cannot_both_succeed() {
     assert_eq!(working, 1, "exactly one new password may be in effect");
 }
 
-/// The per-account limit counts every attempt, not only the ones that
+/// The per-session limit counts every attempt, not only the ones that
 /// fail: a flood of *correct* changes is just as expensive in Argon2
 /// work as a flood of wrong ones.
 #[tokio::test]
-async fn the_per_account_limit_counts_successful_changes_too() {
+async fn the_per_session_limit_counts_successful_changes_too() {
     let app = TestApp::with_vars(&[
         ("SCREENWARD_RATE_LIMIT_LOGIN_IP", "1000/300"),
         ("SCREENWARD_RATE_LIMIT_LOGIN_USERNAME", "1000/300"),
         ("SCREENWARD_RATE_LIMIT_SETUP_IP", "1000/3600"),
-        ("SCREENWARD_RATE_LIMIT_PASSWORD_USER", "2/900"),
+        ("SCREENWARD_RATE_LIMIT_PW_CHANGE", "2/900"),
     ])
     .await;
     let credentials = app.provision_admin().await;
@@ -292,15 +292,14 @@ async fn the_per_account_limit_counts_successful_changes_too() {
     .await;
 }
 
-/// The limit is per account, so one account hitting it does not refuse
-/// another's change.
+/// The limit is per session, so another account's change is unaffected.
 #[tokio::test]
-async fn the_limit_is_per_account() {
+async fn the_limit_does_not_follow_the_address_or_another_account() {
     let app = TestApp::with_vars(&[
         ("SCREENWARD_RATE_LIMIT_LOGIN_IP", "1000/300"),
         ("SCREENWARD_RATE_LIMIT_LOGIN_USERNAME", "1000/300"),
         ("SCREENWARD_RATE_LIMIT_SETUP_IP", "1000/3600"),
-        ("SCREENWARD_RATE_LIMIT_PASSWORD_USER", "1/900"),
+        ("SCREENWARD_RATE_LIMIT_PW_CHANGE", "1/900"),
     ])
     .await;
     let (admin_credentials, admin) = app.provisioned_admin().await;
@@ -334,6 +333,95 @@ async fn the_limit_is_per_account() {
         ))
         .await;
     assert_eq!(other.status, StatusCode::OK, "{:?}", other.body);
+}
+
+/// The point of keying by session: a session whose budget is spent -
+/// one a thief is sitting on, say - does not block the account's own
+/// remediation. The owner logs in again and changes the password on the
+/// fresh session, which ends every other session including that one.
+///
+/// And the exhausted session stays exhausted, so this is not simply a
+/// limiter that forgot to count.
+#[tokio::test]
+async fn a_spent_session_does_not_block_a_fresh_one_of_the_same_account() {
+    let app = TestApp::with_vars(&[
+        ("SCREENWARD_RATE_LIMIT_LOGIN_IP", "1000/300"),
+        ("SCREENWARD_RATE_LIMIT_LOGIN_USERNAME", "1000/300"),
+        ("SCREENWARD_RATE_LIMIT_SETUP_IP", "1000/3600"),
+        ("SCREENWARD_RATE_LIMIT_PW_CHANGE", "2/900"),
+    ])
+    .await;
+    let credentials = app.provision_admin().await;
+    let spent_session = app.log_in(&credentials).await;
+
+    // Session A burns its whole budget on wrong guesses.
+    for attempt in 0..2 {
+        let response = app
+            .send(change(
+                &spent_session,
+                &common::random_secret(),
+                &common::random_secret(),
+            ))
+            .await;
+        assert_eq!(
+            response.status,
+            StatusCode::FORBIDDEN,
+            "attempt {attempt}: {:?}",
+            response.body
+        );
+    }
+    let exhausted = app
+        .send(change(
+            &spent_session,
+            &credentials.password,
+            &common::random_secret(),
+        ))
+        .await;
+    assert_eq!(
+        exhausted.status,
+        StatusCode::TOO_MANY_REQUESTS,
+        "session A must be out of budget: {:?}",
+        exhausted.body
+    );
+
+    // Session B, a fresh login of the *same* account, has its own.
+    let fresh_session = app.log_in(&credentials).await;
+    let new_password = common::random_secret();
+    let changed = app
+        .send(change(&fresh_session, &credentials.password, &new_password))
+        .await;
+    assert_eq!(
+        changed.status,
+        StatusCode::OK,
+        "a fresh session must not inherit the spent budget: {:?}",
+        changed.body
+    );
+    // The change ended session A, which is what remediation means.
+    assert_eq!(changed.body["other_sessions_ended"], 1);
+
+    // Session A is gone now, so ask about the budget the way it still
+    // can be asked: a further attempt on A is refused, and not for
+    // want of budget on B.
+    let after = app
+        .send(change(
+            &spent_session,
+            &new_password,
+            &common::random_secret(),
+        ))
+        .await;
+    assert!(
+        after.status == StatusCode::TOO_MANY_REQUESTS || after.status == StatusCode::UNAUTHORIZED,
+        "session A must not work any more, got {:?}: {:?}",
+        after.status,
+        after.body
+    );
+
+    // And B still works with the new password.
+    app.log_in(&Credentials {
+        username: credentials.username,
+        password: new_password,
+    })
+    .await;
 }
 
 #[tokio::test]

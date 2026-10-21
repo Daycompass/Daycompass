@@ -44,7 +44,10 @@ use crate::error::{not_found, ApiError, ErrorKind};
 use crate::ratelimit::Decision;
 use crate::state::AppState;
 
-pub use access::{AdminContext, SessionContext};
+// Re-exported for the handlers' import paths only. The types are
+// defined in the auth module and hold private fields, so re-exporting
+// them here does not make them constructible outside it.
+pub use crate::auth::extract::{AdminContext, SessionContext};
 
 /// What a route requires of its caller.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -70,7 +73,7 @@ pub enum Bucket {
     LoginIp,
     LoginUsername,
     SetupIp,
-    PasswordUser,
+    PwChange,
 }
 
 /// What a limiter counts a request against.
@@ -78,9 +81,9 @@ pub enum Bucket {
 pub enum LimitKey {
     /// The client address, resolved by [`crate::clientip`].
     Peer,
-    /// The authenticated account. Only possible where a session is
-    /// required, since the key comes from the resolved session.
-    Account,
+    /// The session the request arrived on. Only possible where a session
+    /// is required, since the key comes from the resolved session.
+    Session,
     /// A field of the request body. Checked by the handler rather than
     /// by a layer, because a layer cannot see the body without
     /// buffering it - the handler is the first place the key exists.
@@ -159,12 +162,12 @@ impl RouteSpec {
             self.path
         );
 
-        // An account-keyed limit implies a session, since the key comes
-        // from the account the session resolved to.
+        // A session-keyed limit implies a session, since the key is the
+        // session the access layer resolved.
         for limit in self.rate_limits {
             assert!(
-                limit.key != LimitKey::Account || self.access.needs_session(),
-                "{} {}: an account-keyed limit needs a session to key on",
+                limit.key != LimitKey::Session || self.access.needs_session(),
+                "{} {}: a session-keyed limit needs a session to key on",
                 self.method,
                 self.path
             );
@@ -231,15 +234,17 @@ pub const INVENTORY: &[RouteSpec] = &[
         rate_limits: &[],
     },
     // The one endpoint an ordinary account can spend Argon2 work on, so
-    // it is limited per account - in front of the hashing semaphore,
-    // because the layer runs before the handler.
+    // it is limited per session - in front of the hashing semaphore,
+    // because the layer runs before the handler. Per session rather
+    // than per account so a stolen session cannot spend the budget the
+    // owner needs to lock it out; see `ratelimit::SessionKey`.
     RouteSpec {
         method: "POST",
         path: "/api/v1/auth/password",
         access: Access::Session,
         origin_checked: true,
         csrf: true,
-        rate_limits: &[RateLimit::new(Bucket::PasswordUser, LimitKey::Account)],
+        rate_limits: &[RateLimit::new(Bucket::PwChange, LimitKey::Session)],
     },
     RouteSpec {
         method: "POST",
@@ -540,8 +545,8 @@ mod tests {
 
     #[test]
     #[should_panic(expected = "needs a session to key on")]
-    fn an_account_keyed_limit_needs_a_session() {
-        const LIMITS: &[RateLimit] = &[RateLimit::new(Bucket::PasswordUser, LimitKey::Account)];
+    fn a_session_keyed_limit_needs_a_session() {
+        const LIMITS: &[RateLimit] = &[RateLimit::new(Bucket::PwChange, LimitKey::Session)];
         spec_with(Access::Public, false, LIMITS).validate();
     }
 

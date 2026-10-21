@@ -14,6 +14,7 @@
 //! only ever one implementation of it.
 
 use std::fmt;
+use std::sync::Arc;
 
 use axum::extract::FromRequestParts;
 use axum::http::header;
@@ -146,6 +147,69 @@ pub fn verify_csrf(parts: &Parts) -> Result<(), AuthRejection> {
     Ok(())
 }
 
+/// The session a route's access layer resolved for this request.
+///
+/// Defined here, in the auth module, and holding a private field: that
+/// combination is what makes an authenticated context unforgeable. No
+/// handler, and no other module, can build one - the only way to get it
+/// is to read what the access layer stored, so a route registered
+/// without that layer fails closed with a 500 and a log line instead of
+/// calling a handler that believes it is authenticated.
+pub struct SessionContext(Arc<AuthSession>);
+
+impl SessionContext {
+    pub fn auth(&self) -> &AuthSession {
+        &self.0
+    }
+}
+
+impl FromRequestParts<AppState> for SessionContext {
+    type Rejection = AuthRejection;
+
+    async fn from_request_parts(
+        parts: &mut Parts,
+        _state: &AppState,
+    ) -> Result<Self, Self::Rejection> {
+        match parts.extensions.get::<Arc<AuthSession>>() {
+            Some(auth) => Ok(Self(Arc::clone(auth))),
+            None => {
+                tracing::error!(
+                    "a handler asked for a session on a route with no access layer attached"
+                );
+                Err(AuthRejection::Unavailable)
+            }
+        }
+    }
+}
+
+/// Like [`SessionContext`], and the account is an admin.
+///
+/// The role is re-checked here against the record resolved for *this*
+/// request. The access layer has already checked it for an admin route;
+/// this is the second line, so a handler that asks for admin rights
+/// gets them only if the account really has them now, whatever the
+/// route was registered as.
+pub struct AdminContext(Arc<AuthSession>);
+
+impl AdminContext {
+    pub fn auth(&self) -> &AuthSession {
+        &self.0
+    }
+}
+
+impl FromRequestParts<AppState> for AdminContext {
+    type Rejection = AuthRejection;
+
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &AppState,
+    ) -> Result<Self, Self::Rejection> {
+        let session = SessionContext::from_request_parts(parts, state).await?;
+        session.auth().require_admin()?;
+        Ok(Self(session.0))
+    }
+}
+
 impl FromRequestParts<AppState> for AuthSession {
     type Rejection = AuthRejection;
 
@@ -181,6 +245,7 @@ impl FromRequestParts<AppState> for AuthSession {
 
 #[cfg(test)]
 mod tests {
+    use axum::handler::Handler;
     use axum::http::StatusCode;
 
     use super::*;
@@ -280,5 +345,54 @@ mod tests {
         // The non-secret identifiers are useful and safe to show.
         assert!(debug.contains("user-1"));
         assert!(debug.contains("session-1"));
+    }
+
+    /// A handler asking for a session on a route whose entry attached no
+    /// access layer must fail, not run. This is the fail-closed half of
+    /// the route table driving the layers: forgetting the flag cannot
+    /// produce an unauthenticated call into a handler that believes it
+    /// is authenticated.
+    ///
+    /// The handlers are called directly rather than through a router,
+    /// because registering a route anywhere but in the one inventory
+    /// helper is what `tests/route_inventory.rs` forbids.
+    #[tokio::test]
+    async fn a_session_handler_without_its_layer_fails_closed() {
+        async fn handler(_session: SessionContext) -> &'static str {
+            "this must never be reached"
+        }
+
+        let response = handler.call(probe_request(), test_state().await).await;
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    #[tokio::test]
+    async fn an_admin_handler_without_its_layer_fails_closed() {
+        async fn handler(_admin: AdminContext) -> &'static str {
+            "this must never be reached"
+        }
+
+        let response = handler.call(probe_request(), test_state().await).await;
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    fn probe_request() -> axum::http::Request<axum::body::Body> {
+        axum::http::Request::builder()
+            .uri("/probe")
+            .body(axum::body::Body::empty())
+            .expect("the request must be valid")
+    }
+
+    async fn test_state() -> AppState {
+        use crate::config::Config;
+        use crate::db::{self, DbTarget};
+
+        let pool = db::connect(&DbTarget::Memory)
+            .await
+            .expect("in-memory pool must connect");
+        db::migrate(&pool).await.expect("migrations must apply");
+        AppState::new(pool, &Config::defaults())
+            .await
+            .expect("building the state must succeed")
     }
 }

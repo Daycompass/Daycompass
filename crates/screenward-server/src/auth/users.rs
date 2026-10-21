@@ -217,10 +217,13 @@ pub struct PasswordChangeReport {
 /// 5. The write applies only if the stored hash is still the one step 3
 ///    verified against, so two parallel changes cannot both succeed.
 ///
-/// Rate limiting happens before any of this, per account, at the route
+/// Rate limiting happens before any of this, per session, at the route
 /// itself: see [`crate::routes::INVENTORY`]. It has to be in front of
 /// the Argon2 semaphore rather than behind it, or a flood of password
-/// changes would occupy the hashing permits that logins also need.
+/// changes would occupy the hashing permits that logins also need. Per
+/// session rather than per account so that a stolen session cannot
+/// spend the budget the owner needs in order to lock it out; the
+/// trade-off is set out in [`crate::ratelimit::SessionKey`].
 pub async fn change_own_password(
     pool: &SqlitePool,
     hasher: &Hasher,
