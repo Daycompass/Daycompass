@@ -336,6 +336,54 @@ impl TestApp {
         }
     }
 
+    /// Mints a code, returning `None` if the account is at its cap.
+    ///
+    /// The fallible counterpart to [`TestApp::issue_pairing_code`],
+    /// for the test that fills the cap deliberately.
+    pub async fn issue_pairing_code_raw(&self, session: &Session) -> Option<String> {
+        let response = self
+            .send(
+                TestRequest::post("/api/v1/pairing-codes")
+                    .origin(GOOD_ORIGIN)
+                    .authenticated(session),
+            )
+            .await;
+        response.body["pairing_code"].as_str().map(str::to_owned)
+    }
+
+    /// Ages every outstanding pairing code out.
+    ///
+    /// Reaches into the database rather than sleeping: the expiry is
+    /// ten minutes, and the thing under test is the `expires_at`
+    /// comparison, not the clock.
+    pub async fn expire_all_pairing_codes(&self) {
+        sqlx::query("UPDATE pairing_codes SET expires_at = 1")
+            .execute(&self.pool)
+            .await
+            .expect("expiring the codes must succeed");
+    }
+
+    pub async fn count_pairing_codes(&self) -> i64 {
+        sqlx::query_scalar("SELECT COUNT(*) FROM pairing_codes")
+            .fetch_one(&self.pool)
+            .await
+            .expect("counting must succeed")
+    }
+
+    pub async fn count_devices(&self) -> i64 {
+        sqlx::query_scalar("SELECT COUNT(*) FROM devices")
+            .fetch_one(&self.pool)
+            .await
+            .expect("counting must succeed")
+    }
+
+    pub async fn count_events(&self) -> i64 {
+        sqlx::query_scalar("SELECT COUNT(*) FROM events")
+            .fetch_one(&self.pool)
+            .await
+            .expect("counting must succeed")
+    }
+
     /// Dumps every value in every table as text, for the no-plaintext
     /// scan.
     pub async fn dump_all_values(&self) -> Vec<String> {
