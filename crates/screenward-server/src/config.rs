@@ -42,6 +42,7 @@ const VAR_ARGON2_WAIT_TIMEOUT: &str = "SCREENWARD_ARGON2_WAIT_TIMEOUT_SECS";
 const VAR_RATE_LIMIT_LOGIN_IP: &str = "SCREENWARD_RATE_LIMIT_LOGIN_IP";
 const VAR_RATE_LIMIT_LOGIN_USERNAME: &str = "SCREENWARD_RATE_LIMIT_LOGIN_USERNAME";
 const VAR_RATE_LIMIT_SETUP_IP: &str = "SCREENWARD_RATE_LIMIT_SETUP_IP";
+const VAR_RATE_LIMIT_PASSWORD_USER: &str = "SCREENWARD_RATE_LIMIT_PASSWORD_USER";
 const VAR_RATE_LIMIT_MAX_ENTRIES: &str = "SCREENWARD_RATE_LIMIT_MAX_ENTRIES";
 
 const DEFAULT_BIND_ADDR: &str = "127.0.0.1:8080";
@@ -76,6 +77,13 @@ const DEFAULT_RATE_LIMIT_LOGIN_USERNAME: &str = "5/300";
 /// token is unguessable, so this only bounds the noise.
 const DEFAULT_RATE_LIMIT_SETUP_IP: &str = "5/3600";
 
+/// Five password changes per fifteen minutes for one account. A person
+/// changing their own password does it once; the limit is there because
+/// each attempt costs one Argon2 verification plus one Argon2 hash,
+/// which is the most expensive thing an authenticated account can ask
+/// for.
+const DEFAULT_RATE_LIMIT_PASSWORD_USER: &str = "5/900";
+
 /// Upper bound on tracked rate-limit keys, so the limiter cannot be
 /// used to exhaust memory.
 const DEFAULT_RATE_LIMIT_MAX_ENTRIES: usize = 10_000;
@@ -100,6 +108,8 @@ pub struct Config {
     pub rate_limit_login_ip: RateLimitRule,
     pub rate_limit_login_username: RateLimitRule,
     pub rate_limit_setup_ip: RateLimitRule,
+    /// Password changes per account, per window.
+    pub rate_limit_password_user: RateLimitRule,
     pub rate_limit_max_entries: usize,
 }
 
@@ -302,6 +312,11 @@ impl Config {
         )?;
         let rate_limit_setup_ip =
             rule(source, VAR_RATE_LIMIT_SETUP_IP, DEFAULT_RATE_LIMIT_SETUP_IP)?;
+        let rate_limit_password_user = rule(
+            source,
+            VAR_RATE_LIMIT_PASSWORD_USER,
+            DEFAULT_RATE_LIMIT_PASSWORD_USER,
+        )?;
         let rate_limit_max_entries = at_least_one(
             source,
             VAR_RATE_LIMIT_MAX_ENTRIES,
@@ -322,6 +337,7 @@ impl Config {
             rate_limit_login_ip,
             rate_limit_login_username,
             rate_limit_setup_ip,
+            rate_limit_password_user,
             rate_limit_max_entries,
         })
     }
@@ -346,6 +362,7 @@ impl fmt::Debug for Config {
             .field("rate_limit_login_ip", &self.rate_limit_login_ip)
             .field("rate_limit_login_username", &self.rate_limit_login_username)
             .field("rate_limit_setup_ip", &self.rate_limit_setup_ip)
+            .field("rate_limit_password_user", &self.rate_limit_password_user)
             .field("rate_limit_max_entries", &self.rate_limit_max_entries)
             .finish()
     }
@@ -712,6 +729,11 @@ mod tests {
             config.rate_limit_setup_ip.window,
             Duration::from_secs(3_600)
         );
+        assert_eq!(config.rate_limit_password_user.max, 5);
+        assert_eq!(
+            config.rate_limit_password_user.window,
+            Duration::from_secs(900)
+        );
         assert_eq!(config.rate_limit_max_entries, 10_000);
     }
 
@@ -891,6 +913,7 @@ mod tests {
             .with(VAR_RATE_LIMIT_LOGIN_IP, "3/60")
             .with(VAR_RATE_LIMIT_LOGIN_USERNAME, " 2 / 30 ")
             .with(VAR_RATE_LIMIT_SETUP_IP, "1/120")
+            .with(VAR_RATE_LIMIT_PASSWORD_USER, "4/90")
             .with(VAR_RATE_LIMIT_MAX_ENTRIES, "500");
         let config = Config::load(&env).expect("valid limits must parse");
 
@@ -902,6 +925,11 @@ mod tests {
             Duration::from_secs(30)
         );
         assert_eq!(config.rate_limit_setup_ip.max, 1);
+        assert_eq!(config.rate_limit_password_user.max, 4);
+        assert_eq!(
+            config.rate_limit_password_user.window,
+            Duration::from_secs(90)
+        );
         assert_eq!(config.rate_limit_max_entries, 500);
     }
 
@@ -1105,11 +1133,23 @@ mod tests {
                 "rate_limit_login_ip: RateLimitRule { max: 10, window: 300s }, ",
                 "rate_limit_login_username: RateLimitRule { max: 5, window: 300s }, ",
                 "rate_limit_setup_ip: RateLimitRule { max: 5, window: 3600s }, ",
+                "rate_limit_password_user: RateLimitRule { max: 5, window: 900s }, ",
                 "rate_limit_max_entries: 10000",
                 " }",
             )
         );
     }
+
+    /// Field names that contain one of the markers below while holding
+    /// nothing sensitive. Each is a rate limit *rule* - a count and a
+    /// window - named after what it limits.
+    ///
+    /// They are removed before the scan rather than the marker being
+    /// dropped, so the scan stays blunt: a field whose name is not
+    /// listed here, or any *value* matching a marker, still fails.
+    /// Adding a name here is a deliberate, reviewable claim that the
+    /// field holds no secret.
+    const NAMES_THAT_ARE_NOT_VALUES: &[&str] = &["rate_limit_password_user"];
 
     /// Whatever else changes, a dump of the configuration must never
     /// carry anything that looks like a credential.
@@ -1119,7 +1159,14 @@ mod tests {
             .with(VAR_BIND_ADDR, "0.0.0.0:8080")
             .with(VAR_PUBLIC_URL, "https://example.org")
             .with(VAR_TRUSTED_PROXIES, "192.0.2.0/24");
-        let debug = format!("{:?}", Config::load(&env).unwrap());
+        let mut debug = format!("{:?}", Config::load(&env).unwrap());
+        for name in NAMES_THAT_ARE_NOT_VALUES {
+            assert!(
+                debug.contains(name),
+                "{name:?} is allowed for but no longer in the Debug output"
+            );
+            debug = debug.replace(name, "");
+        }
         for marker in ["password", "token", "secret", "cookie", "csrf"] {
             assert!(
                 !debug.to_ascii_lowercase().contains(marker),
