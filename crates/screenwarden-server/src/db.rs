@@ -50,6 +50,9 @@ pub enum DbError {
     #[error("failed to run database migrations")]
     Migrate(#[source] sqlx::migrate::MigrateError),
 
+    /// The new main file does not exist yet, so renaming every legacy
+    /// file onto its matching new name is safe - there is nothing
+    /// there to overwrite.
     #[error(
         "found a legacy screenward.sqlite3* file in the data directory; \
          stop the server cleanly, then rename every file named \
@@ -57,6 +60,23 @@ pub enum DbError {
          screenwarden.sqlite3* name, and restart"
     )]
     LegacyDatabaseFile,
+
+    /// The new main file already exists - this is the case
+    /// `LegacyDatabaseFile`'s blanket "rename every file" instruction
+    /// must never be given for, since a rename that lands on an
+    /// existing `screenwarden.sqlite3*` overwrites it and can destroy
+    /// live data.
+    #[error(
+        "found a non-empty legacy screenward.sqlite3-wal next to an \
+         existing screenwarden.sqlite3; stop the server cleanly, and \
+         never overwrite screenwarden.sqlite3* by renaming a legacy \
+         file onto it. If screenwarden.sqlite3 was only just created \
+         by renaming the old main file, rename screenward.sqlite3-wal \
+         (and -shm, if present) to match it the same way; if \
+         screenwarden.sqlite3 already held live data, move the legacy \
+         files out of the data directory instead"
+    )]
+    LegacyWalAlongsideNewFile,
 
     /// Checking for a legacy file failed for a reason other than it not
     /// being there - most likely a permissions problem. Names the path
@@ -132,9 +152,13 @@ pub async fn check_reachable(pool: &SqlitePool) -> Result<(), DbError> {
 }
 
 /// Refuses to start if the data directory shows the Screenward ->
-/// Screenwarden rename was missed or only partly done.
+/// Screenwarden rename was missed or only partly done - or shows a
+/// stray legacy WAL it would be dangerous to advise renaming onto an
+/// already-present new file.
 ///
-/// Two independent checks, because they catch different mistakes:
+/// Two independent checks, returning one of two errors depending on
+/// whether the new main file already exists - that is what decides
+/// whether "just rename everything" is safe advice to give:
 ///
 ///   * A non-empty `screenward.sqlite3-wal` is refused **regardless**
 ///     of whether `screenwarden.sqlite3` already exists. A WAL file is
@@ -145,16 +169,27 @@ pub async fn check_reachable(pool: &SqlitePool) -> Result<(), DbError> {
 ///     empty one (just past a clean checkpoint) has nothing left to
 ///     lose, so it does not trip this; otherwise a leftover from a
 ///     *completed* rename, long since harmless, would block every
-///     later start forever.
+///     later start forever. This is [`DbError::LegacyWalAlongsideNewFile`]
+///     if the new main file exists already - where a blanket rename
+///     would overwrite it - or the ordinary [`DbError::LegacyDatabaseFile`]
+///     if it does not.
 ///   * Otherwise, if the new main file is missing, any legacy file at
 ///     all - the main one or either auxiliary - means the rename was
-///     never done, or was done only for some of the files.
+///     never done, or was done only for some of the files:
+///     [`DbError::LegacyDatabaseFile`], since nothing exists yet at the
+///     new name for a rename to clobber.
 fn check_for_legacy_db_files(data_dir: &Path) -> Result<(), DbError> {
-    if wal_has_unflushed_writes(&data_dir.join(LEGACY_WAL_FILE_NAME))? {
-        return Err(DbError::LegacyDatabaseFile);
+    let new_main_file_exists = path_exists(&data_dir.join(DB_FILE_NAME))?;
+
+    if wal_is_non_empty(&data_dir.join(LEGACY_WAL_FILE_NAME))? {
+        return Err(if new_main_file_exists {
+            DbError::LegacyWalAlongsideNewFile
+        } else {
+            DbError::LegacyDatabaseFile
+        });
     }
 
-    if path_exists(&data_dir.join(DB_FILE_NAME))? {
+    if new_main_file_exists {
         return Ok(());
     }
 
@@ -184,12 +219,20 @@ fn path_exists(path: &Path) -> Result<bool, DbError> {
         })
 }
 
-/// Whether `path` is a legacy WAL file with committed writes still in
-/// it. A missing file is `false`, not an error - there is nothing to
-/// lose if it was never there - but any other failure to read its size
+/// Whether `path` is a legacy WAL file that is not empty.
+///
+/// Non-empty does not *prove* there are writes SQLite would still
+/// need to checkpoint: the default `PASSIVE` checkpoint mode copies
+/// frames into the main file without truncating the WAL back to
+/// zero, so a fully checkpointed WAL can sit at a nonzero size
+/// indefinitely. This is a deliberately conservative proxy - "might
+/// still matter, treat it as live" - not a certificate that it does.
+///
+/// A missing file is `false`, not an error - there is nothing to lose
+/// if it was never there - but any other failure to read its size
 /// (most likely a permissions problem) is propagated rather than
 /// treated as "empty".
-fn wal_has_unflushed_writes(path: &Path) -> Result<bool, DbError> {
+fn wal_is_non_empty(path: &Path) -> Result<bool, DbError> {
     match std::fs::metadata(path) {
         Ok(meta) => Ok(meta.len() > 0),
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(false),
@@ -782,7 +825,9 @@ mod tests {
     /// already exists and is in active use: it names commits that a
     /// connection to the new file will never read, because SQLite only
     /// ever associates a `-wal` with the exact main-file name it was
-    /// created next to.
+    /// created next to. The dangerous case, so it gets the error that
+    /// warns against overwriting rather than the ordinary one that
+    /// says to rename everything.
     #[tokio::test]
     async fn file_target_refuses_a_non_empty_legacy_wal_even_when_the_new_file_exists() {
         use std::sync::atomic::{AtomicU32, Ordering};
@@ -802,7 +847,7 @@ mod tests {
         };
         let result = connect(&target).await;
 
-        assert!(matches!(result, Err(DbError::LegacyDatabaseFile)));
+        assert!(matches!(result, Err(DbError::LegacyWalAlongsideNewFile)));
 
         std::fs::remove_dir_all(&data_dir).ok();
     }
@@ -836,15 +881,35 @@ mod tests {
         std::fs::remove_dir_all(&data_dir).ok();
     }
 
-    /// The message names both auxiliary files and tells the operator to
-    /// stop the server first, not just to rename something while it
-    /// might still be writing to it.
+    /// `LegacyDatabaseFile` - the new main file is missing, so a
+    /// blanket rename is safe - names both auxiliary files and tells
+    /// the operator to stop the server first, not just to rename
+    /// something while it might still be writing to it.
     #[test]
-    fn the_legacy_database_message_covers_wal_and_shm_and_stopping_first() {
+    fn the_legacy_database_file_message_covers_wal_and_shm_and_stopping_first() {
         let message = DbError::LegacyDatabaseFile.to_string();
         assert!(message.contains("-wal"), "{message}");
         assert!(message.contains("-shm"), "{message}");
         assert!(message.contains("stop the server"), "{message}");
+    }
+
+    /// `LegacyWalAlongsideNewFile` - the new main file already exists -
+    /// must never give the same unconditional "rename every file"
+    /// instruction as `LegacyDatabaseFile` above: landing a rename on
+    /// an existing `screenwarden.sqlite3*` overwrites it. It must
+    /// instead say explicitly not to overwrite.
+    #[test]
+    fn the_legacy_wal_alongside_new_file_message_warns_against_overwriting() {
+        let message = DbError::LegacyWalAlongsideNewFile.to_string();
+        assert!(
+            !message.contains("rename every file named screenward.sqlite3*"),
+            "must not give the same unconditional rename-everything \
+             instruction as the main-file-missing case: {message}"
+        );
+        assert!(
+            message.contains("never") && message.contains("overwrite"),
+            "must explicitly warn against overwriting: {message}"
+        );
     }
 
     /// A permissions problem reading a legacy file must be reported,

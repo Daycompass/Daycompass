@@ -70,6 +70,15 @@ fn run_with_env(vars: &[(&OsStr, &OsStr)]) -> (i32, String) {
 /// once, so a regression that makes it hang - serving instead of
 /// refusing, say - fails this one test within `timeout` instead of
 /// stalling every other test in the run behind it.
+///
+/// Nothing drains the child's stderr pipe while this polls - `run_with_env`
+/// only reads it after this function returns. That is fine for the short,
+/// one-line messages every case here produces, but it means this bound is
+/// not airtight in general: if the child ever wrote more than one pipe
+/// buffer's worth of stderr before exiting, it would block on the write
+/// with nobody reading, `try_wait` would keep reporting "still running",
+/// and this would run out the full `timeout` rather than returning as
+/// soon as the child actually finishes.
 fn wait_with_timeout(child: &mut Child, timeout: Duration) -> std::process::ExitStatus {
     let deadline = Instant::now() + timeout;
     loop {
