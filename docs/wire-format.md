@@ -322,7 +322,7 @@ does not distinguish those.
 limited per IP address, so a client that loops on a 401 will exhaust
 that budget and start getting 429s — and because the budget is shared
 by everyone behind the same address, it will do that to every other
-Screenward device on the network too. On a school or household NAT
+Screenwarden device on the network too. On a school or household NAT
 that means one misconfigured client taking out its neighbours.
 
 The correct response to a 401 is to stop making device requests, keep

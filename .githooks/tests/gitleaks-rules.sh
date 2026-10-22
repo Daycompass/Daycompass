@@ -1,5 +1,5 @@
 #!/bin/sh
-# Verifies the "screenward-app-token" rule in .gitleaks.toml.
+# Verifies the "screenwarden-app-token" rule in .gitleaks.toml.
 #
 # Run it manually, or let CI run it:
 #   .githooks/tests/gitleaks-rules.sh
@@ -27,7 +27,7 @@ fi
 
 repo_root=$(git rev-parse --show-toplevel)
 config="${repo_root}/.gitleaks.toml"
-rule="screenward-app-token"
+rule="screenwarden-app-token"
 failures=0
 
 # 32 bytes of randomness as base64url without padding, which is always

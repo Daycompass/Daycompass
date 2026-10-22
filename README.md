@@ -1,6 +1,6 @@
-# Screenward
+# Screenwarden
 
-Screenward is an open-source, self-hosted screentime backend for students,
+Screenwarden is an open-source, self-hosted screentime backend for students,
 built so schools and individuals can run their own instance instead of
 relying on a third-party service.
 
@@ -26,7 +26,7 @@ to log in yet. The server notices this, generates a single-use **setup
 token**, and prints it to standard output:
 
 ```text
-Screenward first-time setup: no admin account exists yet.
+Screenwarden first-time setup: no admin account exists yet.
 Create one within 60 minutes by sending this token, a username and a
 password to POST http://127.0.0.1:8080/api/v1/setup
 Setup token: swb_...
@@ -92,13 +92,13 @@ plain HTTP a browser will refuse to store the cookie at all. Command
 line clients are unaffected.
 
 If the server is reachable at anything other than a loopback address,
-`SCREENWARD_PUBLIC_URL` is required: it is what incoming `Origin`
+`SCREENWARDEN_PUBLIC_URL` is required: it is what incoming `Origin`
 headers are checked against, and the server refuses to start without it.
 
 ### Behind a reverse proxy
 
 `X-Forwarded-For` is ignored unless the connecting peer is listed in
-`SCREENWARD_TRUSTED_PROXIES` (a comma-separated list of CIDRs, empty by
+`SCREENWARDEN_TRUSTED_PROXIES` (a comma-separated list of CIDRs, empty by
 default). Set it to the addresses of your own proxies, or per-client
 rate limiting will count every request against the proxy instead.
 
@@ -166,7 +166,7 @@ The endpoint is rate limited **per session**, in front of the Argon2
 semaphore, because each attempt costs one verification plus one hash -
 the most expensive thing an authenticated caller can ask for. Every
 attempt counts, including successful ones. See
-`SCREENWARD_RATE_LIMIT_PW_CHANGE` in `.env.example`.
+`SCREENWARDEN_RATE_LIMIT_PW_CHANGE` in `.env.example`.
 
 Per session rather than per account on purpose: someone who has stolen
 a session cannot exhaust the budget the owner needs to lock them out.
