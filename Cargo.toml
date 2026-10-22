@@ -1,8 +1,8 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/screenward-proto",
-    "crates/screenward-server",
+    "crates/screenwarden-proto",
+    "crates/screenwarden-server",
 ]
 
 [workspace.package]
@@ -75,7 +75,7 @@ uuid = { version = "~1.28", features = ["v7"] }
 # 32 random bytes straight from the OS CSPRNG. Already in the graph via
 # uuid; declared directly because token generation depends on it.
 getrandom = { version = "~0.4" }
-# CIDR parsing and containment checks for SCREENWARD_TRUSTED_PROXIES.
+# CIDR parsing and containment checks for SCREENWARDEN_TRUSTED_PROXIES.
 # Hand-rolling IPv6 prefix matching is error-prone; this crate has no
 # dependencies of its own.
 ipnet = { version = "~2.12" }

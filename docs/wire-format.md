@@ -69,7 +69,7 @@ endpoint a brand-new client calls.
 ```json
 {
   "pairing_code": "4K7M9-QRT2V",
-  "device_name": "Mika's Laptop",
+  "device_name": "Alice's Laptop",
   "platform": "linux"
 }
 ```
@@ -94,7 +94,7 @@ Case-insensitive.
   "device_token": "swd_…",
   "device": {
     "id": "0199…",
-    "name": "Mika's Laptop",
+    "name": "Alice's Laptop",
     "platform": "linux",
     "created_at": 1800000000,
     "last_seen_at": 1800000000,
@@ -130,7 +130,7 @@ Device auth. Confirms identity and reports the server's clock.
 ```json
 {
   "id": "0199…",
-  "name": "Mika's Laptop",
+  "name": "Alice's Laptop",
   "platform": "linux",
   "server_time": 1800000000
 }
@@ -322,7 +322,7 @@ does not distinguish those.
 limited per IP address, so a client that loops on a 401 will exhaust
 that budget and start getting 429s — and because the budget is shared
 by everyone behind the same address, it will do that to every other
-Screenward device on the network too. On a school or household NAT
+Screenwarden device on the network too. On a school or household NAT
 that means one misconfigured client taking out its neighbours.
 
 The correct response to a 401 is to stop making device requests, keep

@@ -8,13 +8,13 @@
 # it is discoverable from the repository itself.
 #
 # It applies to:
-#   crates/screenward-server/src/auth/**
-#   crates/screenward-server/src/clientip.rs
-#   crates/screenward-server/src/ratelimit.rs
-#   crates/screenward-server/src/routes/auth.rs
-#   crates/screenward-server/src/routes/setup.rs
-#   crates/screenward-server/src/middleware.rs
-#   crates/screenward-server/migrations/** touching users, sessions or
+#   crates/screenwarden-server/src/auth/**
+#   crates/screenwarden-server/src/clientip.rs
+#   crates/screenwarden-server/src/ratelimit.rs
+#   crates/screenwarden-server/src/routes/auth.rs
+#   crates/screenwarden-server/src/routes/setup.rs
+#   crates/screenwarden-server/src/middleware.rs
+#   crates/screenwarden-server/migrations/** touching users, sessions or
 #     setup_tokens
 #
 # See CONTRIBUTING.md for what a reviewer should look for.

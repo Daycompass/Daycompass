@@ -1,12 +1,12 @@
-title = "Screenward gitleaks config"
+title = "Screenwarden gitleaks config"
 
 [extend]
 # Start from gitleaks' default ruleset and add our own rule on top.
 useDefault = true
 
 [[rules]]
-id = "screenward-app-token"
-description = "Screenward application token (sw<letter>_ prefixed)"
+id = "screenwarden-app-token"
+description = "Screenwarden application token (sw<letter>_ prefixed)"
 # Covers every current and future one-letter prefix: sws_ (session),
 # swb_ (bootstrap/setup), swd_ (device), and whatever comes next. The
 # body is 32 random bytes in base64url without padding, which is always

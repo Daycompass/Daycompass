@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-Screenward: self-hosted, open-source (AGPL-3.0) screen time backend for
+Screenwarden: self-hosted, open-source (AGPL-3.0) screen time backend for
 students. Backend only. Clients live in other repos. A server-rendered
 web dashboard (askama or maud, htmx) is planned for M5.
 

@@ -1,5 +1,5 @@
 #!/bin/sh
-# Screenward pre-commit hook: block secrets before they reach history.
+# Screenwarden pre-commit hook: block secrets before they reach history.
 #
 # Activation (one-time, per clone):
 #   git config core.hooksPath .githooks

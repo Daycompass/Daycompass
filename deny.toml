@@ -43,7 +43,7 @@ multiple-versions = "warn"
 wildcards = "deny"
 # The workspace's own path-dependency members are not on crates.io and have
 # no version to pin; this applies the wildcard rule only to real external
-# dependencies, not to internal "path = ..." crates like screenward-proto.
+# dependencies, not to internal "path = ..." crates like screenwarden-proto.
 allow-wildcard-paths = true
 deny = []
 
