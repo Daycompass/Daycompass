@@ -15,6 +15,7 @@
 //! | Topic | Module |
 //! | --- | --- |
 //! | Token format, why only hashes are stored, constant-time comparison | [`token`] |
+//! | Device tokens: bearer only, cookies refused, revocation uncached | [`device`] |
 //! | The `__Host-sws` cookie and its attributes, by hand and why | [`cookie`] |
 //! | CSRF tokens: derived not stored, what that buys and costs | [`csrf`] |
 //! | The `Origin` rule, including why an absent header is allowed | [`origin`] |
@@ -38,6 +39,7 @@
 
 pub mod cookie;
 pub mod csrf;
+pub mod device;
 pub mod extract;
 pub mod login;
 pub mod origin;

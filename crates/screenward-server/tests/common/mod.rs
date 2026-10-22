@@ -44,6 +44,13 @@ pub const GENEROUS_LIMITS: &[(&str, &str)] = &[
     ("SCREENWARD_RATE_LIMIT_LOGIN_USERNAME", "1000/300"),
     ("SCREENWARD_RATE_LIMIT_SETUP_IP", "1000/3600"),
     ("SCREENWARD_RATE_LIMIT_PW_CHANGE", "1000/900"),
+    ("SCREENWARD_RATE_LIMIT_PAIR_IP", "1000/300"),
+    ("SCREENWARD_RATE_LIMIT_PAIR_GLOBAL", "100000/60"),
+    ("SCREENWARD_RATE_LIMIT_INGEST_DEVICE", "1000/60"),
+    // Generous, but not so generous that a test about this bucket
+    // cannot reach it. `tests/device_auth_limit.rs` sets its own
+    // tight values rather than relying on this one.
+    ("SCREENWARD_RATE_LIMIT_DEVICE_AUTH_FAIL", "1000/60"),
 ];
 
 /// A running app plus the pool behind it.
@@ -275,6 +282,112 @@ impl TestApp {
         (id, session)
     }
 
+    /// Mints a pairing code for `session`'s account, over HTTP.
+    pub async fn issue_pairing_code(&self, session: &Session) -> String {
+        let response = self
+            .send(
+                TestRequest::post("/api/v1/pairing-codes")
+                    .origin(GOOD_ORIGIN)
+                    .authenticated(session),
+            )
+            .await;
+        assert_eq!(
+            response.status,
+            StatusCode::CREATED,
+            "minting a pairing code must succeed: {:?}",
+            response.body
+        );
+        response.body["pairing_code"]
+            .as_str()
+            .expect("a pairing code in the body")
+            .to_owned()
+    }
+
+    /// Pairs a device for `session`'s account and returns it.
+    ///
+    /// Goes through the real two-step flow - mint, then redeem - so
+    /// every test that needs a device is also exercising pairing.
+    pub async fn pair_device(&self, session: &Session, name: &str, platform: &str) -> Device {
+        let code = self.issue_pairing_code(session).await;
+        self.redeem_pairing_code(&code, name, platform).await
+    }
+
+    /// Redeems a code that is already in hand, asserting it worked.
+    pub async fn redeem_pairing_code(&self, code: &str, name: &str, platform: &str) -> Device {
+        let response = self
+            .send(TestRequest::post("/api/v1/pair").json(json!({
+                "pairing_code": code,
+                "device_name": name,
+                "platform": platform,
+            })))
+            .await;
+        assert_eq!(
+            response.status,
+            StatusCode::CREATED,
+            "pairing must succeed: {:?}",
+            response.body
+        );
+
+        Device {
+            token: response.body["device_token"]
+                .as_str()
+                .expect("a device token in the body")
+                .to_owned(),
+            id: response.body["device"]["id"]
+                .as_str()
+                .expect("the device's id")
+                .to_owned(),
+        }
+    }
+
+    /// Mints a code, returning `None` if the account is at its cap.
+    ///
+    /// The fallible counterpart to [`TestApp::issue_pairing_code`],
+    /// for the test that fills the cap deliberately.
+    pub async fn issue_pairing_code_raw(&self, session: &Session) -> Option<String> {
+        let response = self
+            .send(
+                TestRequest::post("/api/v1/pairing-codes")
+                    .origin(GOOD_ORIGIN)
+                    .authenticated(session),
+            )
+            .await;
+        response.body["pairing_code"].as_str().map(str::to_owned)
+    }
+
+    /// Ages every outstanding pairing code out.
+    ///
+    /// Reaches into the database rather than sleeping: the expiry is
+    /// ten minutes, and the thing under test is the `expires_at`
+    /// comparison, not the clock.
+    pub async fn expire_all_pairing_codes(&self) {
+        sqlx::query("UPDATE pairing_codes SET expires_at = 1")
+            .execute(&self.pool)
+            .await
+            .expect("expiring the codes must succeed");
+    }
+
+    pub async fn count_pairing_codes(&self) -> i64 {
+        sqlx::query_scalar("SELECT COUNT(*) FROM pairing_codes")
+            .fetch_one(&self.pool)
+            .await
+            .expect("counting must succeed")
+    }
+
+    pub async fn count_devices(&self) -> i64 {
+        sqlx::query_scalar("SELECT COUNT(*) FROM devices")
+            .fetch_one(&self.pool)
+            .await
+            .expect("counting must succeed")
+    }
+
+    pub async fn count_events(&self) -> i64 {
+        sqlx::query_scalar("SELECT COUNT(*) FROM events")
+            .fetch_one(&self.pool)
+            .await
+            .expect("counting must succeed")
+    }
+
     /// Dumps every value in every table as text, for the no-plaintext
     /// scan.
     pub async fn dump_all_values(&self) -> Vec<String> {
@@ -350,6 +463,13 @@ pub struct Session {
     pub csrf_token: String,
 }
 
+/// What a successful pairing hands back.
+pub struct Device {
+    /// The bearer token, shown exactly once.
+    pub token: String,
+    pub id: String,
+}
+
 /// 32 bytes of randomness as base64url: well above the 12-character
 /// minimum, and never a literal in the sources.
 pub fn random_secret() -> String {
@@ -366,14 +486,22 @@ pub fn random_secret() -> String {
 pub struct TestRequest {
     method: Method,
     uri: String,
-    peer: String,
+    peer: Option<String>,
     /// Every `Origin` header to send, in order. A list rather than one
     /// value so a test can send two, which the server must refuse.
     origins: Vec<String>,
     cookie: Option<String>,
     csrf: Option<String>,
+    /// Every `Authorization` header to send, in order. A list so a
+    /// test can send two, which the server must refuse.
+    authorization: Vec<String>,
     forwarded: Vec<String>,
     body: Option<String>,
+    /// Sent instead of a JSON body, for the oversized-body tests.
+    raw_body: Option<Vec<u8>>,
+    /// Suppresses the `Content-Type` header a body would otherwise
+    /// imply, for the wrong-content-type test.
+    omit_content_type: bool,
 }
 
 impl TestRequest {
@@ -397,17 +525,20 @@ impl TestRequest {
         Self {
             method,
             uri: uri.to_owned(),
-            peer: DEFAULT_PEER.to_owned(),
+            peer: Some(DEFAULT_PEER.to_owned()),
             origins: Vec::new(),
             cookie: None,
             csrf: None,
+            authorization: Vec::new(),
             forwarded: Vec::new(),
             body: None,
+            raw_body: None,
+            omit_content_type: false,
         }
     }
 
     pub fn peer(mut self, peer: &str) -> Self {
-        self.peer = peer.to_owned();
+        self.peer = Some(peer.to_owned());
         self
     }
 
@@ -444,10 +575,53 @@ impl TestRequest {
         self.cookie(&session.cookie).csrf(&session.csrf_token)
     }
 
+    /// Adds an `Authorization` header verbatim. Calling it twice sends
+    /// two, which the server must refuse.
+    pub fn authorization(mut self, value: &str) -> Self {
+        self.authorization.push(value.to_owned());
+        self
+    }
+
+    /// Authenticates as `device`, with the canonical scheme spelling.
+    pub fn authenticated_as_device(self, device: &Device) -> Self {
+        self.authorization(&format!("Bearer {}", device.token))
+    }
+
+    /// A bearer token with the scheme spelled however the test likes,
+    /// for the case-insensitivity checks.
+    pub fn bearer_with_scheme(self, scheme: &str, token: &str) -> Self {
+        self.authorization(&format!("{scheme} {token}"))
+    }
+
+    /// Drops the peer address the connect-info extractor needs.
+    ///
+    /// Normally `into_make_service_with_connect_info` supplies it and
+    /// the harness fakes it; this is for the tests that check what
+    /// happens when it is missing, which must be a refusal rather
+    /// than an uncounted request.
+    pub fn without_peer(mut self) -> Self {
+        self.peer = None;
+        self
+    }
+
+    /// Sends `bytes` as the body, with a JSON content type, bypassing
+    /// the JSON builder. For the body-size limit tests.
+    pub fn raw_json(mut self, bytes: Vec<u8>) -> Self {
+        self.raw_body = Some(bytes);
+        self
+    }
+
+    /// Sends the body without a `Content-Type` header.
+    pub fn without_content_type(mut self) -> Self {
+        self.omit_content_type = true;
+        self
+    }
+
     fn build(self) -> Request<Body> {
         let mut builder = Request::builder().method(self.method).uri(&self.uri);
 
-        if self.body.is_some() {
+        let has_body = self.body.is_some() || self.raw_body.is_some();
+        if has_body && !self.omit_content_type {
             builder = builder.header(header::CONTENT_TYPE, "application/json");
         }
         for origin in &self.origins {
@@ -459,20 +633,26 @@ impl TestRequest {
         if let Some(csrf) = &self.csrf {
             builder = builder.header("x-csrf-token", csrf);
         }
+        for value in &self.authorization {
+            builder = builder.header(header::AUTHORIZATION, value);
+        }
         for value in &self.forwarded {
             builder = builder.header("x-forwarded-for", value);
         }
 
-        let body = match self.body {
-            Some(json) => Body::from(json),
-            None => Body::empty(),
+        let body = match (self.raw_body, self.body) {
+            (Some(bytes), _) => Body::from(bytes),
+            (None, Some(json)) => Body::from(json),
+            (None, None) => Body::empty(),
         };
         let mut request = builder.body(body).expect("the request must be valid");
 
         // Normally set by `into_make_service_with_connect_info`; the
         // ClientAddr extractor fails closed without it.
-        let peer: SocketAddr = self.peer.parse().expect("a valid peer address");
-        request.extensions_mut().insert(ConnectInfo(peer));
+        if let Some(peer) = self.peer {
+            let peer: SocketAddr = peer.parse().expect("a valid peer address");
+            request.extensions_mut().insert(ConnectInfo(peer));
+        }
         request
     }
 }

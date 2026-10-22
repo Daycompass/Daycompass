@@ -14,7 +14,9 @@ use crate::auth::password::{HashError, Hasher};
 use crate::auth::session::SessionPolicy;
 use crate::clientip::ClientKey;
 use crate::config::{Config, PublicUrl, TrustedProxies};
-use crate::ratelimit::{RateLimiter, SessionKey, UsernameKey};
+use crate::devices::service::DevicePolicy;
+use crate::events::validate::EventWindow;
+use crate::ratelimit::{DeviceKey, GlobalKey, RateLimiter, SessionKey, UsernameKey};
 
 /// Cloned once per request by axum. Every field is cheap to clone: the
 /// pool and the hasher are handles to shared state rather than copies of
@@ -32,6 +34,10 @@ pub struct AppState {
     pub decoy_password_hash: Arc<String>,
     pub trusted_proxies: TrustedProxies,
     pub limits: Limits,
+    /// The device cap a pairing is subject to.
+    pub device_policy: DevicePolicy,
+    /// How far back a reported event may be dated.
+    pub event_window: EventWindow,
 }
 
 /// The rate limiters, one per bucket.
@@ -47,6 +53,24 @@ pub struct Limits {
     /// Password changes, keyed by session. See [`SessionKey`] for why
     /// the session and not the account or the address.
     pub pw_change: Arc<RateLimiter<SessionKey>>,
+    /// Pairing attempts, per client address.
+    pub pair_ip: Arc<RateLimiter<ClientKey>>,
+    /// Pairing attempts across the whole instance. One shared key, so
+    /// this is a ceiling on the endpoint rather than a per-caller
+    /// limit; see the default in [`crate::config`] for the
+    /// denial-of-service trade-off that comes with that.
+    pub pair_global: Arc<RateLimiter<GlobalKey>>,
+    /// Ingest requests, per device. Keyed on the device the access
+    /// layer resolved, so an unauthenticated caller never reaches it.
+    pub ingest_device: Arc<RateLimiter<DeviceKey>>,
+    /// *Failed* device authentications, per client address.
+    ///
+    /// The only limiter consulted before authentication, and so the
+    /// only one bounding an anonymous caller on the device routes. It
+    /// is peeked before the lookup and charged only on failure, which
+    /// the shared rate-limit layer cannot express - see
+    /// [`crate::routes::LimitKey::PeerBeforeAuth`].
+    pub device_auth_fail: Arc<RateLimiter<ClientKey>>,
 }
 
 impl Limits {
@@ -66,6 +90,27 @@ impl Limits {
             )),
             pw_change: Arc::new(RateLimiter::new(
                 config.rate_limit_pw_change,
+                config.rate_limit_max_entries,
+            )),
+            pair_ip: Arc::new(RateLimiter::new(
+                config.rate_limit_pair_ip,
+                config.rate_limit_max_entries,
+            )),
+            // One key ever, so one entry. The bound is still passed
+            // for uniformity; it can never be reached.
+            pair_global: Arc::new(RateLimiter::new(config.rate_limit_pair_global, 1)),
+            ingest_device: Arc::new(RateLimiter::new(
+                config.rate_limit_ingest_device,
+                config.rate_limit_max_entries,
+            )),
+            // Bounded by the same `max_entries` as every other keyed
+            // limiter. That bound is what keeps this one from being a
+            // memory vector despite being reachable unauthenticated:
+            // `RateLimiter::peek` never inserts, and the charge path
+            // goes through `check`, which reclaims ended windows and
+            // then evicts before exceeding the cap.
+            device_auth_fail: Arc::new(RateLimiter::new(
+                config.rate_limit_device_auth_fail,
                 config.rate_limit_max_entries,
             )),
         }
@@ -97,6 +142,12 @@ impl AppState {
             decoy_password_hash,
             trusted_proxies: config.trusted_proxies.clone(),
             limits: Limits::new(config),
+            device_policy: DevicePolicy {
+                max_devices_per_user: config.max_devices_per_user,
+            },
+            event_window: EventWindow {
+                max_age: config.event_max_age,
+            },
         })
     }
 }

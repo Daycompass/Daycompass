@@ -1,3 +1,22 @@
 # Placeholder CODEOWNERS - replace with real GitHub usernames/teams
 # before enforcing required reviews.
-* @OWNER-PLACEHOLDER
+#
+# Authentication code requires TWO approving reviews, not one. This file
+# cannot express that - GitHub's "Require approvals" count is a branch
+# protection setting, not a CODEOWNERS one - so the rule is configured
+# in the repository settings and recorded here and in CONTRIBUTING.md so
+# it is discoverable from the repository itself.
+#
+# It applies to:
+#   crates/screenward-server/src/auth/**
+#   crates/screenward-server/src/clientip.rs
+#   crates/screenward-server/src/ratelimit.rs
+#   crates/screenward-server/src/routes/auth.rs
+#   crates/screenward-server/src/routes/setup.rs
+#   crates/screenward-server/src/middleware.rs
+#   crates/screenward-server/migrations/** touching users, sessions or
+#     setup_tokens
+#
+# See CONTRIBUTING.md for what a reviewer should look for.
+* @miiiiiiiiika
+* @TadB0x

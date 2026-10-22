@@ -86,6 +86,25 @@ pub enum ErrorKind {
     /// would silently undo the one that won.
     PasswordChangeConflict,
 
+    // Devices and pairing.
+    /// A pairing code that was unknown, expired, already redeemed, or
+    /// malformed. One kind for all four, so the response cannot say
+    /// which - an unauthenticated caller must not learn whether a code
+    /// ever existed.
+    InvalidPairingCode,
+    /// A valid code whose owner is already at the device cap. Distinct
+    /// from the above on purpose: reaching it requires a valid code,
+    /// so it is not an oracle, and the person pairing needs to know
+    /// why it failed.
+    DeviceLimitReached,
+    /// The account already holds the maximum number of live pairing
+    /// codes. Only ever returned to the owner, who can see their own.
+    PairingCodeLimitReached,
+    /// The platform field named something outside the known set.
+    PlatformUnknown,
+    /// The batch carried more events than one request may.
+    BatchTooLarge,
+
     // Input policies. These describe public rules and never echo what
     // was sent.
     UsernameLength,
@@ -94,6 +113,8 @@ pub enum ErrorKind {
     PasswordLength,
     /// The role field named something other than the two known roles.
     RoleUnknown,
+    DeviceNameLength,
+    DeviceNameCharset,
 }
 
 impl ErrorKind {
@@ -104,11 +125,15 @@ impl ErrorKind {
             | Self::UsernameCharset
             | Self::PasswordBlank
             | Self::PasswordLength
-            | Self::RoleUnknown => StatusCode::BAD_REQUEST,
+            | Self::RoleUnknown
+            | Self::DeviceNameLength
+            | Self::DeviceNameCharset
+            | Self::PlatformUnknown => StatusCode::BAD_REQUEST,
             Self::Unauthorized
             | Self::Unauthenticated
             | Self::InvalidCredentials
-            | Self::InvalidSetupToken => StatusCode::UNAUTHORIZED,
+            | Self::InvalidSetupToken
+            | Self::InvalidPairingCode => StatusCode::UNAUTHORIZED,
             Self::Forbidden
             | Self::CsrfTokenMissing
             | Self::CsrfTokenInvalid
@@ -116,12 +141,14 @@ impl ErrorKind {
             | Self::OriginMismatch
             | Self::CurrentPasswordInvalid => StatusCode::FORBIDDEN,
             Self::NotFound => StatusCode::NOT_FOUND,
-            Self::UsernameTaken | Self::LastAdminProtected | Self::PasswordChangeConflict => {
-                StatusCode::CONFLICT
-            }
+            Self::UsernameTaken
+            | Self::LastAdminProtected
+            | Self::PasswordChangeConflict
+            | Self::DeviceLimitReached
+            | Self::PairingCodeLimitReached => StatusCode::CONFLICT,
             Self::MethodNotAllowed => StatusCode::METHOD_NOT_ALLOWED,
             Self::RequestTimeout => StatusCode::REQUEST_TIMEOUT,
-            Self::PayloadTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
+            Self::PayloadTooLarge | Self::BatchTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
             Self::UnsupportedMediaType => StatusCode::UNSUPPORTED_MEDIA_TYPE,
             Self::UnprocessableEntity => StatusCode::UNPROCESSABLE_ENTITY,
             Self::RateLimited => StatusCode::TOO_MANY_REQUESTS,
@@ -160,6 +187,12 @@ impl ErrorKind {
             Self::UsernameLength | Self::UsernameCharset => "invalid_username",
             Self::PasswordBlank | Self::PasswordLength => "invalid_password",
             Self::RoleUnknown => "invalid_role",
+            Self::InvalidPairingCode => "invalid_pairing_code",
+            Self::DeviceLimitReached => "device_limit_reached",
+            Self::PairingCodeLimitReached => "pairing_code_limit_reached",
+            Self::PlatformUnknown => "invalid_platform",
+            Self::BatchTooLarge => "batch_too_large",
+            Self::DeviceNameLength | Self::DeviceNameCharset => "invalid_device_name",
         }
     }
 
@@ -205,6 +238,19 @@ impl ErrorKind {
                 "the password was changed by another request; please try again"
             }
             Self::RoleUnknown => "the role must be either admin or user",
+            Self::InvalidPairingCode => "the pairing code is not valid",
+            Self::DeviceLimitReached => "this account has reached the maximum number of devices",
+            Self::PairingCodeLimitReached => {
+                "this account already has the maximum number of active pairing codes"
+            }
+            Self::PlatformUnknown => {
+                "the platform must be one of android, windows, macos, linux or ios"
+            }
+            Self::BatchTooLarge => "this request carries too many events",
+            Self::DeviceNameLength => "the device name must be between 1 and 64 characters long",
+            Self::DeviceNameCharset => {
+                "the device name may not contain control or text-direction characters"
+            }
         }
     }
 }
@@ -241,6 +287,13 @@ pub(crate) const ALL_ERROR_KINDS: &[ErrorKind] = &[
     ErrorKind::PasswordBlank,
     ErrorKind::PasswordLength,
     ErrorKind::RoleUnknown,
+    ErrorKind::InvalidPairingCode,
+    ErrorKind::DeviceLimitReached,
+    ErrorKind::PairingCodeLimitReached,
+    ErrorKind::PlatformUnknown,
+    ErrorKind::BatchTooLarge,
+    ErrorKind::DeviceNameLength,
+    ErrorKind::DeviceNameCharset,
 ];
 
 /// Compile-time proof that every code and message is a constant.
@@ -472,6 +525,40 @@ mod tests {
             message.contains(&password::MIN_CHARS.to_string())
                 && message.contains(&password::MAX_CHARS.to_string()),
             "the password length message disagrees with the policy: {message}"
+        );
+
+        let message = ErrorKind::DeviceNameLength.message();
+        assert!(
+            message.contains(&crate::devices::name::MIN_CHARS.to_string())
+                && message.contains(&crate::devices::name::MAX_CHARS.to_string()),
+            "the device name length message disagrees with the policy: {message}"
+        );
+    }
+
+    /// The platform message spells out the whole set, which cannot be
+    /// interpolated into a `&'static str`. A platform added to the
+    /// enum and not to the message would leave a client told to send
+    /// something the server no longer considers exhaustive.
+    #[test]
+    fn the_platform_message_names_every_known_platform() {
+        let message = ErrorKind::PlatformUnknown.message();
+        for platform in crate::devices::platform::ALL_PLATFORMS {
+            assert!(
+                message.contains(platform.as_str()),
+                "{platform} is missing from: {message}"
+            );
+        }
+    }
+
+    /// The batch cap is stated in the wire documentation rather than
+    /// in this message, so the message must not claim a number that
+    /// could drift from the constant.
+    #[test]
+    fn the_batch_message_states_no_number() {
+        let message = ErrorKind::BatchTooLarge.message();
+        assert!(
+            !message.chars().any(|c| c.is_ascii_digit()),
+            "a number here would be a constant waiting to drift: {message}"
         );
     }
 

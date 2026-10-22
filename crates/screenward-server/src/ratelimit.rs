@@ -123,6 +123,41 @@ impl<K: Eq + Hash + Clone> RateLimiter<K> {
         Decision::Allowed
     }
 
+    /// Says whether `key` has budget left, **without spending any**.
+    ///
+    /// For the one policy [`check`](Self::check) cannot express: refuse
+    /// a caller who is already out of budget, but charge only when the
+    /// request turns out to be a failure. Device authentication needs
+    /// exactly that - a successful request must not consume the
+    /// failure budget - so it peeks first and charges later.
+    ///
+    /// Deliberately read-only, and in particular it **does not insert
+    /// an entry**. That matters because this is the one limiter
+    /// consulted before any authentication: if peeking created a map
+    /// entry, an unauthenticated flood of distinct addresses could
+    /// grow the map without ever charging anything. An unknown key has
+    /// full budget and leaves no trace.
+    pub fn peek(&self, key: &K, now: UnixTime) -> Decision {
+        let windows = self
+            .windows
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+
+        let Some(window) = windows.get(key) else {
+            return Decision::Allowed;
+        };
+        if window.has_ended(self.rule.window, now) {
+            return Decision::Allowed;
+        }
+        if window.count >= self.rule.max {
+            let elapsed = now.saturating_duration_since(window.started_at);
+            return Decision::Limited {
+                retry_after: self.rule.window.saturating_sub(elapsed),
+            };
+        }
+        Decision::Allowed
+    }
+
     /// Frees one slot. Linear in the number of entries, but only runs
     /// once the map is at its bound.
     fn make_room(&self, windows: &mut HashMap<K, Window>, now: UnixTime) {
@@ -217,6 +252,45 @@ impl SessionKey {
         Self(key)
     }
 }
+
+/// A rate limit key for one paired device.
+///
+/// Hashed like [`SessionKey`], and for the same two reasons: every
+/// entry is one fixed small size, and the limiter's state is not a
+/// list of which devices have been reporting.
+///
+/// Keyed by device rather than by account, because a device is what
+/// the token authenticates and what the limit is meant to bound. An
+/// account-wide bucket would let one misbehaving device spend the
+/// budget its owner's other devices need to sync.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct DeviceKey([u8; 16]);
+
+impl DeviceKey {
+    pub fn new(device_id: &str) -> Self {
+        let digest = Sha256::digest(device_id.as_bytes());
+        let mut key = [0u8; 16];
+        key.copy_from_slice(&digest[..16]);
+        Self(key)
+    }
+}
+
+/// The key for a limit that counts an endpoint as a whole rather than
+/// any particular caller.
+///
+/// A unit type, so there is exactly one bucket and the limiter holds
+/// exactly one entry. That is the point: it is a ceiling on how much
+/// work an endpoint can be made to do in total, used where the
+/// per-caller limit alone would let a flood from many addresses
+/// through.
+///
+/// Note what it costs. A shared bucket is also a lever: whoever fills
+/// it blocks everyone until the window rolls over. It is only
+/// appropriate where the limit can be set far above legitimate use -
+/// see the pairing ceiling in [`crate::config`] - and never as the
+/// primary defence for anything.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub struct GlobalKey;
 
 #[cfg(test)]
 mod tests {
@@ -375,6 +449,88 @@ mod tests {
         assert!(limiter.tracked() <= 64);
     }
 
+    // --- peeking --------------------------------------------------------
+
+    /// Peeking must never spend budget, however often it is done.
+    #[test]
+    fn peeking_does_not_consume_anything() {
+        let limiter = RateLimiter::new(rule(2, 60), 100);
+
+        for _ in 0..100 {
+            assert_eq!(limiter.peek(&"key", at(1_000)), Decision::Allowed);
+        }
+        // Still the full budget afterwards.
+        assert!(limiter.check("key", at(1_000)).is_allowed());
+        assert!(limiter.check("key", at(1_000)).is_allowed());
+        assert!(!limiter.check("key", at(1_000)).is_allowed());
+    }
+
+    /// And it must not create an entry. This is the property that
+    /// keeps a pre-authentication peek from being a memory vector: a
+    /// flood of distinct addresses that never gets as far as being
+    /// charged must leave the map empty.
+    #[test]
+    fn peeking_an_unknown_key_stores_nothing() {
+        let limiter = RateLimiter::new(rule(2, 60), 100);
+
+        for key in 0..1_000 {
+            assert_eq!(limiter.peek(&key, at(1_000)), Decision::Allowed);
+        }
+        assert_eq!(limiter.tracked(), 0, "peeking must leave no trace");
+    }
+
+    #[test]
+    fn peeking_reports_an_exhausted_key_with_a_retry_after() {
+        let limiter = RateLimiter::new(rule(1, 60), 100);
+        assert!(limiter.check("key", at(1_000)).is_allowed());
+
+        assert_eq!(
+            limiter.peek(&"key", at(1_000)),
+            Decision::Limited {
+                retry_after: Duration::from_secs(60)
+            }
+        );
+        assert_eq!(
+            limiter.peek(&"key", at(1_045)),
+            Decision::Limited {
+                retry_after: Duration::from_secs(15)
+            },
+            "the countdown must match what check() would have said"
+        );
+    }
+
+    /// The window reset, seen through `peek`. A caller who exhausted
+    /// the budget gets it back when the window ends, and the peek has
+    /// to agree with `check` about when that is.
+    #[test]
+    fn a_peeked_window_reopens_when_it_ends() {
+        let limiter = RateLimiter::new(rule(2, 60), 100);
+        assert!(limiter.check("key", at(1_000)).is_allowed());
+        assert!(limiter.check("key", at(1_000)).is_allowed());
+
+        // Exhausted, and still exhausted one second before the end.
+        assert!(!limiter.peek(&"key", at(1_000)).is_allowed());
+        assert!(!limiter.peek(&"key", at(1_059)).is_allowed());
+
+        // Open again exactly at the boundary, for both operations.
+        assert!(limiter.peek(&"key", at(1_060)).is_allowed());
+        assert!(limiter.check("key", at(1_060)).is_allowed());
+    }
+
+    /// Peek and check must never disagree about the same key at the
+    /// same instant, or a request could be admitted by one and
+    /// refused by the other.
+    #[test]
+    fn peek_agrees_with_check_at_every_point_in_a_window() {
+        let limiter = RateLimiter::new(rule(3, 60), 100);
+
+        for expected_allowed in [true, true, true, false, false] {
+            let peeked = limiter.peek(&"key", at(1_000)).is_allowed();
+            assert_eq!(peeked, expected_allowed);
+            assert_eq!(limiter.check("key", at(1_000)).is_allowed(), peeked);
+        }
+    }
+
     // --- username keys ------------------------------------------------
 
     #[test]
@@ -455,5 +611,73 @@ mod tests {
                 at(0)
             )
             .is_allowed());
+    }
+
+    // --- device keys --------------------------------------------------
+
+    #[test]
+    fn device_keys_are_per_device_and_fixed_size() {
+        let key = DeviceKey::new("00000000-0000-7000-8000-00000000000a");
+        assert_eq!(key, DeviceKey::new("00000000-0000-7000-8000-00000000000a"));
+        assert_ne!(key, DeviceKey::new("00000000-0000-7000-8000-00000000000b"));
+
+        let huge: String = std::iter::repeat_n('x', 100_000).collect();
+        assert_eq!(std::mem::size_of_val(&DeviceKey::new(&huge)), 16);
+    }
+
+    #[test]
+    fn a_device_key_does_not_contain_the_id() {
+        let id = "00000000-0000-7000-8000-00000000000a";
+        assert!(!format!("{:?}", DeviceKey::new(id)).contains(id));
+    }
+
+    /// One device hitting its ingest limit must not stop another
+    /// device of the same owner from syncing.
+    #[test]
+    fn one_devices_budget_is_not_another_devices() {
+        let limiter = RateLimiter::new(rule(1, 60), 100);
+        assert!(limiter
+            .check(DeviceKey::new("device-a"), at(0))
+            .is_allowed());
+        assert!(!limiter
+            .check(DeviceKey::new("device-a"), at(0))
+            .is_allowed());
+        assert!(
+            limiter
+                .check(DeviceKey::new("device-b"), at(0))
+                .is_allowed(),
+            "a second device starts with its own budget"
+        );
+    }
+
+    // --- the global key -----------------------------------------------
+
+    /// Every caller shares one bucket, which is what makes this a
+    /// ceiling on the endpoint rather than a per-caller limit.
+    #[test]
+    fn the_global_key_is_one_shared_bucket() {
+        let limiter = RateLimiter::new(rule(2, 60), 10);
+
+        assert!(limiter.check(GlobalKey, at(0)).is_allowed());
+        assert!(limiter.check(GlobalKey, at(0)).is_allowed());
+        assert!(
+            !limiter.check(GlobalKey, at(0)).is_allowed(),
+            "the ceiling must apply across callers"
+        );
+        assert_eq!(limiter.tracked(), 1, "one key means one entry, ever");
+    }
+
+    /// Being a ceiling, it must still be a *fixed window* and never a
+    /// lockout: whoever fills it blocks everyone, so the block has to
+    /// clear on its own.
+    #[test]
+    fn the_global_ceiling_always_clears_itself() {
+        let limiter = RateLimiter::new(rule(1, 60), 10);
+        assert!(limiter.check(GlobalKey, at(1_000)).is_allowed());
+        assert!(!limiter.check(GlobalKey, at(1_059)).is_allowed());
+        assert!(
+            limiter.check(GlobalKey, at(1_060)).is_allowed(),
+            "a shared bucket must never need an administrator to clear"
+        );
     }
 }
