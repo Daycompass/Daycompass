@@ -572,6 +572,18 @@ pub async fn reset_to_pending(
     .execute(&mut *tx)
     .await?;
 
+    // An outstanding, unredeemed pairing code is another way back into
+    // the account - it can still mint a brand-new device, independent
+    // of any session or the invite just replaced. A spent code
+    // (`used_at` set) is left alone: it is already permanently inert,
+    // since the redemption query itself only ever matches
+    // `used_at IS NULL`, so deleting it here would not close anything
+    // the reset does not already close.
+    sqlx::query("DELETE FROM pairing_codes WHERE user_id = ?1 AND used_at IS NULL")
+        .bind(target_id)
+        .execute(&mut *tx)
+        .await?;
+
     let sessions_ended = sqlx::query("DELETE FROM sessions WHERE user_id = ?1")
         .bind(target_id)
         .execute(&mut *tx)
