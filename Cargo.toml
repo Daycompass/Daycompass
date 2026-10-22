@@ -69,7 +69,7 @@ zeroize = { version = "~1.9" }
 # base64url without padding, for the 43-character token body. Pinned to
 # 0.22 rather than 0.23 deliberately: 0.22 is already in the dependency
 # graph via sqlx, so this adds no second version of the crate.
-base64 = { version = "~0.22" }
+base64 = { version = "~0.23" }
 # UUID v7 identifiers (time-ordered, so they index well in SQLite).
 uuid = { version = "~1.28", features = ["v7"] }
 # 32 random bytes straight from the OS CSPRNG. Already in the graph via
