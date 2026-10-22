@@ -29,10 +29,12 @@
 //! single.
 
 mod access;
+mod account;
 mod auth;
 mod devices;
 mod events;
 mod health;
+mod invites;
 mod pairing;
 mod setup;
 mod users;
@@ -157,6 +159,10 @@ pub enum Bucket {
     IngestDevice,
     /// *Failed* device authentications from one client address.
     DeviceAuthFail,
+    /// Invite redemption attempts from one client address.
+    InviteIp,
+    /// Invite redemption attempts across the whole instance.
+    InviteGlobal,
 }
 
 /// What a limiter counts a request against.
@@ -520,6 +526,54 @@ pub const INVENTORY: &[RouteSpec] = &[
         max_body_bytes: None,
         rate_limits: &[],
     },
+    // Resets an account to pending, in place of whatever password it
+    // had. An ordinary admin, cookie-authenticated write.
+    RouteSpec {
+        method: "POST",
+        path: "/api/v1/users/{id}/password-reset",
+        access: Access::Admin,
+        origin: OriginRule::Checked,
+        csrf: true,
+        sets_session_cookie: false,
+        max_body_bytes: None,
+        rate_limits: &[],
+    },
+    // Redeems an invite token in the body - an unguessable capability,
+    // same shape as the setup token - and hands back no cookie, which
+    // is what would normally earn the `Origin` exemption. It stays
+    // `Checked` anyway, deliberately: unlike setup and pairing, a
+    // redeemed invite activates an *existing* account rather than
+    // creating a throwaway one, so the same `Origin` check login gets
+    // is asked for here too. `RouteSpec::validate` permits an
+    // `Access::BodySecret` route to stay Origin-checked; only the
+    // *exemption* is whitelisted, so this does not touch
+    // `exactly_four_routes_skip_the_origin_check`.
+    RouteSpec {
+        method: "POST",
+        path: "/api/v1/invites/redeem",
+        access: Access::BodySecret,
+        origin: OriginRule::Checked,
+        csrf: false,
+        sets_session_cookie: false,
+        max_body_bytes: None,
+        rate_limits: &[
+            RateLimit::new(Bucket::InviteIp, LimitKey::Peer),
+            RateLimit::new(Bucket::InviteGlobal, LimitKey::Global),
+        ],
+    },
+    // An account's own log of invite redemptions and password resets.
+    // Session-authenticated and scoped to the caller alone - there is
+    // no admin variant and no id parameter to point it at anyone else.
+    RouteSpec {
+        method: "GET",
+        path: "/api/v1/account/log",
+        access: Access::Session,
+        origin: OriginRule::Checked,
+        csrf: false,
+        sets_session_cookie: false,
+        max_body_bytes: None,
+        rate_limits: &[],
+    },
     // --- devices and pairing ------------------------------------------
     //
     // An owner mints a pairing code from the dashboard, so this is an
@@ -675,6 +729,13 @@ pub fn router(state: AppState) -> Router {
     table.add("GET", "/api/v1/users", users::list_users);
     table.add("PATCH", "/api/v1/users/{id}", users::change_role);
     table.add("DELETE", "/api/v1/users/{id}", users::delete_user);
+    table.add(
+        "POST",
+        "/api/v1/users/{id}/password-reset",
+        users::reset_password,
+    );
+    table.add("POST", "/api/v1/invites/redeem", invites::redeem);
+    table.add("GET", "/api/v1/account/log", account::log);
     table.add("POST", "/api/v1/pairing-codes", pairing::create_code);
     table.add("POST", "/api/v1/pair", pairing::pair_device);
     table.add("POST", "/api/v1/events", events::ingest);
@@ -849,6 +910,9 @@ pub struct UserDetailView {
     pub id: String,
     pub username: String,
     pub role: &'static str,
+    /// `"active"` or `"pending"` - a pending account has not yet
+    /// redeemed its invite.
+    pub status: &'static str,
     pub created_at: i64,
 }
 
@@ -858,6 +922,7 @@ impl From<&UserSummary> for UserDetailView {
             id: user.id.clone(),
             username: user.username.as_str().to_owned(),
             role: user.role.as_str(),
+            status: user.status.as_str(),
             created_at: user.created_at.as_secs(),
         }
     }
@@ -1256,10 +1321,13 @@ mod tests {
         use crate::auth::time::UnixTime;
         use crate::auth::username::Username;
 
+        use crate::auth::store::AccountStatus;
+
         let summary = UserSummary {
             id: "user-1".to_owned(),
             username: Username::parse("alice").unwrap(),
             role: Role::Admin,
+            status: AccountStatus::Active,
             created_at: UnixTime::from_secs(7),
         };
         let json = serde_json::to_value(UserDetailView::from(&summary)).unwrap();
@@ -1270,6 +1338,6 @@ mod tests {
             .map(String::as_str)
             .collect();
         keys.sort_unstable();
-        assert_eq!(keys, ["created_at", "id", "role", "username"]);
+        assert_eq!(keys, ["created_at", "id", "role", "status", "username"]);
     }
 }

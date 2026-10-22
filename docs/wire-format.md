@@ -69,7 +69,7 @@ endpoint a brand-new client calls.
 ```json
 {
   "pairing_code": "4K7M9-QRT2V",
-  "device_name": "Mika's Laptop",
+  "device_name": "Alice's Laptop",
   "platform": "linux"
 }
 ```
@@ -94,7 +94,7 @@ Case-insensitive.
   "device_token": "swd_…",
   "device": {
     "id": "0199…",
-    "name": "Mika's Laptop",
+    "name": "Alice's Laptop",
     "platform": "linux",
     "created_at": 1800000000,
     "last_seen_at": 1800000000,
@@ -130,7 +130,7 @@ Device auth. Confirms identity and reports the server's clock.
 ```json
 {
   "id": "0199…",
-  "name": "Mika's Laptop",
+  "name": "Alice's Laptop",
   "platform": "linux",
   "server_time": 1800000000
 }

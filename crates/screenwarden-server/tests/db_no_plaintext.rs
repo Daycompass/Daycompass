@@ -64,6 +64,30 @@ async fn no_plaintext_secret_is_ever_stored() {
         csrf_token: csrf_token.clone(),
     };
     let (_id, created_credentials) = app.create_account(&session, "bob", "user").await;
+
+    // A second account, created but not yet redeemed, so the invite
+    // token itself - a bearer secret in its own right - is in the dump
+    // too.
+    let (_pending_id, invite_token, _expires_at) =
+        app.create_pending_account(&session, "carol", "user").await;
+    let invite_password = common::random_secret();
+    let redeemed = app
+        .send(
+            TestRequest::post("/api/v1/invites/redeem")
+                .origin(GOOD_ORIGIN)
+                .json(json!({
+                    "invite_token": invite_token,
+                    "new_password": invite_password,
+                })),
+        )
+        .await;
+    assert_eq!(
+        redeemed.status,
+        StatusCode::NO_CONTENT,
+        "{:?}",
+        redeemed.body
+    );
+
     let changed_password = common::random_secret();
     let change = app
         .send(
@@ -124,6 +148,11 @@ async fn no_plaintext_secret_is_ever_stored() {
             created_credentials.password.as_str(),
         ),
         ("the changed password", changed_password.as_str()),
+        ("the invite token", invite_token.as_str()),
+        (
+            "the password chosen at redemption",
+            invite_password.as_str(),
+        ),
         ("the setup token", setup_token.as_str()),
         ("the session token", session_token.as_str()),
         // Derived, never stored: if this appears, something started
@@ -181,12 +210,25 @@ async fn no_plaintext_secret_is_ever_stored() {
 async fn what_is_stored_is_a_hash_of_the_expected_form() {
     let app = TestApp::new().await;
     let credentials = app.provision_admin().await;
-    app.log_in(&credentials).await;
+    let admin = app.log_in(&credentials).await;
 
-    let password_hash: String = sqlx::query_scalar("SELECT password_hash FROM users")
+    let (_id, invite_token, _expires_at) =
+        app.create_pending_account(&admin, "carol", "user").await;
+    assert!(invite_token.starts_with("swi_"));
+    let invite_hash: Vec<u8> = sqlx::query_scalar("SELECT token_hash FROM invite_tokens")
         .fetch_one(&app.pool)
         .await
-        .expect("the account must exist");
+        .expect("the invite row must exist");
+    assert_eq!(invite_hash.len(), 32, "a SHA-256 digest");
+
+    // Scoped to the admin by username: a second, pending account now
+    // also exists, and its `password_hash` is the empty-string
+    // sentinel rather than a PHC string.
+    let password_hash: String =
+        sqlx::query_scalar("SELECT password_hash FROM users WHERE username = 'alice'")
+            .fetch_one(&app.pool)
+            .await
+            .expect("the account must exist");
     assert!(
         password_hash.starts_with("$argon2id$v=19$m=19456,t=2,p=1$"),
         "unexpected stored hash form: {password_hash}"

@@ -342,6 +342,31 @@ pub async fn touch_device(
     Ok(())
 }
 
+/// Revokes every live device belonging to `user_id`, inside a
+/// transaction the caller already holds the write lock for. Returns how
+/// many were revoked.
+///
+/// Takes a connection rather than the pool, like the private
+/// `active_admin_count` helper in `crate::auth::store`, so the SQL for
+/// this table stays here while still running inside the caller's own
+/// transaction. Used by an admin password reset, which must end a
+/// target's device tokens in the same transaction as the account
+/// reset, because otherwise a device could still authenticate in the
+/// window between the two writes.
+pub async fn revoke_all_for_user(
+    conn: &mut sqlx::SqliteConnection,
+    user_id: &str,
+    now: UnixTime,
+) -> Result<u64, StoreError> {
+    let result =
+        sqlx::query("UPDATE devices SET revoked_at = ?2 WHERE user_id = ?1 AND revoked_at IS NULL")
+            .bind(user_id)
+            .bind(now.as_secs())
+            .execute(&mut *conn)
+            .await?;
+    Ok(result.rows_affected())
+}
+
 // --- device management ------------------------------------------------
 
 /// One owner's devices, oldest first. Revoked ones are included, so the

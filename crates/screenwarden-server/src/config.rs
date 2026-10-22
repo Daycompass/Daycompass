@@ -50,6 +50,9 @@ const VAR_RATE_LIMIT_PAIR_IP: &str = "SCREENWARDEN_RATE_LIMIT_PAIR_IP";
 const VAR_RATE_LIMIT_PAIR_GLOBAL: &str = "SCREENWARDEN_RATE_LIMIT_PAIR_GLOBAL";
 const VAR_RATE_LIMIT_INGEST_DEVICE: &str = "SCREENWARDEN_RATE_LIMIT_INGEST_DEVICE";
 const VAR_RATE_LIMIT_DEVICE_AUTH_FAIL: &str = "SCREENWARDEN_RATE_LIMIT_DEVICE_AUTH_FAIL";
+const VAR_INVITE_TTL: &str = "SCREENWARDEN_INVITE_TTL_SECS";
+const VAR_RATE_LIMIT_INVITE_IP: &str = "SCREENWARDEN_RATE_LIMIT_INVITE_IP";
+const VAR_RATE_LIMIT_INVITE_GLOBAL: &str = "SCREENWARDEN_RATE_LIMIT_INVITE_GLOBAL";
 
 const DEFAULT_BIND_ADDR: &str = "127.0.0.1:8080";
 const DEFAULT_DATA_DIR: &str = "./data";
@@ -171,6 +174,24 @@ const DEFAULT_RATE_LIMIT_PAIR_GLOBAL: &str = "600/60";
 /// not the caller this limit exists to slow down.
 const DEFAULT_RATE_LIMIT_DEVICE_AUTH_FAIL: &str = "600/60";
 
+/// 72 hours. The setup token's one hour is too short for an invite:
+/// it is handed over in person - often on paper - and commonly redeemed
+/// at home that evening or the next day. A week is a long life for a
+/// credential a minor is carrying around, so this covers a weekend and
+/// nothing more.
+const DEFAULT_INVITE_TTL_SECS: u64 = 72 * 60 * 60;
+
+/// Ten invite redemptions per five minutes from one client address.
+/// Same shape as the login per-address bucket, for the same reason.
+const DEFAULT_RATE_LIMIT_INVITE_IP: &str = "10/300";
+
+/// Six hundred invite redemptions per minute across the whole instance.
+/// Same shape and the same trade-off as [`DEFAULT_RATE_LIMIT_PAIR_GLOBAL`]:
+/// a ceiling on total work, not a guessing defence - an invite token
+/// needs none, at 256 bits - and deliberately generous, because a
+/// shared bucket is itself a denial-of-service lever.
+const DEFAULT_RATE_LIMIT_INVITE_GLOBAL: &str = "600/60";
+
 /// Thirty ingest requests per minute for one device.
 ///
 /// At the 500-event batch cap that is fifteen thousand events a
@@ -214,6 +235,12 @@ pub struct Config {
     pub rate_limit_ingest_device: RateLimitRule,
     /// Failed device authentications from one address, per window.
     pub rate_limit_device_auth_fail: RateLimitRule,
+    /// How long a freshly issued invite token remains redeemable.
+    pub invite_ttl: Duration,
+    /// Invite redemption attempts from one client address, per window.
+    pub rate_limit_invite_ip: RateLimitRule,
+    /// Invite redemption attempts across the whole instance, per window.
+    pub rate_limit_invite_global: RateLimitRule,
 }
 
 /// Failed to load configuration. Messages name the offending variable but
@@ -515,6 +542,17 @@ impl Config {
             VAR_RATE_LIMIT_DEVICE_AUTH_FAIL,
             DEFAULT_RATE_LIMIT_DEVICE_AUTH_FAIL,
         )?;
+        let invite_ttl = seconds(source, VAR_INVITE_TTL, DEFAULT_INVITE_TTL_SECS)?;
+        let rate_limit_invite_ip = rule(
+            source,
+            VAR_RATE_LIMIT_INVITE_IP,
+            DEFAULT_RATE_LIMIT_INVITE_IP,
+        )?;
+        let rate_limit_invite_global = rule(
+            source,
+            VAR_RATE_LIMIT_INVITE_GLOBAL,
+            DEFAULT_RATE_LIMIT_INVITE_GLOBAL,
+        )?;
 
         Ok(Config {
             bind_addr,
@@ -538,6 +576,9 @@ impl Config {
             rate_limit_pair_global,
             rate_limit_ingest_device,
             rate_limit_device_auth_fail,
+            invite_ttl,
+            rate_limit_invite_ip,
+            rate_limit_invite_global,
         })
     }
 }
@@ -572,6 +613,9 @@ impl fmt::Debug for Config {
                 "rate_limit_device_auth_fail",
                 &self.rate_limit_device_auth_fail,
             )
+            .field("invite_ttl", &self.invite_ttl)
+            .field("rate_limit_invite_ip", &self.rate_limit_invite_ip)
+            .field("rate_limit_invite_global", &self.rate_limit_invite_global)
             .finish()
     }
 }
@@ -985,6 +1029,14 @@ mod tests {
         assert_eq!(config.rate_limit_pw_change.max, 5);
         assert_eq!(config.rate_limit_pw_change.window, Duration::from_secs(900));
         assert_eq!(config.rate_limit_max_entries, 10_000);
+        assert_eq!(config.invite_ttl, Duration::from_secs(259_200));
+        assert_eq!(config.rate_limit_invite_ip.max, 10);
+        assert_eq!(config.rate_limit_invite_ip.window, Duration::from_secs(300));
+        assert_eq!(config.rate_limit_invite_global.max, 600);
+        assert_eq!(
+            config.rate_limit_invite_global.window,
+            Duration::from_secs(60)
+        );
     }
 
     // --- public URL ---------------------------------------------------
@@ -1387,7 +1439,10 @@ mod tests {
                 "rate_limit_pair_ip: RateLimitRule { max: 10, window: 300s }, ",
                 "rate_limit_pair_global: RateLimitRule { max: 600, window: 60s }, ",
                 "rate_limit_ingest_device: RateLimitRule { max: 30, window: 60s }, ",
-                "rate_limit_device_auth_fail: RateLimitRule { max: 600, window: 60s }",
+                "rate_limit_device_auth_fail: RateLimitRule { max: 600, window: 60s }, ",
+                "invite_ttl: 259200s, ",
+                "rate_limit_invite_ip: RateLimitRule { max: 10, window: 300s }, ",
+                "rate_limit_invite_global: RateLimitRule { max: 600, window: 60s }",
                 " }",
             )
         );

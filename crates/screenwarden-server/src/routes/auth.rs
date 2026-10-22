@@ -204,6 +204,7 @@ pub async fn change_password(
         &auth.session.id,
         request.current_password,
         request.new_password,
+        UnixTime::now(),
     )
     .await;
 

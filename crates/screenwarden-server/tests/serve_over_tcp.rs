@@ -293,6 +293,40 @@ async fn setup_over_tcp_reaches_its_handler() {
     server.stop().await;
 }
 
+/// Redeeming an invite is the newest `BodySecret` route and carries its
+/// own per-address rate limit, so it needs a client address exactly
+/// like setup and pairing do.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn redeem_over_tcp_reaches_its_handler() {
+    let app = TestApp::new().await;
+    let admin = app.provisioned_admin().await.1;
+    let (_id, token, _expires_at) = app.create_pending_account(&admin, "bob", "user").await;
+    let server = Server::start(app.router()).await;
+
+    let response = server
+        .post_json(
+            "/api/v1/invites/redeem",
+            &json!({
+                "invite_token": token,
+                "new_password": common::random_secret(),
+            })
+            .to_string(),
+        )
+        .await;
+
+    assert_ne!(
+        response.status, 500,
+        "redeem returned 500: the peer address is not reaching the handler"
+    );
+    assert_eq!(response.status, 204, "body was {:?}", response.body);
+    assert!(
+        response.header("set-cookie").is_none(),
+        "redeeming an invite must set no cookie"
+    );
+
+    server.stop().await;
+}
+
 /// A route that needs no client address, as a control: if this passed
 /// while the others returned 500, the fault is the connect info and not
 /// the socket plumbing.

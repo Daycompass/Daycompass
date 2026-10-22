@@ -251,6 +251,7 @@ mod tests {
     use super::*;
     use crate::auth::role::Role;
     use crate::auth::secret::SecretString;
+    use crate::auth::store::{AccountStatus, Credential};
     use crate::auth::token::{Token, TokenKind};
     use crate::auth::username::Username;
 
@@ -269,8 +270,9 @@ mod tests {
         let user = UserRecord {
             id: "user-1".to_owned(),
             username: Username::parse("alice").expect("a valid username"),
-            password_hash: "placeholder-not-a-hash".to_owned(),
+            credential: Credential::Password("placeholder-not-a-hash".to_owned()),
             role,
+            status: AccountStatus::Active,
             created_at: UnixTime::from_secs(0),
         };
         let auth = AuthSession {

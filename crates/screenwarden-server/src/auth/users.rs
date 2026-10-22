@@ -30,69 +30,32 @@
 
 use sqlx::SqlitePool;
 
+use super::invite::{self, CreatePendingAccountError, InvitePolicy, IssuedInvite};
 use super::password::{HashError, Hasher, Password, PasswordPolicyError, Verification};
 use super::role::Role;
 use super::secret::SecretString;
 use super::store::{
-    self, DeleteUserOutcome, InsertUserOutcome, PasswordChangeOutcome, RoleChangeOutcome,
-    StoreError, UserSummary,
+    self, Credential, DeleteUserOutcome, PasswordChangeOutcome, RoleChangeOutcome, StoreError,
+    UserSummary,
 };
 use super::time::UnixTime;
-use super::username::{Username, UsernameError};
 
-/// Why an account could not be created.
-#[derive(Debug, thiserror::Error)]
-pub enum CreateUserError {
-    #[error(transparent)]
-    InvalidUsername(#[from] UsernameError),
-
-    #[error(transparent)]
-    InvalidPassword(#[from] PasswordPolicyError),
-
-    #[error("that username is already taken")]
-    UsernameTaken,
-
-    #[error(transparent)]
-    Hash(#[from] HashError),
-
-    #[error(transparent)]
-    Store(#[from] StoreError),
-}
-
-/// Creates an account.
+/// Creates a pending account and its invite.
 ///
-/// The username goes through [`Username::parse`], the same call the
-/// setup flow uses, so normalization (trim, ASCII lowercase) and the
-/// charset rule are identical however an account comes into existence.
-/// `Alice` and `alice` are therefore the same name, and the second one
-/// is reported as taken.
-///
-/// The password must satisfy the full policy, including the minimum
-/// length: this is a password being *chosen*, unlike the one presented
-/// at login.
+/// A thin delegate to [`invite::create_pending_account`]: account
+/// creation is no longer "an admin chooses a password" (see M1d's
+/// `docs/design-decisions.md`), so there is nothing here for this
+/// module to add on top. Kept as its own function so the call sites in
+/// `routes/users.rs` read as account management rather than reaching
+/// into the invite module directly.
 pub async fn create_user(
     pool: &SqlitePool,
-    hasher: &Hasher,
     raw_username: &str,
-    raw_password: SecretString,
     role: Role,
+    invite_policy: InvitePolicy,
     now: UnixTime,
-) -> Result<UserSummary, CreateUserError> {
-    let username = Username::parse(raw_username)?;
-    let password = Password::parse(raw_password)?;
-
-    // Hashed before the insert and outside any transaction: it takes
-    // tens of milliseconds, and holding SQLite's write lock for that
-    // long would stall every other writer.
-    let password_hash = hasher.hash(&password).await?;
-
-    match store::insert_user(pool, &username, &password_hash, role, now).await? {
-        InsertUserOutcome::Created(user) => {
-            tracing::info!(user_id = %user.id, role = %user.role, "account created");
-            Ok(user)
-        }
-        InsertUserOutcome::UsernameTaken => Err(CreateUserError::UsernameTaken),
-    }
+) -> Result<IssuedInvite, CreatePendingAccountError> {
+    invite::create_pending_account(pool, raw_username, role, invite_policy, now).await
 }
 
 /// Every account, oldest first, without password hashes.
@@ -231,6 +194,7 @@ pub async fn change_own_password(
     current_session_id: &str,
     current_password: SecretString,
     new_password: SecretString,
+    now: UnixTime,
 ) -> Result<PasswordChangeReport, PasswordChangeError> {
     // A current password outside the bounds every presented password is
     // checked against cannot match a stored hash, so it is the same
@@ -244,7 +208,15 @@ pub async fn change_own_password(
         return Err(PasswordChangeError::AccountGone);
     };
 
-    match hasher.verify(&current, &user.password_hash).await? {
+    // Unreachable in practice - a pending account cannot hold a session
+    // to call this with - but it is the arm the compiler now demands,
+    // and answering the same as a wrong password is the right refusal
+    // if it were ever reached.
+    let Credential::Password(stored_hash) = &user.credential else {
+        return Err(PasswordChangeError::CurrentPasswordInvalid);
+    };
+
+    match hasher.verify(&current, stored_hash).await? {
         Verification::Mismatch => return Err(PasswordChangeError::CurrentPasswordInvalid),
         // Any rehash the old hash might have needed is moot: it is being
         // replaced with one at the current parameters right now.
@@ -256,9 +228,10 @@ pub async fn change_own_password(
     match store::replace_password_hash_if_unchanged(
         pool,
         user_id,
-        &user.password_hash,
+        stored_hash,
         &new_hash,
         current_session_id,
+        now,
     )
     .await?
     {
@@ -288,6 +261,8 @@ mod tests {
     use super::*;
     use crate::auth::password::HashingParams;
     use crate::auth::session::{self, SessionPolicy};
+    use crate::auth::store::AccountStatus;
+    use crate::auth::username::UsernameError;
     use crate::db::{self, DbTarget};
 
     /// Every password in these tests is generated at runtime.
@@ -312,6 +287,12 @@ mod tests {
         }
     }
 
+    fn invite_policy() -> InvitePolicy {
+        InvitePolicy {
+            ttl: Duration::from_secs(259_200),
+        }
+    }
+
     async fn pool() -> SqlitePool {
         let pool = db::connect(&DbTarget::Memory)
             .await
@@ -320,51 +301,56 @@ mod tests {
         pool
     }
 
+    /// Creates a pending account and immediately redeems its invite with
+    /// `password`, so the result is an ordinary active account. Several
+    /// tests below are about sessions and password changes, which need
+    /// a real password to start from rather than a pending one.
+    async fn create_active_user(
+        pool: &SqlitePool,
+        username: &str,
+        password: SecretString,
+        role: Role,
+    ) -> UserSummary {
+        let issued = create_user(pool, username, role, invite_policy(), now())
+            .await
+            .expect("creating must succeed");
+        invite::redeem(
+            pool,
+            &hasher(),
+            &SecretString::new(issued.token.expose().to_owned()),
+            password,
+            now(),
+        )
+        .await
+        .expect("redeeming must succeed");
+        issued.user
+    }
+
     /// An instance with one admin, so the last-admin guard is not what
     /// a test trips over by accident.
     async fn pool_with_admin() -> SqlitePool {
         let pool = pool().await;
-        create_user(
-            &pool,
-            &hasher(),
-            "alice",
-            random_password(),
-            Role::Admin,
-            now(),
-        )
-        .await
-        .expect("creating the first admin must succeed");
+        create_active_user(&pool, "alice", random_password(), Role::Admin).await;
         pool
     }
 
     #[tokio::test]
-    async fn a_created_account_stores_an_argon2_hash_of_the_given_password() {
+    async fn creating_an_account_issues_a_pending_invite() {
         let pool = pool().await;
-        let hasher = hasher();
-        let password = random_password();
-        let copy = SecretString::new(password.expose().to_owned());
 
-        let created = create_user(&pool, &hasher, "alice", password, Role::Admin, now())
+        let issued = create_user(&pool, "alice", Role::Admin, invite_policy(), now())
             .await
             .expect("creating must succeed");
-        assert_eq!(created.username.as_str(), "alice");
-        assert_eq!(created.role, Role::Admin);
+        assert_eq!(issued.user.username.as_str(), "alice");
+        assert_eq!(issued.user.role, Role::Admin);
+        assert_eq!(issued.user.status, AccountStatus::Pending);
+        assert!(issued.token.expose().starts_with("swi_"));
 
-        let stored = store::find_user_by_id(&pool, &created.id)
+        let found = store::find_user_by_id(&pool, &issued.user.id)
             .await
             .unwrap()
             .expect("the account must exist");
-        assert!(stored.password_hash.starts_with("$argon2id$"));
-        assert!(matches!(
-            hasher
-                .verify(
-                    &Password::parse_for_verification(copy).unwrap(),
-                    &stored.password_hash
-                )
-                .await
-                .unwrap(),
-            Verification::Match { .. }
-        ));
+        assert!(matches!(found.credential, Credential::Pending));
     }
 
     /// The username is normalized exactly as the setup flow normalizes
@@ -373,17 +359,12 @@ mod tests {
     async fn a_differently_cased_username_is_already_taken() {
         let pool = pool_with_admin().await;
 
-        let outcome = create_user(
-            &pool,
-            &hasher(),
-            "Alice",
-            random_password(),
-            Role::User,
-            now(),
-        )
-        .await;
+        let outcome = create_user(&pool, "Alice", Role::User, invite_policy(), now()).await;
 
-        assert!(matches!(outcome, Err(CreateUserError::UsernameTaken)));
+        assert!(matches!(
+            outcome,
+            Err(CreatePendingAccountError::UsernameTaken)
+        ));
         assert_eq!(
             list_users(&pool).await.unwrap().len(),
             1,
@@ -394,46 +375,26 @@ mod tests {
     #[tokio::test]
     async fn surrounding_whitespace_is_trimmed_from_a_new_username() {
         let pool = pool().await;
-        let created = create_user(
-            &pool,
-            &hasher(),
-            "  bob  ",
-            random_password(),
-            Role::User,
-            now(),
-        )
-        .await
-        .expect("creating must succeed");
-        assert_eq!(created.username.as_str(), "bob");
+        let issued = create_user(&pool, "  bob  ", Role::User, invite_policy(), now())
+            .await
+            .expect("creating must succeed");
+        assert_eq!(issued.user.username.as_str(), "bob");
     }
 
     #[tokio::test]
-    async fn the_username_and_password_policies_apply_to_a_new_account() {
+    async fn the_username_policy_applies_to_a_new_account() {
         let pool = pool().await;
 
         assert!(matches!(
-            create_user(&pool, &hasher(), "no", random_password(), Role::User, now()).await,
-            Err(CreateUserError::InvalidUsername(UsernameError::Length))
+            create_user(&pool, "no", Role::User, invite_policy(), now()).await,
+            Err(CreatePendingAccountError::InvalidUsername(
+                UsernameError::Length
+            ))
         ));
         assert!(matches!(
-            create_user(
-                &pool,
-                &hasher(),
-                "Not Allowed",
-                random_password(),
-                Role::User,
-                now()
-            )
-            .await,
-            Err(CreateUserError::InvalidUsername(UsernameError::Charset))
-        ));
-        // Eleven characters, one below the minimum, generated rather
-        // than written out.
-        let short = SecretString::new(random_password().expose()[..11].to_owned());
-        assert!(matches!(
-            create_user(&pool, &hasher(), "bob", short, Role::User, now()).await,
-            Err(CreateUserError::InvalidPassword(
-                PasswordPolicyError::Length
+            create_user(&pool, "Not Allowed", Role::User, invite_policy(), now()).await,
+            Err(CreatePendingAccountError::InvalidUsername(
+                UsernameError::Charset
             ))
         ));
         assert!(
@@ -465,14 +426,23 @@ mod tests {
         ));
     }
 
+    async fn stored_hash_of(pool: &SqlitePool, user_id: &str) -> String {
+        let user = store::find_user_by_id(pool, user_id)
+            .await
+            .unwrap()
+            .expect("the account must exist");
+        let Credential::Password(hash) = user.credential else {
+            panic!("the account must have a password");
+        };
+        hash
+    }
+
     /// One account, three sessions: the request's own and two others.
     async fn account_with_sessions(
         pool: &SqlitePool,
         password: SecretString,
     ) -> (String, String, Vec<String>) {
-        let user = create_user(pool, &hasher(), "bob", password, Role::User, now())
-            .await
-            .expect("creating must succeed");
+        let user = create_active_user(pool, "bob", password, Role::User).await;
 
         let mut sessions = Vec::new();
         for _ in 0..3 {
@@ -495,7 +465,7 @@ mod tests {
         let new = random_password();
         let new_copy = SecretString::new(new.expose().to_owned());
 
-        let report = change_own_password(&pool, &hasher, &user_id, &current, old, new)
+        let report = change_own_password(&pool, &hasher, &user_id, &current, old, new, now())
             .await
             .expect("the change must succeed");
         assert_eq!(
@@ -509,11 +479,14 @@ mod tests {
             .await
             .unwrap()
             .expect("the account must exist");
+        let Credential::Password(stored_hash) = &stored.credential else {
+            panic!("the account must still have a password");
+        };
         assert!(matches!(
             hasher
                 .verify(
                     &Password::parse_for_verification(new_copy).unwrap(),
-                    &stored.password_hash
+                    stored_hash
                 )
                 .await
                 .unwrap(),
@@ -527,6 +500,18 @@ mod tests {
                 .await
                 .unwrap();
         assert_eq!(remaining, vec![current]);
+
+        // Two entries: the invite redemption `create_active_user`
+        // performed, and this password change, newest first.
+        let logs = crate::auth::account_log::list_for_user(&pool, &user_id)
+            .await
+            .unwrap();
+        assert_eq!(logs.len(), 2);
+        assert_eq!(
+            logs[0].kind,
+            crate::auth::account_log::LogKind::PasswordChanged
+        );
+        assert_eq!(logs[0].actor_id, None);
     }
 
     #[tokio::test]
@@ -535,11 +520,7 @@ mod tests {
         let hasher = hasher();
         let password = random_password();
         let (user_id, current, others) = account_with_sessions(&pool, password).await;
-        let before = store::find_user_by_id(&pool, &user_id)
-            .await
-            .unwrap()
-            .unwrap()
-            .password_hash;
+        let before = stored_hash_of(&pool, &user_id).await;
 
         let outcome = change_own_password(
             &pool,
@@ -548,6 +529,7 @@ mod tests {
             &current,
             random_password(),
             random_password(),
+            now(),
         )
         .await;
 
@@ -555,11 +537,7 @@ mod tests {
             outcome,
             Err(PasswordChangeError::CurrentPasswordInvalid)
         ));
-        let after = store::find_user_by_id(&pool, &user_id)
-            .await
-            .unwrap()
-            .unwrap()
-            .password_hash;
+        let after = stored_hash_of(&pool, &user_id).await;
         assert_eq!(before, after, "the stored hash must be untouched");
         assert_eq!(
             store::count_sessions_for_user(&pool, &user_id)
@@ -590,6 +568,7 @@ mod tests {
                 &current,
                 unusable,
                 random_password(),
+                now(),
             )
             .await;
             assert!(matches!(
@@ -607,7 +586,8 @@ mod tests {
         let (user_id, current, _others) = account_with_sessions(&pool, password).await;
         let short = SecretString::new(random_password().expose()[..11].to_owned());
 
-        let outcome = change_own_password(&pool, &hasher(), &user_id, &current, old, short).await;
+        let outcome =
+            change_own_password(&pool, &hasher(), &user_id, &current, old, short, now()).await;
 
         assert!(matches!(
             outcome,

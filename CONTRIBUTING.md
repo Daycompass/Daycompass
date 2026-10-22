@@ -58,11 +58,14 @@ the repo.
 Any change touching authentication needs **two approving reviews**, not
 one. That covers:
 
-- `crates/screenwarden-server/src/auth/**`
+- `crates/screenwarden-server/src/auth/**` (including `invite.rs` and
+  `account_log.rs`)
 - `crates/screenwarden-server/src/clientip.rs` and `ratelimit.rs`
-- `crates/screenwarden-server/src/routes/auth.rs` and `routes/setup.rs`
+- `crates/screenwarden-server/src/routes/auth.rs`, `routes/setup.rs`,
+  `routes/users.rs`, `routes/invites.rs` and `routes/account.rs`
 - the `Origin` and error-normalizing middleware
-- any migration that touches `users`, `sessions` or `setup_tokens`
+- any migration that touches `users`, `sessions`, `setup_tokens`,
+  `invite_tokens` or `account_log`
 
 The reason is that the failure mode is quiet. A bug in this code does
 not crash or return a wrong number: it silently accepts a request it

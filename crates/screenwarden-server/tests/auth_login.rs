@@ -136,6 +136,40 @@ async fn wrong_password_and_unknown_account_are_indistinguishable() {
     assert_eq!(wrong_password.error_code(), Some("invalid_credentials"));
 }
 
+/// A pending account - created but its invite not yet redeemed - has
+/// to fail exactly the way an unknown account does: the same status,
+/// the same body, the same shape. Anything else would let a login
+/// attempt tell a caller "this username exists but is pending", which
+/// is exactly the enumeration this endpoint exists to prevent.
+#[tokio::test]
+async fn a_pending_account_fails_like_an_unknown_one() {
+    let app = TestApp::new().await;
+    let (_admin_credentials, admin) = app.provisioned_admin().await;
+    let (_id, _token, _expires_at) = app.create_pending_account(&admin, "bob", "user").await;
+
+    let pending = app
+        .send(
+            TestRequest::post("/api/v1/auth/login")
+                .origin(GOOD_ORIGIN)
+                .json(login_body("bob", &common::random_secret())),
+        )
+        .await;
+    let unknown_account = app
+        .send(
+            TestRequest::post("/api/v1/auth/login")
+                .origin(GOOD_ORIGIN)
+                .json(login_body("carol", &common::random_secret())),
+        )
+        .await;
+
+    assert_eq!(pending.status, StatusCode::UNAUTHORIZED);
+    assert_eq!(pending.status, unknown_account.status);
+    assert_eq!(pending.body, unknown_account.body);
+    assert_eq!(pending.shape(), unknown_account.shape());
+    assert!(pending.set_cookie().is_none());
+    assert_eq!(pending.error_code(), Some("invalid_credentials"));
+}
+
 #[tokio::test]
 async fn the_username_is_matched_case_insensitively() {
     let app = TestApp::new().await;

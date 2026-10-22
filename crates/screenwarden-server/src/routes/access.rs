@@ -295,24 +295,28 @@ pub async fn enforce_rate_limits(
                     Bucket::LoginIp => state.limits.login_ip.check(key, now),
                     Bucket::SetupIp => state.limits.setup_ip.check(key, now),
                     Bucket::PairIp => state.limits.pair_ip.check(key, now),
+                    Bucket::InviteIp => state.limits.invite_ip.check(key, now),
                     Bucket::LoginUsername
                     | Bucket::PwChange
                     | Bucket::PairGlobal
                     | Bucket::IngestDevice
-                    | Bucket::DeviceAuthFail => return unenforceable(*limit),
+                    | Bucket::DeviceAuthFail
+                    | Bucket::InviteGlobal => return unenforceable(*limit),
                 }
             }
             // One shared bucket for the whole endpoint, so there is no
             // key to resolve and nothing about the caller to read.
             LimitKey::Global => match limit.bucket {
                 Bucket::PairGlobal => state.limits.pair_global.check(GlobalKey, now),
+                Bucket::InviteGlobal => state.limits.invite_global.check(GlobalKey, now),
                 Bucket::LoginIp
                 | Bucket::LoginUsername
                 | Bucket::SetupIp
                 | Bucket::PwChange
                 | Bucket::PairIp
                 | Bucket::IngestDevice
-                | Bucket::DeviceAuthFail => return unenforceable(*limit),
+                | Bucket::DeviceAuthFail
+                | Bucket::InviteIp => return unenforceable(*limit),
             },
             LimitKey::Device => {
                 let Some(auth) = parts.extensions.get::<Arc<AuthDevice>>() else {
@@ -333,7 +337,9 @@ pub async fn enforce_rate_limits(
                     | Bucket::PwChange
                     | Bucket::PairIp
                     | Bucket::PairGlobal
-                    | Bucket::DeviceAuthFail => return unenforceable(*limit),
+                    | Bucket::DeviceAuthFail
+                    | Bucket::InviteIp
+                    | Bucket::InviteGlobal => return unenforceable(*limit),
                 }
             }
             LimitKey::Session => {
@@ -357,7 +363,9 @@ pub async fn enforce_rate_limits(
                     | Bucket::PairIp
                     | Bucket::PairGlobal
                     | Bucket::IngestDevice
-                    | Bucket::DeviceAuthFail => return unenforceable(*limit),
+                    | Bucket::DeviceAuthFail
+                    | Bucket::InviteIp
+                    | Bucket::InviteGlobal => return unenforceable(*limit),
                 }
             }
             // The handler owns this one: its key is in the request body.

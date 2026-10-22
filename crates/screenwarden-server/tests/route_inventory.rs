@@ -170,8 +170,15 @@ impl Fixture {
             })),
             ("POST", "/api/v1/users") => Some(json!({
                 "username": format!("probe-{}", &target_id[..8]),
-                "password": common::random_secret(),
                 "role": "user",
+            })),
+            // Syntactically valid and worthless: a token that was
+            // never issued, so this route answers the same
+            // `invalid_invite_token` whoever calls it - the same shape
+            // as the pairing code below.
+            ("POST", "/api/v1/invites/redeem") => Some(json!({
+                "invite_token": unissued_invite_token(),
+                "new_password": common::random_secret(),
             })),
             ("POST", "/api/v1/pair") => Some(json!({
                 // Syntactically valid and worthless: a code that was
@@ -199,6 +206,18 @@ impl Fixture {
             self.disposable_account().await
         }
     }
+}
+
+/// A token that is syntactically valid and was never issued, built
+/// from the OS CSPRNG rather than written as a literal - a hardcoded
+/// string in this exact shape is indistinguishable from a real secret
+/// to a scanner, and is one to a reader too.
+fn unissued_invite_token() -> String {
+    use screenwarden_server::auth::token::{Token, TokenKind};
+    Token::generate(TokenKind::Invite)
+        .expect("the OS CSPRNG must be available")
+        .expose()
+        .to_owned()
 }
 
 fn method_of(spec: &RouteSpec) -> Method {
@@ -612,6 +631,10 @@ async fn every_layer_enforced_rate_limit_refuses_when_reached() {
         // could be the cause.
         ("SCREENWARDEN_RATE_LIMIT_PAIR_GLOBAL", "100000/60"),
         ("SCREENWARDEN_RATE_LIMIT_INGEST_DEVICE", "2/60"),
+        ("SCREENWARDEN_RATE_LIMIT_INVITE_IP", "2/300"),
+        // Same reasoning as the pairing ceiling above: left wide so the
+        // per-address bucket is what refuses here.
+        ("SCREENWARDEN_RATE_LIMIT_INVITE_GLOBAL", "100000/60"),
     ];
 
     for spec in INVENTORY.iter().filter(|spec| {
@@ -665,6 +688,12 @@ async fn every_layer_enforced_rate_limit_refuses_when_reached() {
                     "pairing_code": "0123456789",
                     "device_name": "probe",
                     "platform": "linux",
+                })),
+                // Same reasoning again: a token that was never issued,
+                // sent every time.
+                ("POST", "/api/v1/invites/redeem") => request.json(json!({
+                    "invite_token": unissued_invite_token(),
+                    "new_password": common::random_secret(),
                 })),
                 // An empty batch is a successful request, which is
                 // the point here: a *succeeding* ingest call must

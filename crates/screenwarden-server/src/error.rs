@@ -61,6 +61,8 @@ pub enum ErrorKind {
     InvalidCredentials,
     /// A setup token that was unknown, expired, redeemed or malformed.
     InvalidSetupToken,
+    /// An invite token that was unknown, expired, redeemed or malformed.
+    InvalidInviteToken,
     CsrfTokenMissing,
     CsrfTokenInvalid,
     /// Authenticated, but not allowed to do this.
@@ -133,6 +135,7 @@ impl ErrorKind {
             | Self::Unauthenticated
             | Self::InvalidCredentials
             | Self::InvalidSetupToken
+            | Self::InvalidInviteToken
             | Self::InvalidPairingCode => StatusCode::UNAUTHORIZED,
             Self::Forbidden
             | Self::CsrfTokenMissing
@@ -174,6 +177,7 @@ impl ErrorKind {
             Self::Unauthenticated => "unauthenticated",
             Self::InvalidCredentials => "invalid_credentials",
             Self::InvalidSetupToken => "invalid_setup_token",
+            Self::InvalidInviteToken => "invalid_invite_token",
             Self::CsrfTokenMissing => "csrf_token_missing",
             Self::CsrfTokenInvalid => "csrf_token_invalid",
             Self::NotPermitted => "forbidden",
@@ -217,6 +221,7 @@ impl ErrorKind {
             Self::Unauthenticated => "authentication is required",
             Self::InvalidCredentials => "the username or password is incorrect",
             Self::InvalidSetupToken => "the setup token is not valid",
+            Self::InvalidInviteToken => "the invite token is not valid",
             Self::CsrfTokenMissing => "this request requires an X-CSRF-Token header",
             Self::CsrfTokenInvalid => "the CSRF token does not match this session",
             Self::NotPermitted => "this account may not perform this action",
@@ -272,6 +277,7 @@ pub(crate) const ALL_ERROR_KINDS: &[ErrorKind] = &[
     ErrorKind::Unauthenticated,
     ErrorKind::InvalidCredentials,
     ErrorKind::InvalidSetupToken,
+    ErrorKind::InvalidInviteToken,
     ErrorKind::CsrfTokenMissing,
     ErrorKind::CsrfTokenInvalid,
     ErrorKind::NotPermitted,

@@ -154,7 +154,7 @@ pub async fn end(pool: &SqlitePool, session_id: &str) -> Result<(), SessionError
 }
 
 /// Deletes every session that has passed either timeout, plus any setup
-/// token that is spent or expired.
+/// or invite token that is spent or expired.
 ///
 /// Returns how many rows went away, for the log line.
 pub async fn sweep_expired(
@@ -164,8 +164,9 @@ pub async fn sweep_expired(
 ) -> Result<u64, SessionError> {
     let idle_cutoff = now.saturating_sub(policy.idle_timeout);
     let sessions = store::delete_expired_sessions(pool, now, idle_cutoff).await?;
-    let tokens = store::delete_stale_setup_tokens(pool, now).await?;
-    Ok(sessions + tokens)
+    let setup_tokens = store::delete_stale_setup_tokens(pool, now).await?;
+    let invite_tokens = store::delete_stale_invite_tokens(pool, now).await?;
+    Ok(sessions + setup_tokens + invite_tokens)
 }
 
 #[cfg(test)]
@@ -493,6 +494,46 @@ mod tests {
         .await
         .unwrap();
         let (rows,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM setup_tokens")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(rows, 0);
+    }
+
+    #[tokio::test]
+    async fn the_sweep_also_removes_spent_and_expired_invite_tokens() {
+        let (pool, user_id) = pool_with_user().await;
+        let token = Token::generate(TokenKind::Invite).unwrap();
+        sqlx::query(
+            "INSERT INTO invite_tokens (id, user_id, token_hash, created_at, expires_at)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+        )
+        .bind(store::new_id())
+        .bind(&user_id)
+        .bind(token.hash().as_bytes())
+        .bind(now().as_secs())
+        .bind(now().saturating_add(Duration::from_secs(60)).as_secs())
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        // Before expiry the sweep leaves it alone.
+        sweep_expired(&pool, policy(), now()).await.unwrap();
+        let (rows,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM invite_tokens")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(rows, 1);
+
+        // After expiry it goes.
+        sweep_expired(
+            &pool,
+            policy(),
+            now().saturating_add(Duration::from_secs(120)),
+        )
+        .await
+        .unwrap();
+        let (rows,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM invite_tokens")
             .fetch_one(&pool)
             .await
             .unwrap();

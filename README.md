@@ -14,10 +14,11 @@ sync to this server.
 The backend currently has configuration, SQLite storage with migrations,
 a hardened HTTP skeleton (`/healthz`), authentication (the first-admin
 setup flow, login, logout, sessions with CSRF protection, rate
-limiting), and account management: an admin creates, lists, re-roles and
-deletes accounts, and any logged-in account can change its own
-password. There are no devices, no pairing and no event ingest yet.
-Expect breaking changes at any time.
+limiting), account management by invite (an admin creates a pending
+account or resets an existing one to pending, and the person redeems
+their own invite to choose a password), devices and pairing, and event
+ingest. There is no way to read events back yet, and no category
+rules or dashboard. Expect breaking changes at any time.
 
 ## First start
 
@@ -106,10 +107,11 @@ rate limiting will count every request against the proxy instead.
 
 | Endpoint | Purpose |
 | --- | --- |
-| `POST /api/v1/users` | Create an account: `username`, `password`, `role`. Admin only. |
-| `GET /api/v1/users` | List accounts: `id`, `username`, `role`, `created_at`. Admin only. |
+| `POST /api/v1/users` | Create a pending account: `username`, `role`. Answers with the account and an invite. Admin only. |
+| `GET /api/v1/users` | List accounts: `id`, `username`, `role`, `status`, `created_at`. Admin only. |
 | `PATCH /api/v1/users/{id}` | Change an account's `role`. Admin only. |
 | `DELETE /api/v1/users/{id}` | Delete an account and its sessions. Admin only. |
+| `POST /api/v1/users/{id}/password-reset` | Reset an account to pending, issuing a fresh invite. Admin only. |
 
 A password hash never leaves the server: the account endpoints select no
 such column in the first place.
@@ -121,21 +123,60 @@ are the same account, and creating the second one answers 409.
 Request bodies reject unknown fields. A stray or misspelled field is an
 error rather than something silently ignored.
 
+### Invite-based onboarding
+
+An admin never chooses, sees, or stores another account's password.
+Creating an account or resetting one's password both answer with an
+`invite: { token, expires_at }` instead - a one-time token, shown
+exactly once, that the admin hands over however accounts are normally
+communicated at that instance. The person redeems it themselves:
+
+| Endpoint | Purpose |
+| --- | --- |
+| `POST /api/v1/invites/redeem` | Redeem an invite token and set the account's first password. Public. |
+| `GET /api/v1/account/log` | Your own account's log of invites redeemed and password resets. Session. |
+
+`POST /api/v1/invites/redeem` takes `invite_token` and `new_password`
+(the full password policy applies, since this is a password being
+chosen) and answers `204 No Content` with no cookie - the account logs
+in normally afterwards through `POST /api/v1/auth/login`. An unknown,
+expired, already-used or malformed token all answer the same
+`invalid_invite_token`, same as a pending account's login fails
+exactly like a wrong password: neither tells an unauthenticated caller
+anything about which accounts exist or what state they are in.
+
+Invites expire after `SCREENWARDEN_INVITE_TTL_SECS` (72 hours by
+default - see `docs/design-decisions.md` for why).
+
 ### What an admin can and cannot do
 
 An admin manages accounts. An admin **cannot** read another account's
 usage events or stats, and will not be able to when those exist.
 
-There is no endpoint for an admin to set someone else's password.
-`POST /api/v1/auth/password` takes no account parameter at all, so it
-can only ever change the caller's own.
+An admin *can* reset any account's password - and after doing so,
+could in principle redeem the new invite and log in as that account.
+That power is not hidden: every reset writes an entry to the account's
+own log (`GET /api/v1/account/log`), naming the acting admin and when
+it happened, and only the account holder can read their own log. See
+`docs/design-decisions.md` for why that power exists and why it is
+made visible rather than removed.
+
+Beyond a reset, there is still no endpoint for an admin to directly set
+someone else's password. `POST /api/v1/auth/password` takes no account
+parameter at all, so it can only ever change the caller's own.
 
 ### The last admin
 
-The last remaining admin can be neither deleted nor demoted; both
-answer 409 `last_admin_protected`. The check and the write happen in one
-`BEGIN IMMEDIATE` transaction, so two admins removing each other at the
-same moment cannot leave the instance with none.
+The last remaining **active** admin can be neither deleted, demoted,
+nor reset; all three answer 409 `last_admin_protected`. The check and
+the write happen in one `BEGIN IMMEDIATE` transaction, so two admins
+removing each other at the same moment cannot leave the instance with
+none.
+
+A *pending* admin - one that has not yet redeemed its invite - never
+counts towards this: it cannot log in, so it is not an administrator
+anyone can currently rely on, and may be demoted or deleted freely even
+while it is the only other admin on the instance.
 
 Short of that, an admin may demote or delete **themselves**. A role is
 read from the database on every request and is never cached in a
@@ -284,6 +325,13 @@ event read path for anybody at all, including a device's own owner.
 That is checked rather than remembered: a test fails if a route
 touching events appears in the inventory, if any file outside the ingest
 store queries the table, or if either device view grows a field.
+
+## Design decisions
+
+[docs/design-decisions.md](docs/design-decisions.md) records the
+reasoning behind a few choices that are not obvious from the code
+alone - starting with why an admin can reset a password but never
+choose one, and why that is made visible rather than removed.
 
 ## License
 

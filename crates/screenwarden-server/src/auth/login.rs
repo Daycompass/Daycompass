@@ -44,7 +44,7 @@ use sqlx::SqlitePool;
 use super::password::{HashError, Hasher, Password, Verification};
 use super::secret::SecretString;
 use super::session::{self, NewSession, SessionError, SessionPolicy};
-use super::store::{self, StoreError, UserRecord};
+use super::store::{self, Credential, StoreError, UserRecord};
 use super::time::UnixTime;
 use super::username::Username;
 
@@ -108,7 +108,17 @@ pub async fn log_in(
         return Err(LoginError::InvalidCredentials);
     };
 
-    match hasher.verify(&password, &user.password_hash).await? {
+    // A pending account has no password to verify against - it exists,
+    // but nobody has chosen one yet - so it takes exactly the path an
+    // unknown account takes: the same decoy, the same work, the same
+    // error. Anything else would make "this username exists but is
+    // pending" observable from login's timing or response alone.
+    let Credential::Password(password_hash) = &user.credential else {
+        hasher.verify(&password, decoy_hash).await?;
+        return Err(LoginError::InvalidCredentials);
+    };
+
+    match hasher.verify(&password, password_hash).await? {
         Verification::Mismatch => return Err(LoginError::InvalidCredentials),
         Verification::Match { needs_rehash } => {
             if needs_rehash {
@@ -458,6 +468,28 @@ mod tests {
                 .await
                 .unwrap(),
             crate::auth::password::Verification::Mismatch
+        );
+    }
+
+    /// A pending account - one with no password chosen yet - must fail
+    /// a login exactly like an unknown account: same error, same
+    /// decoy-verified work, no session.
+    #[tokio::test]
+    async fn a_pending_account_fails_like_an_unknown_one() {
+        let fixture = Fixture::new().await;
+        sqlx::query("UPDATE users SET status = 'pending', password_hash = '' WHERE id = ?1")
+            .bind(&fixture.user_id)
+            .execute(&fixture.pool)
+            .await
+            .unwrap();
+
+        let result = fixture.attempt("alice", &fixture.password).await;
+        assert!(matches!(result, Err(LoginError::InvalidCredentials)));
+        assert_eq!(
+            store::count_sessions_for_user(&fixture.pool, &fixture.user_id)
+                .await
+                .unwrap(),
+            0
         );
     }
 }

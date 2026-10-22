@@ -29,10 +29,9 @@ fn assert_no_hash(body: &serde_json::Value, password: &str) {
 }
 
 #[tokio::test]
-async fn creating_an_account_returns_it_without_a_hash() {
+async fn creating_an_account_returns_it_pending_with_an_invite_and_no_hash() {
     let app = TestApp::new().await;
     let (_admin_credentials, admin) = app.provisioned_admin().await;
-    let credentials = Credentials::generate("bob");
 
     let response = app
         .send(
@@ -40,8 +39,7 @@ async fn creating_an_account_returns_it_without_a_hash() {
                 .origin(GOOD_ORIGIN)
                 .authenticated(&admin)
                 .json(json!({
-                    "username": credentials.username,
-                    "password": credentials.password,
+                    "username": "bob",
                     "role": "user",
                 })),
         )
@@ -50,14 +48,67 @@ async fn creating_an_account_returns_it_without_a_hash() {
     assert_eq!(response.status, StatusCode::CREATED, "{:?}", response.body);
     assert_eq!(
         response.shape(),
-        vec!["user.created_at", "user.id", "user.role", "user.username"]
+        vec![
+            "invite.expires_at",
+            "invite.token",
+            "user.created_at",
+            "user.id",
+            "user.role",
+            "user.status",
+            "user.username",
+        ]
     );
     assert_eq!(response.body["user"]["username"], "bob");
     assert_eq!(response.body["user"]["role"], "user");
-    assert_no_hash(&response.body, &credentials.password);
+    assert_eq!(response.body["user"]["status"], "pending");
+    let token = response.body["invite"]["token"]
+        .as_str()
+        .expect("an invite token")
+        .to_owned();
+    assert!(token.starts_with("swi_"));
+    // The token itself is meant to be here, shown exactly once; what
+    // must not be is a password hash.
+    let rendered = response.body.to_string();
+    for needle in ["password_hash", "$argon2"] {
+        assert!(!rendered.contains(needle), "{needle:?} in: {rendered}");
+    }
 
-    // And the account really works.
-    let session = app.log_in(&credentials).await;
+    // Pending, so it cannot log in yet.
+    let before = app
+        .send(
+            TestRequest::post("/api/v1/auth/login")
+                .origin(GOOD_ORIGIN)
+                .json(json!({ "username": "bob", "password": "whatever-password" })),
+        )
+        .await;
+    assert_eq!(before.status, StatusCode::UNAUTHORIZED);
+    assert_eq!(before.error_code(), Some("invalid_credentials"));
+
+    // Redeeming the invite activates it.
+    let new_password = common::random_secret();
+    let redeemed = app
+        .send(
+            TestRequest::post("/api/v1/invites/redeem")
+                .origin(GOOD_ORIGIN)
+                .json(json!({
+                    "invite_token": token,
+                    "new_password": new_password,
+                })),
+        )
+        .await;
+    assert_eq!(
+        redeemed.status,
+        StatusCode::NO_CONTENT,
+        "{:?}",
+        redeemed.body
+    );
+
+    let session = app
+        .log_in(&Credentials {
+            username: "bob".to_owned(),
+            password: new_password,
+        })
+        .await;
     let me = app
         .send(
             TestRequest::get("/api/v1/auth/me")
@@ -85,7 +136,6 @@ async fn a_duplicate_username_is_a_conflict_however_it_is_spelled() {
                     .authenticated(&admin)
                     .json(json!({
                         "username": spelling,
-                        "password": common::random_secret(),
                         "role": "user",
                     })),
             )
@@ -142,7 +192,7 @@ async fn the_list_shows_every_account_and_no_hashes() {
             .map(String::as_str)
             .collect();
         keys.sort_unstable();
-        assert_eq!(keys, ["created_at", "id", "role", "username"]);
+        assert_eq!(keys, ["created_at", "id", "role", "status", "username"]);
         assert!(user["created_at"].as_i64().is_some_and(|at| at > 0));
     }
     assert_no_hash(&response.body, &admin_credentials.password);
@@ -528,7 +578,6 @@ async fn an_unknown_account_id_is_a_not_found() {
 async fn bad_input_is_the_uniform_error_and_never_echoed() {
     let app = TestApp::new().await;
     let (_admin_credentials, admin) = app.provisioned_admin().await;
-    let password = common::random_secret();
     let (bob_id, _bob) = app.create_account(&admin, "bob", "user").await;
 
     // An unknown role, on both endpoints that take one.
@@ -540,7 +589,6 @@ async fn bad_input_is_the_uniform_error_and_never_echoed() {
                     .authenticated(&admin)
                     .json(json!({
                         "username": "carol",
-                        "password": password,
                         "role": role,
                     })),
             )
@@ -573,20 +621,22 @@ async fn bad_input_is_the_uniform_error_and_never_echoed() {
                 .authenticated(&admin)
                 .json(json!({
                     "username": "carol",
-                    "password": password,
                     "role": "user",
-                    "is_admin": true,
+                    // Also the field this endpoint used to accept: a
+                    // caller still sending a password must be told it
+                    // is unknown, not have it silently ignored.
+                    "password": common::random_secret(),
                 })),
         )
         .await;
     assert!(stray.status.is_client_error(), "{:?}", stray.body);
     assert_eq!(stray.shape(), vec!["error.code", "error.message"]);
-    assert!(!stray.body.to_string().contains("is_admin"));
+    assert!(!stray.body.to_string().contains("password"));
 
     // A wrong type, a missing field, and a body that is not JSON.
     for body in [
-        json!({ "username": 7, "password": password, "role": "user" }),
-        json!({ "username": "carol" }),
+        json!({ "username": 7, "role": "user" }),
+        json!({ "role": "user" }),
         json!("not an object"),
     ] {
         let response = app
@@ -601,22 +651,10 @@ async fn bad_input_is_the_uniform_error_and_never_echoed() {
         assert_eq!(response.shape(), vec!["error.code", "error.message"]);
     }
 
-    // The policies, which are public rules and are named as such.
-    let short = app
-        .send(
-            TestRequest::post("/api/v1/users")
-                .origin(GOOD_ORIGIN)
-                .authenticated(&admin)
-                .json(json!({
-                    "username": "carol",
-                    "password": &password[..11],
-                    "role": "user",
-                })),
-        )
-        .await;
-    assert_eq!(short.status, StatusCode::BAD_REQUEST);
-    assert_eq!(short.error_code(), Some("invalid_password"));
-
+    // The username policy, a public rule named as such. The password
+    // policy no longer applies here at all - there is no password
+    // field any more - and is instead checked at redemption; see
+    // `tests/invites.rs`.
     let bad_name = app
         .send(
             TestRequest::post("/api/v1/users")
@@ -624,7 +662,6 @@ async fn bad_input_is_the_uniform_error_and_never_echoed() {
                 .authenticated(&admin)
                 .json(json!({
                     "username": "Not Allowed",
-                    "password": password,
                     "role": "user",
                 })),
         )

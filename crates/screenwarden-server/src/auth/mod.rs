@@ -26,6 +26,8 @@
 //! | First-start setup: the token, the 404, the ordering of checks | [`setup`] |
 //! | Username normalization and charset | [`username`] |
 //! | Account management, the last-admin rule, password changes | [`users`] |
+//! | Invite-based onboarding: pending accounts, resets, redemption | [`invite`] |
+//! | The account log an admin password reset is written to | [`account_log`] |
 //! | Every SQL statement, and which ones take the write lock | [`store`] |
 //! | The authentication extractor and the one CSRF check | [`extract`] |
 //!
@@ -37,10 +39,12 @@
 //! * **Which address** a request is attributed to, which is what every
 //!   per-client rate limit depends on, is [`crate::clientip`].
 
+pub mod account_log;
 pub mod cookie;
 pub mod csrf;
 pub mod device;
 pub mod extract;
+pub mod invite;
 pub mod login;
 pub mod origin;
 pub mod password;

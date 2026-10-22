@@ -10,6 +10,7 @@ use std::sync::Arc;
 use axum::extract::FromRef;
 use sqlx::SqlitePool;
 
+use crate::auth::invite::InvitePolicy;
 use crate::auth::password::{HashError, Hasher};
 use crate::auth::session::SessionPolicy;
 use crate::clientip::ClientKey;
@@ -26,6 +27,8 @@ pub struct AppState {
     pub pool: SqlitePool,
     pub hasher: Hasher,
     pub session_policy: SessionPolicy,
+    /// How long a freshly issued invite token remains redeemable.
+    pub invite_policy: InvitePolicy,
     pub public_url: PublicUrl,
     /// A hash of a random password that was discarded, verified against
     /// when a login names an account that does not exist, so that path
@@ -71,6 +74,12 @@ pub struct Limits {
     /// the shared rate-limit layer cannot express - see
     /// [`crate::routes::LimitKey::PeerBeforeAuth`].
     pub device_auth_fail: Arc<RateLimiter<ClientKey>>,
+    /// Invite redemption attempts, per client address.
+    pub invite_ip: Arc<RateLimiter<ClientKey>>,
+    /// Invite redemption attempts across the whole instance. Same
+    /// shape and the same trade-off as [`Self::pair_global`]: a ceiling
+    /// on total work, not a guessing defence.
+    pub invite_global: Arc<RateLimiter<GlobalKey>>,
 }
 
 impl Limits {
@@ -113,6 +122,13 @@ impl Limits {
                 config.rate_limit_device_auth_fail,
                 config.rate_limit_max_entries,
             )),
+            invite_ip: Arc::new(RateLimiter::new(
+                config.rate_limit_invite_ip,
+                config.rate_limit_max_entries,
+            )),
+            // One key ever, so one entry - same reasoning as
+            // `pair_global` above.
+            invite_global: Arc::new(RateLimiter::new(config.rate_limit_invite_global, 1)),
         }
     }
 }
@@ -137,6 +153,9 @@ impl AppState {
             session_policy: SessionPolicy {
                 idle_timeout: config.session_idle_timeout,
                 absolute_timeout: config.session_absolute_timeout,
+            },
+            invite_policy: InvitePolicy {
+                ttl: config.invite_ttl,
             },
             public_url: config.public_url.clone(),
             decoy_password_hash,

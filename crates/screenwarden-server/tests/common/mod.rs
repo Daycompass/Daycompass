@@ -233,23 +233,25 @@ impl TestApp {
         }
     }
 
-    /// Creates an account over HTTP as `admin`, and returns its id with
-    /// the credentials it was created with.
-    pub async fn create_account(
+    /// Creates a pending account over HTTP as `admin`, and returns its
+    /// id together with the raw invite: the token and its expiry.
+    ///
+    /// For tests that want the invite itself - expired, reused,
+    /// malformed - rather than an account ready to log in with. Most
+    /// tests want [`TestApp::create_account`] instead.
+    pub async fn create_pending_account(
         &self,
         admin: &Session,
         username: &str,
         role: &str,
-    ) -> (String, Credentials) {
-        let credentials = Credentials::generate(username);
+    ) -> (String, String, i64) {
         let response = self
             .send(
                 TestRequest::post("/api/v1/users")
                     .origin(GOOD_ORIGIN)
                     .authenticated(admin)
                     .json(json!({
-                        "username": credentials.username,
-                        "password": credentials.password,
+                        "username": username,
                         "role": role,
                     })),
             )
@@ -264,6 +266,44 @@ impl TestApp {
             .as_str()
             .expect("the created account's id")
             .to_owned();
+        let token = response.body["invite"]["token"]
+            .as_str()
+            .expect("an invite token in the body")
+            .to_owned();
+        let expires_at = response.body["invite"]["expires_at"]
+            .as_i64()
+            .expect("an invite expiry in the body");
+        (id, token, expires_at)
+    }
+
+    /// Creates an account over HTTP as `admin`, redeems its invite, and
+    /// returns its id with the credentials it can now log in with.
+    pub async fn create_account(
+        &self,
+        admin: &Session,
+        username: &str,
+        role: &str,
+    ) -> (String, Credentials) {
+        let (id, token, _expires_at) = self.create_pending_account(admin, username, role).await;
+        let credentials = Credentials::generate(username);
+
+        let response = self
+            .send(
+                TestRequest::post("/api/v1/invites/redeem")
+                    .origin(GOOD_ORIGIN)
+                    .json(json!({
+                        "invite_token": token,
+                        "new_password": credentials.password,
+                    })),
+            )
+            .await;
+        assert_eq!(
+            response.status,
+            StatusCode::NO_CONTENT,
+            "redeeming the invite for {username} must succeed: {:?}",
+            response.body
+        );
+
         (id, credentials)
     }
 

@@ -19,14 +19,63 @@ use super::time::UnixTime;
 use super::token::TokenHash;
 use super::username::Username;
 
+/// Whether an account has a password it can log in with.
+///
+/// A pending account exists - an admin has created it and handed over
+/// an invite - but has chosen no password yet. Stored as the `status`
+/// column; see migration `0004` for why `password_hash` could not
+/// simply become nullable instead.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AccountStatus {
+    Active,
+    Pending,
+}
+
+impl AccountStatus {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Active => "active",
+            Self::Pending => "pending",
+        }
+    }
+
+    /// Parses a value read back from the database. `None` for anything
+    /// else, so an unexpected row is reported as corrupt rather than
+    /// silently treated as one of the known statuses.
+    pub fn parse(raw: &str) -> Option<Self> {
+        match raw {
+            "active" => Some(Self::Active),
+            "pending" => Some(Self::Pending),
+            _ => None,
+        }
+    }
+}
+
+/// An account's credential: a password, or nothing yet.
+///
+/// This is the point of having the type at all: with `password_hash` as
+/// a bare `String`, every reader - login, a password change, anywhere
+/// else - could read straight past a pending account's empty string and
+/// into whatever happens to do with it. With this enum there is no
+/// hash field to read past; the compiler forces each reader to say what
+/// a pending account does.
+#[derive(Debug, Clone)]
+pub enum Credential {
+    /// An Argon2id PHC string.
+    Password(String),
+    /// No password has been chosen yet. Login must take the same path
+    /// as an unknown account - see [`crate::auth::login`].
+    Pending,
+}
+
 /// A row from `users`.
 #[derive(Debug, Clone)]
 pub struct UserRecord {
     pub id: String,
     pub username: Username,
-    /// Argon2id PHC string.
-    pub password_hash: String,
+    pub credential: Credential,
     pub role: Role,
+    pub status: AccountStatus,
     pub created_at: UnixTime,
 }
 
@@ -41,6 +90,7 @@ pub struct UserSummary {
     pub id: String,
     pub username: Username,
     pub role: Role,
+    pub status: AccountStatus,
     pub created_at: UnixTime,
 }
 
@@ -50,6 +100,7 @@ impl From<&UserRecord> for UserSummary {
             id: user.id.clone(),
             username: user.username.clone(),
             role: user.role,
+            status: user.status,
             created_at: user.created_at,
         }
     }
@@ -85,7 +136,14 @@ fn user_from_row(row: &sqlx::sqlite::SqliteRow) -> Result<UserRecord, StoreError
     let username: String = row.try_get("username")?;
     let password_hash: String = row.try_get("password_hash")?;
     let role: String = row.try_get("role")?;
+    let status: String = row.try_get("status")?;
     let created_at: i64 = row.try_get("created_at")?;
+
+    let status = AccountStatus::parse(&status).ok_or(StoreError::CorruptRow)?;
+    let credential = match status {
+        AccountStatus::Active => Credential::Password(password_hash),
+        AccountStatus::Pending => Credential::Pending,
+    };
 
     Ok(UserRecord {
         id,
@@ -93,8 +151,9 @@ fn user_from_row(row: &sqlx::sqlite::SqliteRow) -> Result<UserRecord, StoreError
         // succeed; if it does not, the row was written by something that
         // bypassed the policy.
         username: Username::parse(&username).map_err(|_| StoreError::CorruptRow)?,
-        password_hash,
+        credential,
         role: Role::parse(&role).ok_or(StoreError::CorruptRow)?,
+        status,
         created_at: UnixTime::from_secs(created_at),
     })
 }
@@ -103,12 +162,14 @@ fn summary_from_row(row: &sqlx::sqlite::SqliteRow) -> Result<UserSummary, StoreE
     let id: String = row.try_get("id")?;
     let username: String = row.try_get("username")?;
     let role: String = row.try_get("role")?;
+    let status: String = row.try_get("status")?;
     let created_at: i64 = row.try_get("created_at")?;
 
     Ok(UserSummary {
         id,
         username: Username::parse(&username).map_err(|_| StoreError::CorruptRow)?,
         role: Role::parse(&role).ok_or(StoreError::CorruptRow)?,
+        status: AccountStatus::parse(&status).ok_or(StoreError::CorruptRow)?,
         created_at: UnixTime::from_secs(created_at),
     })
 }
@@ -119,7 +180,8 @@ pub async fn find_user_by_username(
     username: &Username,
 ) -> Result<Option<UserRecord>, StoreError> {
     let row = sqlx::query(
-        "SELECT id, username, password_hash, role, created_at FROM users WHERE username = ?1",
+        "SELECT id, username, password_hash, role, status, created_at
+         FROM users WHERE username = ?1",
     )
     .bind(username.as_str())
     .fetch_optional(pool)
@@ -134,7 +196,8 @@ pub async fn find_user_by_id(
     id: &str,
 ) -> Result<Option<UserRecord>, StoreError> {
     let row = sqlx::query(
-        "SELECT id, username, password_hash, role, created_at FROM users WHERE id = ?1",
+        "SELECT id, username, password_hash, role, status, created_at
+         FROM users WHERE id = ?1",
     )
     .bind(id)
     .fetch_optional(pool)
@@ -171,25 +234,33 @@ pub async fn admin_exists(pool: &SqlitePool) -> Result<bool, StoreError> {
     Ok(exists != 0)
 }
 
-/// How many accounts currently have the admin role.
+/// How many accounts currently have the admin role **and** are active.
 ///
 /// Takes a connection rather than the pool so it can run *inside* a
 /// write transaction, which is the only place its answer is
 /// authoritative. Outside one it is a number that can change before the
 /// caller acts on it.
-async fn admin_count(conn: &mut sqlx::SqliteConnection) -> Result<i64, StoreError> {
-    let (count,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM users WHERE role = 'admin'")
-        .fetch_one(&mut *conn)
-        .await?;
+///
+/// A pending admin does not count: it cannot log in, so it is not an
+/// administrator anyone can currently rely on, and the last-admin
+/// guards that call this must let a pending admin be demoted or deleted
+/// freely rather than treating it as the one admin standing between the
+/// instance and lockout.
+async fn active_admin_count(conn: &mut sqlx::SqliteConnection) -> Result<i64, StoreError> {
+    let (count,): (i64,) =
+        sqlx::query_as("SELECT COUNT(*) FROM users WHERE role = 'admin' AND status = 'active'")
+            .fetch_one(&mut *conn)
+            .await?;
     Ok(count)
 }
 
 /// Every account, oldest first, without password hashes.
 pub async fn list_users(pool: &SqlitePool) -> Result<Vec<UserSummary>, StoreError> {
-    let rows =
-        sqlx::query("SELECT id, username, role, created_at FROM users ORDER BY created_at, id")
-            .fetch_all(pool)
-            .await?;
+    let rows = sqlx::query(
+        "SELECT id, username, role, status, created_at FROM users ORDER BY created_at, id",
+    )
+    .fetch_all(pool)
+    .await?;
     rows.iter().map(summary_from_row).collect()
 }
 
@@ -204,11 +275,13 @@ pub enum InsertUserOutcome {
     UsernameTaken,
 }
 
-/// Creates an account with an already-validated username and an
-/// already-computed hash.
+/// Creates an **active** account with an already-validated username and
+/// an already-computed hash.
 ///
 /// `RETURNING` so the caller sees exactly the stored row rather than a
-/// synthesized copy of what was sent.
+/// synthesized copy of what was sent. `status` is left to its `DEFAULT
+/// 'active'`, since this function always creates an account with a real
+/// password; a pending one is [`insert_pending_user_with_invite`].
 pub async fn insert_user(
     pool: &SqlitePool,
     username: &Username,
@@ -219,7 +292,7 @@ pub async fn insert_user(
     let result = sqlx::query(
         "INSERT INTO users (id, username, password_hash, role, created_at)
          VALUES (?1, ?2, ?3, ?4, ?5)
-         RETURNING id, username, role, created_at",
+         RETURNING id, username, role, status, created_at",
     )
     .bind(new_id())
     .bind(username.as_str())
@@ -241,6 +314,66 @@ pub async fn insert_user(
             Err(err.into())
         }
     }
+}
+
+/// Creates a **pending** account together with the one invite that can
+/// activate it.
+///
+/// One `BEGIN IMMEDIATE` transaction so a username that turns out to be
+/// taken never leaves an orphaned invite row behind, and so a database
+/// error between the two inserts never leaves an account with no way
+/// in. `password_hash` is the empty-string sentinel; see migration
+/// `0004` for why.
+pub async fn insert_pending_user_with_invite(
+    pool: &SqlitePool,
+    username: &Username,
+    role: Role,
+    token_hash: &TokenHash,
+    now: UnixTime,
+    expires_at: UnixTime,
+) -> Result<InsertUserOutcome, StoreError> {
+    let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
+
+    let result = sqlx::query(
+        "INSERT INTO users (id, username, password_hash, role, status, created_at)
+         VALUES (?1, ?2, '', ?3, 'pending', ?4)
+         RETURNING id, username, role, status, created_at",
+    )
+    .bind(new_id())
+    .bind(username.as_str())
+    .bind(role.as_str())
+    .bind(now.as_secs())
+    .fetch_one(&mut *tx)
+    .await;
+
+    let user = match result {
+        Ok(row) => summary_from_row(&row)?,
+        Err(err) => {
+            if err
+                .as_database_error()
+                .is_some_and(DatabaseError::is_unique_violation)
+            {
+                tx.rollback().await?;
+                return Ok(InsertUserOutcome::UsernameTaken);
+            }
+            return Err(err.into());
+        }
+    };
+
+    sqlx::query(
+        "INSERT INTO invite_tokens (id, user_id, token_hash, created_at, expires_at)
+         VALUES (?1, ?2, ?3, ?4, ?5)",
+    )
+    .bind(new_id())
+    .bind(&user.id)
+    .bind(token_hash.as_bytes())
+    .bind(now.as_secs())
+    .bind(expires_at.as_secs())
+    .execute(&mut *tx)
+    .await?;
+
+    tx.commit().await?;
+    Ok(InsertUserOutcome::Created(user))
 }
 
 /// Outcome of changing an account's role.
@@ -268,24 +401,33 @@ pub async fn set_role_guarded(
 ) -> Result<RoleChangeOutcome, StoreError> {
     let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
 
-    let current: Option<String> = sqlx::query_scalar("SELECT role FROM users WHERE id = ?1")
-        .bind(user_id)
-        .fetch_optional(&mut *tx)
-        .await?;
-    let Some(current) = current else {
+    let current: Option<(String, String)> =
+        sqlx::query_as("SELECT role, status FROM users WHERE id = ?1")
+            .bind(user_id)
+            .fetch_optional(&mut *tx)
+            .await?;
+    let Some((current_role, current_status)) = current else {
         tx.rollback().await?;
         return Ok(RoleChangeOutcome::NotFound);
     };
-    let current = Role::parse(&current).ok_or(StoreError::CorruptRow)?;
+    let current_role = Role::parse(&current_role).ok_or(StoreError::CorruptRow)?;
+    let current_status = AccountStatus::parse(&current_status).ok_or(StoreError::CorruptRow)?;
 
-    if current.is_admin() && !role.is_admin() && admin_count(&mut tx).await? <= 1 {
+    // A pending admin is not one anyone can currently rely on - it
+    // cannot log in - so it never blocks a demotion, however many
+    // active admins remain.
+    if current_role.is_admin()
+        && current_status == AccountStatus::Active
+        && !role.is_admin()
+        && active_admin_count(&mut tx).await? <= 1
+    {
         tx.rollback().await?;
         return Ok(RoleChangeOutcome::LastAdmin);
     }
 
     let row = sqlx::query(
         "UPDATE users SET role = ?2 WHERE id = ?1
-         RETURNING id, username, role, created_at",
+         RETURNING id, username, role, status, created_at",
     )
     .bind(user_id)
     .bind(role.as_str())
@@ -319,17 +461,24 @@ pub async fn delete_user_guarded(
 ) -> Result<DeleteUserOutcome, StoreError> {
     let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
 
-    let current: Option<String> = sqlx::query_scalar("SELECT role FROM users WHERE id = ?1")
-        .bind(user_id)
-        .fetch_optional(&mut *tx)
-        .await?;
-    let Some(current) = current else {
+    let current: Option<(String, String)> =
+        sqlx::query_as("SELECT role, status FROM users WHERE id = ?1")
+            .bind(user_id)
+            .fetch_optional(&mut *tx)
+            .await?;
+    let Some((current_role, current_status)) = current else {
         tx.rollback().await?;
         return Ok(DeleteUserOutcome::NotFound);
     };
-    let current = Role::parse(&current).ok_or(StoreError::CorruptRow)?;
+    let current_role = Role::parse(&current_role).ok_or(StoreError::CorruptRow)?;
+    let current_status = AccountStatus::parse(&current_status).ok_or(StoreError::CorruptRow)?;
 
-    if current.is_admin() && admin_count(&mut tx).await? <= 1 {
+    // Same reasoning as `set_role_guarded`: a pending admin never blocks
+    // a deletion.
+    if current_role.is_admin()
+        && current_status == AccountStatus::Active
+        && active_admin_count(&mut tx).await? <= 1
+    {
         tx.rollback().await?;
         return Ok(DeleteUserOutcome::LastAdmin);
     }
@@ -341,6 +490,215 @@ pub async fn delete_user_guarded(
 
     tx.commit().await?;
     Ok(DeleteUserOutcome::Deleted)
+}
+
+/// Outcome of resetting an account to pending.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResetToPendingOutcome {
+    Reset {
+        /// How many of the account's sessions were ended. All of them:
+        /// unlike a self-service password change, there is no session
+        /// making this request to spare.
+        sessions_ended: u64,
+        /// How many of the account's devices were revoked.
+        devices_revoked: u64,
+    },
+    NotFound,
+    /// The target is the last remaining **active** admin. A pending
+    /// admin never trips this - see [`active_admin_count`].
+    LastAdmin,
+}
+
+/// Resets an account to pending, handing out a fresh invite in place of
+/// whatever password it had.
+///
+/// One `BEGIN IMMEDIATE` transaction, for the same reason as
+/// [`set_role_guarded`] - the last-admin check and the write must not
+/// be two separate round trips - plus a reset's extra property: the
+/// password, every earlier invite, every session and every device
+/// token are replaced or revoked together, so there is no window in
+/// which the account is reachable by anything but the invite just
+/// issued.
+pub async fn reset_to_pending(
+    pool: &SqlitePool,
+    target_id: &str,
+    actor_id: &str,
+    token_hash: &TokenHash,
+    now: UnixTime,
+    expires_at: UnixTime,
+) -> Result<ResetToPendingOutcome, StoreError> {
+    let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
+
+    let current: Option<(String, String)> =
+        sqlx::query_as("SELECT role, status FROM users WHERE id = ?1")
+            .bind(target_id)
+            .fetch_optional(&mut *tx)
+            .await?;
+    let Some((current_role, current_status)) = current else {
+        tx.rollback().await?;
+        return Ok(ResetToPendingOutcome::NotFound);
+    };
+    let current_role = Role::parse(&current_role).ok_or(StoreError::CorruptRow)?;
+    let current_status = AccountStatus::parse(&current_status).ok_or(StoreError::CorruptRow)?;
+
+    if current_role.is_admin()
+        && current_status == AccountStatus::Active
+        && active_admin_count(&mut tx).await? <= 1
+    {
+        tx.rollback().await?;
+        return Ok(ResetToPendingOutcome::LastAdmin);
+    }
+
+    sqlx::query("UPDATE users SET password_hash = '', status = 'pending' WHERE id = ?1")
+        .bind(target_id)
+        .execute(&mut *tx)
+        .await?;
+
+    // Every earlier invite for this account stops working - there is
+    // only ever one live invite per account.
+    sqlx::query("DELETE FROM invite_tokens WHERE user_id = ?1")
+        .bind(target_id)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query(
+        "INSERT INTO invite_tokens (id, user_id, token_hash, created_at, expires_at)
+         VALUES (?1, ?2, ?3, ?4, ?5)",
+    )
+    .bind(new_id())
+    .bind(target_id)
+    .bind(token_hash.as_bytes())
+    .bind(now.as_secs())
+    .bind(expires_at.as_secs())
+    .execute(&mut *tx)
+    .await?;
+
+    let sessions_ended = sqlx::query("DELETE FROM sessions WHERE user_id = ?1")
+        .bind(target_id)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
+    let devices_revoked =
+        crate::devices::store::revoke_all_for_user(&mut tx, target_id, now).await?;
+
+    super::account_log::record(
+        &mut tx,
+        target_id,
+        super::account_log::LogKind::PasswordResetByAdmin,
+        Some(actor_id),
+        now,
+    )
+    .await?;
+
+    tx.commit().await?;
+    Ok(ResetToPendingOutcome::Reset {
+        sessions_ended,
+        devices_revoked,
+    })
+}
+
+/// Outcome of redeeming an invite token.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RedeemInviteOutcome {
+    Redeemed {
+        user_id: String,
+    },
+    /// Unknown, expired, already used, or the account was not pending
+    /// by the time the write lock was held. One variant for all of
+    /// them: the caller is unauthenticated, and distinguishing these
+    /// would say whether a token or an account ever existed.
+    Rejected,
+}
+
+/// Redeems an invite token, setting the new password and activating the
+/// account, atomically.
+///
+/// The single-use property rests on the `UPDATE ... WHERE used_at IS
+/// NULL` below, not on a preceding `SELECT` - the same lesson as
+/// `devices::store::redeem_code_and_create_device` - so two concurrent
+/// redemptions of the same token can only ever have one of them affect
+/// a row.
+pub async fn redeem_invite(
+    pool: &SqlitePool,
+    token_hash: &TokenHash,
+    new_password_hash: &str,
+    now: UnixTime,
+) -> Result<RedeemInviteOutcome, StoreError> {
+    let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
+
+    let invite: Option<(String, String)> = sqlx::query_as(
+        "UPDATE invite_tokens SET used_at = ?2
+         WHERE token_hash = ?1 AND used_at IS NULL AND expires_at > ?2
+         RETURNING id, user_id",
+    )
+    .bind(token_hash.as_bytes())
+    .bind(now.as_secs())
+    .fetch_optional(&mut *tx)
+    .await?;
+
+    let Some((invite_id, user_id)) = invite else {
+        tx.rollback().await?;
+        return Ok(RedeemInviteOutcome::Rejected);
+    };
+
+    let updated = sqlx::query(
+        "UPDATE users SET password_hash = ?2, status = 'active'
+         WHERE id = ?1 AND status = 'pending'",
+    )
+    .bind(&user_id)
+    .bind(new_password_hash)
+    .execute(&mut *tx)
+    .await?;
+
+    if updated.rows_affected() == 0 {
+        // The token was good, but the account was not pending any more
+        // (reset again, or somehow already active). Rolling back
+        // leaves the token spent, which is correct: it named an
+        // account state that no longer exists, and nothing issues a
+        // second invite from the same row.
+        tx.rollback().await?;
+        return Ok(RedeemInviteOutcome::Rejected);
+    }
+
+    sqlx::query("DELETE FROM invite_tokens WHERE user_id = ?1 AND id <> ?2")
+        .bind(&user_id)
+        .bind(&invite_id)
+        .execute(&mut *tx)
+        .await?;
+
+    super::account_log::record(
+        &mut tx,
+        &user_id,
+        super::account_log::LogKind::InviteRedeemed,
+        None,
+        now,
+    )
+    .await?;
+
+    tx.commit().await?;
+    Ok(RedeemInviteOutcome::Redeemed { user_id })
+}
+
+/// Whether an invite token is currently redeemable.
+///
+/// Advisory, like [`setup_token_is_live`]: used to reject a bad token
+/// before spending Argon2 work on the new password. [`redeem_invite`]
+/// re-checks under the write lock.
+pub async fn invite_token_is_live(
+    pool: &SqlitePool,
+    token_hash: &TokenHash,
+    now: UnixTime,
+) -> Result<bool, StoreError> {
+    let (live,): (i64,) = sqlx::query_as(
+        "SELECT EXISTS (
+             SELECT 1 FROM invite_tokens
+             WHERE token_hash = ?1 AND used_at IS NULL AND expires_at > ?2
+         )",
+    )
+    .bind(token_hash.as_bytes())
+    .bind(now.as_secs())
+    .fetch_one(pool)
+    .await?;
+    Ok(live != 0)
 }
 
 /// Outcome of a password change.
@@ -380,6 +738,7 @@ pub async fn replace_password_hash_if_unchanged(
     expected_hash: &str,
     new_hash: &str,
     keep_session_id: &str,
+    now: UnixTime,
 ) -> Result<PasswordChangeOutcome, StoreError> {
     let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
 
@@ -401,6 +760,15 @@ pub async fn replace_password_hash_if_unchanged(
         .bind(keep_session_id)
         .execute(&mut *tx)
         .await?;
+
+    super::account_log::record(
+        &mut tx,
+        user_id,
+        super::account_log::LogKind::PasswordChanged,
+        None,
+        now,
+    )
+    .await?;
 
     tx.commit().await?;
     Ok(PasswordChangeOutcome::Changed {
@@ -549,6 +917,19 @@ pub async fn delete_stale_setup_tokens(
     Ok(result.rows_affected())
 }
 
+/// Removes invite tokens that are expired or already redeemed.
+pub async fn delete_stale_invite_tokens(
+    pool: &SqlitePool,
+    now: UnixTime,
+) -> Result<u64, StoreError> {
+    let result =
+        sqlx::query("DELETE FROM invite_tokens WHERE expires_at <= ?1 OR used_at IS NOT NULL")
+            .bind(now.as_secs())
+            .execute(pool)
+            .await?;
+    Ok(result.rows_affected())
+}
+
 /// A row from `sessions`.
 #[derive(Debug, Clone)]
 pub struct SessionRecord {
@@ -603,6 +984,7 @@ pub async fn find_session_with_user(
                 u.username      AS username,
                 u.password_hash AS password_hash,
                 u.role          AS role,
+                u.status        AS status,
                 u.created_at    AS created_at
          FROM sessions s
          JOIN users u ON u.id = s.user_id
@@ -765,7 +1147,9 @@ mod tests {
 
     async fn admins(pool: &SqlitePool) -> i64 {
         let mut conn = pool.acquire().await.expect("a connection");
-        admin_count(&mut conn).await.expect("counting must succeed")
+        active_admin_count(&mut conn)
+            .await
+            .expect("counting must succeed")
     }
 
     #[tokio::test]
@@ -782,7 +1166,11 @@ mod tests {
             .await
             .expect("the lookup must succeed")
             .expect("the account must exist");
-        assert_eq!(found.password_hash, opaque_hash("alice"));
+        assert!(matches!(
+            found.credential,
+            Credential::Password(hash) if hash == opaque_hash("alice")
+        ));
+        assert_eq!(found.status, AccountStatus::Active);
     }
 
     #[tokio::test]
@@ -973,6 +1361,7 @@ mod tests {
             &opaque_hash("bob"),
             &opaque_hash("bob-next"),
             &current,
+            now(),
         )
         .await
         .expect("the change must succeed");
@@ -1012,6 +1401,7 @@ mod tests {
             &opaque_hash("not-what-is-stored"),
             &opaque_hash("bob-next"),
             &current,
+            now(),
         )
         .await
         .expect("the attempt must not error");
@@ -1048,6 +1438,7 @@ mod tests {
                 &stored_hash,
                 &left_hash,
                 &first_session,
+                now(),
             ),
             replace_password_hash_if_unchanged(
                 &db.pool,
@@ -1055,6 +1446,7 @@ mod tests {
                 &stored_hash,
                 &right_hash,
                 &second_session,
+                now(),
             )
         );
 
@@ -1123,5 +1515,402 @@ mod tests {
             .count();
         assert!(deleted <= 1, "at most one deletion may land: {outcomes:?}");
         assert_eq!(admins(&db.pool).await, 1, "one admin must remain");
+    }
+
+    // --- invites and account resets -----------------------------------
+
+    fn invite_token() -> Token {
+        Token::generate(TokenKind::Invite).expect("the OS CSPRNG must be available")
+    }
+
+    fn one_hour_from(at: UnixTime) -> UnixTime {
+        at.saturating_add(std::time::Duration::from_secs(3_600))
+    }
+
+    #[tokio::test]
+    async fn a_pending_account_is_created_with_its_invite() {
+        let pool = memory_pool().await;
+        let token = invite_token();
+
+        let outcome = insert_pending_user_with_invite(
+            &pool,
+            &username("alice"),
+            Role::Admin,
+            &token.hash(),
+            now(),
+            one_hour_from(now()),
+        )
+        .await
+        .expect("inserting must succeed");
+        let InsertUserOutcome::Created(user) = outcome else {
+            panic!("alice must be free");
+        };
+        assert_eq!(user.status, AccountStatus::Pending);
+
+        let found = find_user_by_id(&pool, &user.id).await.unwrap().unwrap();
+        assert!(matches!(found.credential, Credential::Pending));
+
+        let (count,): (i64,) =
+            sqlx::query_as("SELECT COUNT(*) FROM invite_tokens WHERE user_id = ?1")
+                .bind(&user.id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(count, 1);
+    }
+
+    #[tokio::test]
+    async fn a_pending_account_with_a_taken_username_leaves_no_invite_behind() {
+        let pool = memory_pool().await;
+        add(&pool, "alice", Role::User).await;
+        let token = invite_token();
+
+        let outcome = insert_pending_user_with_invite(
+            &pool,
+            &username("alice"),
+            Role::User,
+            &token.hash(),
+            now(),
+            one_hour_from(now()),
+        )
+        .await
+        .expect("must not error");
+        assert!(matches!(outcome, InsertUserOutcome::UsernameTaken));
+
+        let (count,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM invite_tokens")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(count, 0, "no orphaned invite may exist");
+    }
+
+    #[tokio::test]
+    async fn resetting_an_account_ends_its_sessions_and_revokes_its_devices() {
+        let pool = memory_pool().await;
+        add(&pool, "admin", Role::Admin).await;
+        let bob = add(&pool, "bob", Role::User).await;
+
+        let session_token = Token::generate(TokenKind::Session).unwrap();
+        insert_session(
+            &pool,
+            &SessionRecord {
+                id: new_id(),
+                user_id: bob.id.clone(),
+                created_at: now(),
+                last_used_at: now(),
+                expires_at: one_hour_from(now()),
+            },
+            &session_token.hash(),
+        )
+        .await
+        .unwrap();
+
+        sqlx::query(
+            "INSERT INTO devices (id, user_id, name, platform, token_hash, created_at, last_seen_at)
+             VALUES (?1, ?2, 'phone', 'android', ?3, ?4, ?4)",
+        )
+        .bind(new_id())
+        .bind(&bob.id)
+        .bind(Token::generate(TokenKind::Device).unwrap().hash().as_bytes())
+        .bind(now().as_secs())
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let token = invite_token();
+        let outcome = reset_to_pending(
+            &pool,
+            &bob.id,
+            "admin-id",
+            &token.hash(),
+            now(),
+            one_hour_from(now()),
+        )
+        .await
+        .expect("reset must succeed");
+
+        assert_eq!(
+            outcome,
+            ResetToPendingOutcome::Reset {
+                sessions_ended: 1,
+                devices_revoked: 1,
+            }
+        );
+
+        let found = find_user_by_id(&pool, &bob.id).await.unwrap().unwrap();
+        assert_eq!(found.status, AccountStatus::Pending);
+        assert!(matches!(found.credential, Credential::Pending));
+        assert_eq!(count_sessions_for_user(&pool, &bob.id).await.unwrap(), 0);
+
+        let (revoked,): (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM devices WHERE user_id = ?1 AND revoked_at IS NOT NULL",
+        )
+        .bind(&bob.id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(revoked, 1);
+
+        let logs = crate::auth::account_log::list_for_user(&pool, &bob.id)
+            .await
+            .unwrap();
+        assert_eq!(logs.len(), 1);
+        assert_eq!(
+            logs[0].kind,
+            crate::auth::account_log::LogKind::PasswordResetByAdmin
+        );
+        assert_eq!(logs[0].actor_id.as_deref(), Some("admin-id"));
+    }
+
+    #[tokio::test]
+    async fn resetting_the_last_active_admin_is_refused() {
+        let pool = memory_pool().await;
+        let alice = add(&pool, "alice", Role::Admin).await;
+        let token = invite_token();
+
+        let outcome = reset_to_pending(
+            &pool,
+            &alice.id,
+            "someone",
+            &token.hash(),
+            now(),
+            one_hour_from(now()),
+        )
+        .await
+        .unwrap();
+        assert_eq!(outcome, ResetToPendingOutcome::LastAdmin);
+        assert_eq!(role_of(&pool, &alice.id).await, Some(Role::Admin));
+    }
+
+    /// A pending admin is not an administrator anyone can currently rely
+    /// on - it cannot log in - so resetting it must never be blocked by
+    /// the last-admin guard, however many active admins remain (here,
+    /// zero).
+    #[tokio::test]
+    async fn resetting_a_pending_admin_never_trips_the_last_admin_guard() {
+        let pool = memory_pool().await;
+        let token = invite_token();
+        let outcome = insert_pending_user_with_invite(
+            &pool,
+            &username("alice"),
+            Role::Admin,
+            &token.hash(),
+            now(),
+            one_hour_from(now()),
+        )
+        .await
+        .unwrap();
+        let InsertUserOutcome::Created(alice) = outcome else {
+            panic!("alice must be free");
+        };
+
+        let reset_token = invite_token();
+        let outcome = reset_to_pending(
+            &pool,
+            &alice.id,
+            "someone",
+            &reset_token.hash(),
+            now(),
+            one_hour_from(now()),
+        )
+        .await
+        .unwrap();
+        assert!(matches!(outcome, ResetToPendingOutcome::Reset { .. }));
+    }
+
+    #[tokio::test]
+    async fn resetting_an_unknown_account_is_not_found() {
+        let pool = memory_pool().await;
+        let token = invite_token();
+        let outcome = reset_to_pending(
+            &pool,
+            &new_id(),
+            "someone",
+            &token.hash(),
+            now(),
+            one_hour_from(now()),
+        )
+        .await
+        .unwrap();
+        assert_eq!(outcome, ResetToPendingOutcome::NotFound);
+    }
+
+    #[tokio::test]
+    async fn redeeming_an_invite_activates_the_account() {
+        let pool = memory_pool().await;
+        let token = invite_token();
+        let outcome = insert_pending_user_with_invite(
+            &pool,
+            &username("alice"),
+            Role::User,
+            &token.hash(),
+            now(),
+            one_hour_from(now()),
+        )
+        .await
+        .unwrap();
+        let InsertUserOutcome::Created(alice) = outcome else {
+            panic!("alice must be free");
+        };
+
+        let outcome = redeem_invite(&pool, &token.hash(), &opaque_hash("new"), now())
+            .await
+            .expect("redeeming must succeed");
+        assert_eq!(
+            outcome,
+            RedeemInviteOutcome::Redeemed {
+                user_id: alice.id.clone()
+            }
+        );
+
+        let found = find_user_by_id(&pool, &alice.id).await.unwrap().unwrap();
+        assert_eq!(found.status, AccountStatus::Active);
+        assert!(matches!(
+            found.credential,
+            Credential::Password(hash) if hash == opaque_hash("new")
+        ));
+
+        // The spent invite row itself stays (its `used_at` now set, so
+        // it can never redeem again) - only every *other* invite for
+        // the account would have been cleared here.
+        let (remaining,): (i64,) =
+            sqlx::query_as("SELECT COUNT(*) FROM invite_tokens WHERE used_at IS NOT NULL")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(remaining, 1, "the spent invite stays, marked used");
+
+        let logs = crate::auth::account_log::list_for_user(&pool, &alice.id)
+            .await
+            .unwrap();
+        assert_eq!(logs.len(), 1);
+        assert_eq!(
+            logs[0].kind,
+            crate::auth::account_log::LogKind::InviteRedeemed
+        );
+        assert_eq!(logs[0].actor_id, None);
+    }
+
+    #[tokio::test]
+    async fn redeeming_twice_only_succeeds_once() {
+        let pool = memory_pool().await;
+        let token = invite_token();
+        insert_pending_user_with_invite(
+            &pool,
+            &username("alice"),
+            Role::User,
+            &token.hash(),
+            now(),
+            one_hour_from(now()),
+        )
+        .await
+        .unwrap();
+
+        let first = redeem_invite(&pool, &token.hash(), &opaque_hash("one"), now())
+            .await
+            .unwrap();
+        let second = redeem_invite(&pool, &token.hash(), &opaque_hash("two"), now())
+            .await
+            .unwrap();
+
+        assert!(matches!(first, RedeemInviteOutcome::Redeemed { .. }));
+        assert_eq!(second, RedeemInviteOutcome::Rejected);
+    }
+
+    #[tokio::test]
+    async fn an_expired_invite_is_rejected() {
+        let pool = memory_pool().await;
+        let token = invite_token();
+        insert_pending_user_with_invite(
+            &pool,
+            &username("alice"),
+            Role::User,
+            &token.hash(),
+            now(),
+            now().saturating_add(std::time::Duration::from_secs(60)),
+        )
+        .await
+        .unwrap();
+
+        let after_expiry = now().saturating_add(std::time::Duration::from_secs(61));
+        let outcome = redeem_invite(&pool, &token.hash(), &opaque_hash("new"), after_expiry)
+            .await
+            .unwrap();
+        assert_eq!(outcome, RedeemInviteOutcome::Rejected);
+    }
+
+    #[tokio::test]
+    async fn an_unknown_token_is_rejected() {
+        let pool = memory_pool().await;
+        let token = invite_token();
+        let outcome = redeem_invite(&pool, &token.hash(), &opaque_hash("new"), now())
+            .await
+            .unwrap();
+        assert_eq!(outcome, RedeemInviteOutcome::Rejected);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn two_concurrent_redemptions_of_one_token_yield_exactly_one_winner() {
+        let db = TempDb::new().await;
+        let token = invite_token();
+        insert_pending_user_with_invite(
+            &db.pool,
+            &username("alice"),
+            Role::User,
+            &token.hash(),
+            now(),
+            one_hour_from(now()),
+        )
+        .await
+        .unwrap();
+
+        let left_hash = opaque_hash("left");
+        let right_hash = opaque_hash("right");
+        let token_hash = token.hash();
+        let (left, right) = tokio::join!(
+            redeem_invite(&db.pool, &token_hash, &left_hash, now()),
+            redeem_invite(&db.pool, &token_hash, &right_hash, now())
+        );
+
+        let outcomes = [left.unwrap(), right.unwrap()];
+        let redeemed = outcomes
+            .iter()
+            .filter(|outcome| matches!(outcome, RedeemInviteOutcome::Redeemed { .. }))
+            .count();
+        assert_eq!(redeemed, 1, "exactly one redemption may land: {outcomes:?}");
+    }
+
+    #[tokio::test]
+    async fn invite_liveness_follows_expiry_and_use() {
+        let pool = memory_pool().await;
+        let token = invite_token();
+        insert_pending_user_with_invite(
+            &pool,
+            &username("alice"),
+            Role::User,
+            &token.hash(),
+            now(),
+            now().saturating_add(std::time::Duration::from_secs(60)),
+        )
+        .await
+        .unwrap();
+
+        assert!(invite_token_is_live(&pool, &token.hash(), now())
+            .await
+            .unwrap());
+        assert!(!invite_token_is_live(
+            &pool,
+            &token.hash(),
+            now().saturating_add(std::time::Duration::from_secs(61))
+        )
+        .await
+        .unwrap());
+
+        redeem_invite(&pool, &token.hash(), &opaque_hash("new"), now())
+            .await
+            .unwrap();
+        assert!(!invite_token_is_live(&pool, &token.hash(), now())
+            .await
+            .unwrap());
     }
 }

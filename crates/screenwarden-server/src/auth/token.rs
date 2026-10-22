@@ -47,6 +47,9 @@ pub enum TokenKind {
     /// what makes that structural rather than a matter of discipline,
     /// since the prefix is part of what gets hashed.
     Device,
+    /// One-time invite token that redeems to set a pending account's
+    /// first password. Like the setup token, never in a cookie.
+    Invite,
 }
 
 impl TokenKind {
@@ -55,6 +58,7 @@ impl TokenKind {
             Self::Session => "sws_",
             Self::Setup => "swb_",
             Self::Device => "swd_",
+            Self::Invite => "swi_",
         }
     }
 }
@@ -184,7 +188,12 @@ impl fmt::Debug for TokenHash {
 mod tests {
     use super::*;
 
-    const EVERY_KIND: [TokenKind; 3] = [TokenKind::Session, TokenKind::Setup, TokenKind::Device];
+    const EVERY_KIND: [TokenKind; 4] = [
+        TokenKind::Session,
+        TokenKind::Setup,
+        TokenKind::Device,
+        TokenKind::Invite,
+    ];
 
     #[test]
     fn generated_tokens_have_the_documented_shape() {
@@ -220,7 +229,7 @@ mod tests {
         // A CSRF prefix used to exist here. CSRF tokens are now derived
         // from the session token instead of generated, so there is no
         // kind for them.
-        assert_eq!(EVERY_KIND.len(), 3);
+        assert_eq!(EVERY_KIND.len(), 4);
     }
 
     /// The pairwise sweep of what `a_token_is_not_accepted_as_the_other

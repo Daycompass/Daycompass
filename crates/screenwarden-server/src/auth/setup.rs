@@ -173,6 +173,7 @@ pub async fn complete_setup(
 mod tests {
     use super::*;
     use crate::auth::password::HashingParams;
+    use crate::auth::store::Credential;
     use crate::db::{self, DbTarget};
 
     /// Every credential in these tests is generated at runtime.
@@ -336,7 +337,10 @@ mod tests {
             .expect("setup must succeed");
         assert_eq!(admin.username.as_str(), "alice");
         assert!(admin.role.is_admin());
-        assert!(admin.password_hash.starts_with("$argon2id$"));
+        assert!(matches!(
+            &admin.credential,
+            Credential::Password(hash) if hash.starts_with("$argon2id$")
+        ));
 
         // A second attempt, even with a fresh token, is refused.
         let second = complete(&pool, &token, "bob", now()).await;
