@@ -377,8 +377,18 @@ impl std::error::Error for LegacyEnvVar {}
 /// every default silently: loopback bind, no trusted proxies, the
 /// compiled-in rate limits - exactly the configuration an operator who
 /// set `SCREENWARD_PUBLIC_URL` (for example) believed they had changed.
+///
+/// Reads `vars_os`, not `vars`: the latter panics if *any* variable in
+/// the whole environment - not just one this function cares about -
+/// has a name or value that is not valid Unicode, which would turn an
+/// unrelated variable into a startup crash instead of this check's
+/// ordinary refusal. A name that is not valid UTF-8 cannot start with
+/// [`LEGACY_PREFIX`] (an ASCII string) anyway, so dropping such names
+/// loses nothing; values are never inspected, so they are never even
+/// looked at.
 pub fn check_for_legacy_env() -> Result<(), LegacyEnvVar> {
-    match find_legacy_var(std::env::vars().map(|(name, _)| name)) {
+    let names = std::env::vars_os().filter_map(|(name, _value)| name.into_string().ok());
+    match find_legacy_var(names) {
         Some(name) => Err(LegacyEnvVar(name)),
         None => Ok(()),
     }
