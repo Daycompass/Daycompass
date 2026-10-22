@@ -181,9 +181,26 @@ const DEFAULT_RATE_LIMIT_DEVICE_AUTH_FAIL: &str = "600/60";
 /// nothing more.
 const DEFAULT_INVITE_TTL_SECS: u64 = 72 * 60 * 60;
 
-/// Ten invite redemptions per five minutes from one client address.
-/// Same shape as the login per-address bucket, for the same reason.
-const DEFAULT_RATE_LIMIT_INVITE_IP: &str = "10/300";
+/// A hundred invite redemptions per five minutes from one client
+/// address.
+///
+/// Originally ten, modeled on the login per-address bucket - but that
+/// model does not transfer: a failed login from one address is
+/// inherently suspicious, while a *successful* invite redemption is
+/// the normal path, and many legitimate people can share one address
+/// (a school's NAT, a campus network). Ten exhausted itself on a
+/// single classroom handing out invites in one sitting. The invite
+/// token itself needs no rate limit to resist guessing - it is
+/// unguessable at 256 bits, see
+/// [`DEFAULT_RATE_LIMIT_INVITE_GLOBAL`] - so this bucket is sized for
+/// headroom over realistic bulk onboarding, not for brute-force
+/// resistance.
+///
+/// This is a per-*address* limit: behind a reverse proxy, it only
+/// attributes requests correctly when `SCREENWARDEN_TRUSTED_PROXIES`
+/// names that proxy, or every request is counted against the proxy's
+/// own address instead of the real client's.
+const DEFAULT_RATE_LIMIT_INVITE_IP: &str = "100/300";
 
 /// Six hundred invite redemptions per minute across the whole instance.
 /// Same shape and the same trade-off as [`DEFAULT_RATE_LIMIT_PAIR_GLOBAL`]:
@@ -1030,7 +1047,7 @@ mod tests {
         assert_eq!(config.rate_limit_pw_change.window, Duration::from_secs(900));
         assert_eq!(config.rate_limit_max_entries, 10_000);
         assert_eq!(config.invite_ttl, Duration::from_secs(259_200));
-        assert_eq!(config.rate_limit_invite_ip.max, 10);
+        assert_eq!(config.rate_limit_invite_ip.max, 100);
         assert_eq!(config.rate_limit_invite_ip.window, Duration::from_secs(300));
         assert_eq!(config.rate_limit_invite_global.max, 600);
         assert_eq!(
@@ -1441,7 +1458,7 @@ mod tests {
                 "rate_limit_ingest_device: RateLimitRule { max: 30, window: 60s }, ",
                 "rate_limit_device_auth_fail: RateLimitRule { max: 600, window: 60s }, ",
                 "invite_ttl: 259200s, ",
-                "rate_limit_invite_ip: RateLimitRule { max: 10, window: 300s }, ",
+                "rate_limit_invite_ip: RateLimitRule { max: 100, window: 300s }, ",
                 "rate_limit_invite_global: RateLimitRule { max: 600, window: 60s }",
                 " }",
             )

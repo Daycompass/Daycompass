@@ -325,6 +325,71 @@ async fn a_rate_limited_account_can_still_log_in_from_elsewhere() {
     );
 }
 
+/// A token that is syntactically valid and was never issued, for
+/// exercising a failed redemption without consuming a real invite.
+fn unissued_invite_token() -> String {
+    use screenwarden_server::auth::token::{Token, TokenKind};
+    Token::generate(TokenKind::Invite)
+        .expect("the OS CSPRNG must be available")
+        .expose()
+        .to_owned()
+}
+
+/// The default `InviteIp` budget must absorb a classroom-scale burst
+/// of *successful* redemptions from one shared address (a school's
+/// NAT, say) without being exhausted by them, while still refusing
+/// bad tokens from that same address on their own terms rather than
+/// with a 429. Exercises the real default from `Config`, not an
+/// override, since the default itself is what is under test.
+#[tokio::test]
+async fn invite_redemption_absorbs_a_classroom_burst_from_one_address() {
+    let app = TestApp::new().await;
+    let (_credentials, admin) = app.provisioned_admin().await;
+    let peer = "192.0.2.50:1111";
+
+    for i in 0..25 {
+        let (_id, token, _expires_at) = app
+            .create_pending_account(&admin, &format!("student{i}"), "user")
+            .await;
+        let response = app
+            .send(
+                TestRequest::post("/api/v1/invites/redeem")
+                    .origin(GOOD_ORIGIN)
+                    .peer(peer)
+                    .json(json!({
+                        "invite_token": token,
+                        "new_password": common::random_secret(),
+                    })),
+            )
+            .await;
+        assert_eq!(
+            response.status,
+            StatusCode::NO_CONTENT,
+            "successful redemption {i} from a shared address must not be rate limited: {:?}",
+            response.body
+        );
+    }
+
+    for i in 0..5 {
+        let response = app
+            .send(
+                TestRequest::post("/api/v1/invites/redeem")
+                    .origin(GOOD_ORIGIN)
+                    .peer(peer)
+                    .json(json!({
+                        "invite_token": unissued_invite_token(),
+                        "new_password": common::random_secret(),
+                    })),
+            )
+            .await;
+        assert_eq!(
+            response.status,
+            StatusCode::UNAUTHORIZED,
+            "failed attempt {i} must be refused on its own terms, not by the rate limiter"
+        );
+    }
+}
+
 /// The Origin check runs before the rate limiter, so a cross-origin
 /// attempt cannot be used to burn someone else's budget.
 #[tokio::test]
