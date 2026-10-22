@@ -12,6 +12,11 @@ use sqlx::SqlitePool;
 /// Database filename inside the data directory.
 pub const DB_FILE_NAME: &str = "screenwarden.sqlite3";
 
+/// The filename used before the Screenward -> Screenwarden rename. Only
+/// checked for at startup, to refuse an upgrade that would otherwise
+/// silently start from an empty database under the new name.
+const LEGACY_DB_FILE_NAME: &str = "screenward.sqlite3";
+
 /// How long a connection waits on a lock before giving up.
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -36,6 +41,12 @@ pub enum DbError {
 
     #[error("failed to run database migrations")]
     Migrate(#[source] sqlx::migrate::MigrateError),
+
+    #[error(
+        "found screenward.sqlite3 but not screenwarden.sqlite3 in the data \
+         directory; rename the file to screenwarden.sqlite3 and restart"
+    )]
+    LegacyDatabaseFile,
 }
 
 /// Where the database lives.
@@ -52,6 +63,11 @@ pub enum DbTarget {
 pub async fn connect(target: &DbTarget) -> Result<SqlitePool, DbError> {
     let (connect_options, pool_options) = match target {
         DbTarget::File { data_dir } => {
+            if !data_dir.join(DB_FILE_NAME).exists() && data_dir.join(LEGACY_DB_FILE_NAME).exists()
+            {
+                return Err(DbError::LegacyDatabaseFile);
+            }
+
             harden_data_dir(data_dir)?;
             let db_path = data_dir.join(DB_FILE_NAME);
             harden_db_file(&db_path)?;
@@ -566,6 +582,58 @@ mod tests {
         let db_path = data_dir.join(DB_FILE_NAME);
         let file_mode = std::fs::metadata(&db_path).unwrap().permissions().mode() & 0o777;
         assert_eq!(file_mode, 0o600);
+
+        std::fs::remove_dir_all(&data_dir).ok();
+    }
+
+    /// Only the legacy filename is present: startup must refuse rather
+    /// than silently create a fresh, empty database under the new name.
+    #[tokio::test]
+    async fn file_target_refuses_a_legacy_only_data_dir() {
+        use std::sync::atomic::{AtomicU32, Ordering};
+
+        static COUNTER: AtomicU32 = AtomicU32::new(0);
+        let unique = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let data_dir = std::env::temp_dir().join(format!(
+            "screenwarden-db-legacy-test-{}-{unique}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&data_dir).unwrap();
+        std::fs::write(data_dir.join(LEGACY_DB_FILE_NAME), b"").unwrap();
+
+        let target = DbTarget::File {
+            data_dir: data_dir.clone(),
+        };
+        let result = connect(&target).await;
+
+        assert!(matches!(result, Err(DbError::LegacyDatabaseFile)));
+
+        std::fs::remove_dir_all(&data_dir).ok();
+    }
+
+    /// Both files present (an upgrade already completed once, or a
+    /// deliberate copy): the current filename wins and startup proceeds.
+    #[tokio::test]
+    async fn file_target_succeeds_when_both_files_are_present() {
+        use std::sync::atomic::{AtomicU32, Ordering};
+
+        static COUNTER: AtomicU32 = AtomicU32::new(0);
+        let unique = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let data_dir = std::env::temp_dir().join(format!(
+            "screenwarden-db-both-test-{}-{unique}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&data_dir).unwrap();
+        std::fs::write(data_dir.join(LEGACY_DB_FILE_NAME), b"").unwrap();
+        std::fs::write(data_dir.join(DB_FILE_NAME), b"").unwrap();
+
+        let target = DbTarget::File {
+            data_dir: data_dir.clone(),
+        };
+        let pool = connect(&target)
+            .await
+            .expect("the current filename must win when both are present");
+        pool.close().await;
 
         std::fs::remove_dir_all(&data_dir).ok();
     }

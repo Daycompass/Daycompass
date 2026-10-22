@@ -273,6 +273,73 @@ impl VarSource for NoEnv {
     }
 }
 
+/// The prefix every variable used before the Screenward -> Screenwarden
+/// rename. Checked as this exact prefix, trailing underscore included:
+/// `SCREENWARDEN_` also starts with `SCREENWARD`, but not with
+/// `SCREENWARD_` (its twelfth character is `E`, not `_`), so a renamed
+/// variable never trips this check.
+const LEGACY_PREFIX: &str = "SCREENWARD_";
+
+/// Finds the first name starting with [`LEGACY_PREFIX`], if any. Pure and
+/// unit-testable: takes an iterator of names rather than reading the
+/// process environment itself.
+fn find_legacy_var(names: impl Iterator<Item = String>) -> Option<String> {
+    names
+        .into_iter()
+        .find(|name| name.starts_with(LEGACY_PREFIX))
+}
+
+/// A legacy `SCREENWARD_*` variable is set in the process environment.
+///
+/// A separate type from [`ConfigError`], whose variants all hold a
+/// `&'static str` naming one of this module's own constants - a property
+/// worth keeping, since it means no `ConfigError` ever carries a value
+/// read from the environment. This error does, so it gets its own type.
+#[derive(Debug)]
+pub struct LegacyEnvVar(String);
+
+impl fmt::Display for LegacyEnvVar {
+    /// Prints the variable name only if it looks like an environment
+    /// variable name (`[A-Z0-9_]`); otherwise prints only the prefix, so
+    /// nothing arbitrary from the environment reaches stderr.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let looks_like_a_var_name = !self.0.is_empty()
+            && self
+                .0
+                .bytes()
+                .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'_');
+        if looks_like_a_var_name {
+            write!(
+                f,
+                "{} is a legacy Screenward variable; Screenward was renamed to \
+                 Screenwarden, rename it to {}",
+                self.0,
+                self.0.replacen(LEGACY_PREFIX, "SCREENWARDEN_", 1)
+            )
+        } else {
+            write!(
+                f,
+                "a legacy {LEGACY_PREFIX}* variable is set; Screenward was renamed \
+                 to Screenwarden, rename it to SCREENWARDEN_*"
+            )
+        }
+    }
+}
+
+impl std::error::Error for LegacyEnvVar {}
+
+/// Refuses to continue if any `SCREENWARD_*` variable is set in the real
+/// process environment. Without this, a missed rename falls back to
+/// every default silently: loopback bind, no trusted proxies, the
+/// compiled-in rate limits - exactly the configuration an operator who
+/// set `SCREENWARD_PUBLIC_URL` (for example) believed they had changed.
+pub fn check_for_legacy_env() -> Result<(), LegacyEnvVar> {
+    match find_legacy_var(std::env::vars().map(|(name, _)| name)) {
+        Some(name) => Err(LegacyEnvVar(name)),
+        None => Ok(()),
+    }
+}
+
 impl Config {
     /// Loads configuration from the real process environment. Fails on the
     /// first invalid or ambiguous variable; never includes any value in
@@ -794,6 +861,51 @@ pub fn unmap_v4(addr: IpAddr) -> IpAddr {
 mod tests {
     use super::*;
     use std::collections::HashMap;
+
+    #[test]
+    fn find_legacy_var_finds_a_legacy_prefixed_name() {
+        let names = vec!["PATH".to_owned(), "SCREENWARD_BIND_ADDR".to_owned()];
+        assert_eq!(
+            find_legacy_var(names.into_iter()),
+            Some("SCREENWARD_BIND_ADDR".to_owned())
+        );
+    }
+
+    #[test]
+    fn find_legacy_var_finds_nothing_when_nothing_matches() {
+        let names = vec!["PATH".to_owned(), "SCREENWARDEN_BIND_ADDR".to_owned()];
+        assert_eq!(find_legacy_var(names.into_iter()), None);
+    }
+
+    /// The one subtlety named in the module doc: `SCREENWARDEN_*` starts
+    /// with `SCREENWARD`, but not with the full `SCREENWARD_` prefix
+    /// (trailing underscore included), so it must not trip the check.
+    #[test]
+    fn find_legacy_var_does_not_match_the_renamed_prefix() {
+        let names = vec![
+            "SCREENWARDEN_BIND_ADDR".to_owned(),
+            "SCREENWARDEN_PUBLIC_URL".to_owned(),
+        ];
+        assert_eq!(find_legacy_var(names.into_iter()), None);
+    }
+
+    #[test]
+    fn legacy_env_var_display_names_a_well_formed_variable() {
+        let err = LegacyEnvVar("SCREENWARD_BIND_ADDR".to_owned());
+        let message = err.to_string();
+        assert!(message.contains("SCREENWARD_BIND_ADDR"));
+        assert!(message.contains("SCREENWARDEN_BIND_ADDR"));
+    }
+
+    /// A variable name containing anything outside `[A-Z0-9_]` cannot
+    /// reach stderr, however it got into `std::env::vars()`.
+    #[test]
+    fn legacy_env_var_display_hides_a_malformed_name() {
+        let err = LegacyEnvVar("SCREENWARD_\u{1b}[31mnot really a name".to_owned());
+        let message = err.to_string();
+        assert!(!message.contains("not really a name"));
+        assert!(message.contains(LEGACY_PREFIX));
+    }
 
     /// In-memory stand-in for the process environment, so tests never
     /// mutate real env vars (which would need `unsafe`, forbidden here)

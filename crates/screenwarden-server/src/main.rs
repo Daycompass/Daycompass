@@ -7,11 +7,20 @@ use std::io::Write;
 
 use screenwarden_server::auth::setup;
 use screenwarden_server::auth::time::UnixTime;
-use screenwarden_server::config::Config;
+use screenwarden_server::config::{self, Config};
 use screenwarden_server::state::AppState;
 
 #[tokio::main]
 async fn main() {
+    // Checked before anything else, including `Config::from_env`: a
+    // stray `SCREENWARD_*` variable must never be silently ignored in
+    // favor of a default (loopback bind, no trusted proxies, the
+    // compiled-in rate limits).
+    if let Err(err) = config::check_for_legacy_env() {
+        eprintln!("screenwarden-server: {err}");
+        std::process::exit(1);
+    }
+
     let config = match Config::from_env() {
         Ok(config) => config,
         Err(err) => {
