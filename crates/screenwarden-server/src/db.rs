@@ -17,6 +17,14 @@ pub const DB_FILE_NAME: &str = "screenwarden.sqlite3";
 /// silently start from an empty database under the new name.
 const LEGACY_DB_FILE_NAME: &str = "screenward.sqlite3";
 
+/// SQLite's WAL auxiliary files, under the legacy name. `connect` below
+/// opens every database - old name or new - in WAL mode, so these are
+/// not incidental: recent commits can live in `-wal` and not yet be in
+/// the main file at all, and `-shm` is the index a reader needs to make
+/// sense of it.
+const LEGACY_WAL_FILE_NAME: &str = "screenward.sqlite3-wal";
+const LEGACY_SHM_FILE_NAME: &str = "screenward.sqlite3-shm";
+
 /// How long a connection waits on a lock before giving up.
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -43,8 +51,10 @@ pub enum DbError {
     Migrate(#[source] sqlx::migrate::MigrateError),
 
     #[error(
-        "found screenward.sqlite3 but not screenwarden.sqlite3 in the data \
-         directory; rename the file to screenwarden.sqlite3 and restart"
+        "found a legacy screenward.sqlite3* file in the data directory; \
+         stop the server cleanly, then rename every file named \
+         screenward.sqlite3* - including -wal and -shm - to the matching \
+         screenwarden.sqlite3* name, and restart"
     )]
     LegacyDatabaseFile,
 }
@@ -63,10 +73,7 @@ pub enum DbTarget {
 pub async fn connect(target: &DbTarget) -> Result<SqlitePool, DbError> {
     let (connect_options, pool_options) = match target {
         DbTarget::File { data_dir } => {
-            if !data_dir.join(DB_FILE_NAME).exists() && data_dir.join(LEGACY_DB_FILE_NAME).exists()
-            {
-                return Err(DbError::LegacyDatabaseFile);
-            }
+            check_for_legacy_db_files(data_dir)?;
 
             harden_data_dir(data_dir)?;
             let db_path = data_dir.join(DB_FILE_NAME);
@@ -111,6 +118,51 @@ pub async fn check_reachable(pool: &SqlitePool) -> Result<(), DbError> {
         .await
         .map(|_| ())
         .map_err(DbError::Connect)
+}
+
+/// Refuses to start if the data directory shows the Screenward ->
+/// Screenwarden rename was missed or only partly done.
+///
+/// Two independent checks, because they catch different mistakes:
+///
+///   * A non-empty `screenward.sqlite3-wal` is refused **regardless**
+///     of whether `screenwarden.sqlite3` already exists. A WAL file is
+///     only ever read by a connection to the exact main-file name it
+///     was created next to, so a connection to the new name never
+///     looks at the old one's `-wal` at all - any commits still
+///     sitting in it are not stale, they are permanently orphaned. An
+///     empty one (just past a clean checkpoint) has nothing left to
+///     lose, so it does not trip this; otherwise a leftover from a
+///     *completed* rename, long since harmless, would block every
+///     later start forever.
+///   * Otherwise, if the new main file is missing, any legacy file at
+///     all - the main one or either auxiliary - means the rename was
+///     never done, or was done only for some of the files.
+fn check_for_legacy_db_files(data_dir: &Path) -> Result<(), DbError> {
+    let legacy_wal_has_unflushed_writes = std::fs::metadata(data_dir.join(LEGACY_WAL_FILE_NAME))
+        .map(|meta| meta.len() > 0)
+        .unwrap_or(false);
+    if legacy_wal_has_unflushed_writes {
+        return Err(DbError::LegacyDatabaseFile);
+    }
+
+    if data_dir.join(DB_FILE_NAME).exists() {
+        return Ok(());
+    }
+
+    let any_legacy_file_exists = [
+        LEGACY_DB_FILE_NAME,
+        LEGACY_WAL_FILE_NAME,
+        LEGACY_SHM_FILE_NAME,
+    ]
+    .iter()
+    .any(|name| data_dir.join(name).exists());
+
+    if any_legacy_file_exists {
+        return Err(DbError::LegacyDatabaseFile);
+    }
+
+    Ok(())
 }
 
 #[cfg(unix)]
@@ -638,5 +690,125 @@ mod tests {
         pool.close().await;
 
         std::fs::remove_dir_all(&data_dir).ok();
+    }
+
+    /// Only the legacy WAL file is present - the main legacy file was
+    /// already removed or renamed, but the rename was not completed -
+    /// and the new main file does not exist either: still a refusal,
+    /// not a fresh empty database under the new name.
+    #[tokio::test]
+    async fn file_target_refuses_when_only_a_legacy_wal_exists() {
+        use std::sync::atomic::{AtomicU32, Ordering};
+
+        static COUNTER: AtomicU32 = AtomicU32::new(0);
+        let unique = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let data_dir = std::env::temp_dir().join(format!(
+            "screenwarden-db-legacy-wal-test-{}-{unique}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&data_dir).unwrap();
+        std::fs::write(data_dir.join(LEGACY_WAL_FILE_NAME), b"").unwrap();
+
+        let target = DbTarget::File {
+            data_dir: data_dir.clone(),
+        };
+        let result = connect(&target).await;
+
+        assert!(matches!(result, Err(DbError::LegacyDatabaseFile)));
+
+        std::fs::remove_dir_all(&data_dir).ok();
+    }
+
+    /// Same as above, for the `-shm` file.
+    #[tokio::test]
+    async fn file_target_refuses_when_only_a_legacy_shm_exists() {
+        use std::sync::atomic::{AtomicU32, Ordering};
+
+        static COUNTER: AtomicU32 = AtomicU32::new(0);
+        let unique = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let data_dir = std::env::temp_dir().join(format!(
+            "screenwarden-db-legacy-shm-test-{}-{unique}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&data_dir).unwrap();
+        std::fs::write(data_dir.join(LEGACY_SHM_FILE_NAME), b"").unwrap();
+
+        let target = DbTarget::File {
+            data_dir: data_dir.clone(),
+        };
+        let result = connect(&target).await;
+
+        assert!(matches!(result, Err(DbError::LegacyDatabaseFile)));
+
+        std::fs::remove_dir_all(&data_dir).ok();
+    }
+
+    /// A non-empty legacy WAL is refused even when the new main file
+    /// already exists and is in active use: it names commits that a
+    /// connection to the new file will never read, because SQLite only
+    /// ever associates a `-wal` with the exact main-file name it was
+    /// created next to.
+    #[tokio::test]
+    async fn file_target_refuses_a_non_empty_legacy_wal_even_when_the_new_file_exists() {
+        use std::sync::atomic::{AtomicU32, Ordering};
+
+        static COUNTER: AtomicU32 = AtomicU32::new(0);
+        let unique = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let data_dir = std::env::temp_dir().join(format!(
+            "screenwarden-db-stray-wal-test-{}-{unique}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&data_dir).unwrap();
+        std::fs::write(data_dir.join(DB_FILE_NAME), b"").unwrap();
+        std::fs::write(data_dir.join(LEGACY_WAL_FILE_NAME), b"not actually empty").unwrap();
+
+        let target = DbTarget::File {
+            data_dir: data_dir.clone(),
+        };
+        let result = connect(&target).await;
+
+        assert!(matches!(result, Err(DbError::LegacyDatabaseFile)));
+
+        std::fs::remove_dir_all(&data_dir).ok();
+    }
+
+    /// The flip side of the test above: an *empty* legacy WAL - the
+    /// ordinary leftover of a rename that already finished cleanly -
+    /// must not block every later start of an otherwise working
+    /// instance forever.
+    #[tokio::test]
+    async fn file_target_tolerates_an_empty_legacy_wal_when_the_new_file_exists() {
+        use std::sync::atomic::{AtomicU32, Ordering};
+
+        static COUNTER: AtomicU32 = AtomicU32::new(0);
+        let unique = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let data_dir = std::env::temp_dir().join(format!(
+            "screenwarden-db-empty-stray-wal-test-{}-{unique}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&data_dir).unwrap();
+        std::fs::write(data_dir.join(DB_FILE_NAME), b"").unwrap();
+        std::fs::write(data_dir.join(LEGACY_WAL_FILE_NAME), b"").unwrap();
+
+        let target = DbTarget::File {
+            data_dir: data_dir.clone(),
+        };
+        let pool = connect(&target)
+            .await
+            .expect("an empty legacy WAL must not block startup");
+        pool.close().await;
+
+        std::fs::remove_dir_all(&data_dir).ok();
+    }
+
+    /// The message names both auxiliary files and tells the operator to
+    /// stop the server first, not just to rename something while it
+    /// might still be writing to it.
+    #[test]
+    fn the_legacy_database_message_covers_wal_and_shm_and_stopping_first() {
+        let message = DbError::LegacyDatabaseFile.to_string();
+        assert!(message.contains("-wal"), "{message}");
+        assert!(message.contains("-shm"), "{message}");
+        assert!(message.contains("stop the server"), "{message}");
     }
 }
