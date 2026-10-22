@@ -986,6 +986,15 @@ pub async fn insert_session(
 /// One query rather than two so the session and the user are read from a
 /// single consistent view: between two separate reads the account could
 /// be deleted, leaving a handler holding a session that points nowhere.
+///
+/// `u.status = 'active'` is in the `WHERE` rather than left to a caller
+/// to check - the same reasoning as `revoked_at IS NULL` on
+/// [`crate::devices::store::find_live_device_by_token_hash`]. No known
+/// path leaves a session row pointing at a non-active account today
+/// (a reset deletes every session in the same transaction that clears
+/// the password), but a session authenticating one regardless would be
+/// a silent way around that guarantee, and this is the second line
+/// against it.
 pub async fn find_session_with_user(
     pool: &SqlitePool,
     token_hash: &TokenHash,
@@ -1004,7 +1013,7 @@ pub async fn find_session_with_user(
                 u.created_at    AS created_at
          FROM sessions s
          JOIN users u ON u.id = s.user_id
-         WHERE s.token_hash = ?1",
+         WHERE s.token_hash = ?1 AND u.status = 'active'",
     )
     .bind(token_hash.as_bytes())
     .fetch_optional(pool)

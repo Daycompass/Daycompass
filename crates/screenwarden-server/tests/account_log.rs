@@ -305,6 +305,50 @@ async fn an_account_sees_only_its_own_log() {
     assert_eq!(admin_log.body["entries"].as_array().unwrap().len(), 1);
 }
 
+/// A session row pointing at a pending account - not reachable through
+/// any HTTP flow today, since a pending account has no password to log
+/// in with, so it is created directly against the pool - must be
+/// refused at the route, not merely fail to resolve in isolation.
+#[tokio::test]
+async fn a_session_for_a_pending_account_is_refused_at_the_route() {
+    use std::time::Duration;
+
+    use screenwarden_server::auth::cookie;
+    use screenwarden_server::auth::session::{self, SessionPolicy};
+    use screenwarden_server::auth::time::UnixTime;
+
+    let app = TestApp::new().await;
+    let (_admin_credentials, admin) = app.provisioned_admin().await;
+    let (pending_id, _token, _expires_at) =
+        app.create_pending_account(&admin, "carol", "user").await;
+
+    let policy = SessionPolicy {
+        idle_timeout: Duration::from_secs(86_400),
+        absolute_timeout: Duration::from_secs(86_400),
+    };
+    let session = session::create(&app.pool, &pending_id, policy, UnixTime::now())
+        .await
+        .expect("creating a session directly must succeed");
+
+    let response = app
+        .send(
+            TestRequest::get("/api/v1/account/log")
+                .origin(GOOD_ORIGIN)
+                .cookie(&format!(
+                    "{}={}",
+                    cookie::COOKIE_NAME,
+                    session.token.expose()
+                )),
+        )
+        .await;
+    assert_eq!(
+        response.status,
+        StatusCode::UNAUTHORIZED,
+        "{:?}",
+        response.body
+    );
+}
+
 #[tokio::test]
 async fn no_admin_route_may_read_another_accounts_log() {
     // There is no such route in the inventory at all; this states that
