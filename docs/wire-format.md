@@ -52,8 +52,9 @@ password. The same flow is how an admin resets a forgotten password:
 it does not set a new one, it issues a fresh invite in place of the
 old one. Nothing stops an admin from redeeming that invite themselves
 and logging in as the account instead of handing it over; the
-account's own log, below, records that this happened but does not
-prevent it.
+account's own log, below, records the reset and which admin performed
+it, but not who went on to redeem the invite, and recording does not
+prevent the takeover.
 
 ### The `status` field on a user object
 
@@ -156,10 +157,11 @@ of an account that already exists, which is closer in spirit to
 logging in than to creating something new. No CSRF, since there is no
 cookie for a token to be checked against.
 
-As with login, an absent `Origin` is allowed: a non-browser client -
-a sync client, curl, a script - sends no `Origin` and is not refused
-for it. Only a browser's cross-site request carries one at all, and
-that is what this check exists to reject.
+A request with no `Origin` header at all - a native client, curl, a
+script - is allowed, exactly as it is for login. A request that does
+carry one must match the instance's public origin, or it is refused
+with `origin_mismatch` below. A browser always sends `Origin` on a
+cross-site `POST`, so this is the case the check exists to catch.
 
 ```json
 {
@@ -182,6 +184,7 @@ through `POST /api/v1/auth/login`.
 | --- | --- | --- |
 | 400 | `invalid_password` | Blank, or outside 12–128 characters. |
 | 401 | `invalid_invite_token` | Unknown, expired, already used, or malformed. Deliberately indistinguishable — redeeming is unauthenticated, so the response must not say whether a token ever existed. |
+| 403 | `origin_mismatch` | A present `Origin` header names something other than this instance. |
 | 503 | `server_busy` | Password hashing capacity is exhausted; shed, not refused. Carries `Retry-After`, honour it the same as a 429. |
 | 429 | `rate_limited` | Per-address or instance-wide limit; see below. Carries `Retry-After`. |
 
@@ -218,11 +221,16 @@ and no admin variant, so an account can never read anyone else's.
 
 `actor_id` is the acting admin's id, present only for
 `password_reset_by_admin` — the other two kinds are the account acting
-on itself, so it is `null`. The entry is written the moment the reset
-happens, before anyone redeems the new invite, so it is already
-waiting in the log whenever the account holder next manages to log in
-and read it - whether that is right away, or only after a later reset
-actually reaches them.
+on itself, so it is `null`.
+
+The `password_reset_by_admin` entry is written at the moment of the
+reset, independent of who redeems the resulting invite — but this
+endpoint is session auth, so the entry is only ever readable by
+whoever can log in as the account. If the rightful holder redeems the
+invite, they will see it on their next visit here. If an admin
+redeems it first instead and logs in as the account, the holder never
+gets the password needed to log in at all, and so never sees it
+either. An `invite_redeemed` entry never says who redeemed it.
 
 Newest first, capped at the 200 most recent entries.
 
