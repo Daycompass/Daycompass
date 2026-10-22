@@ -1,4 +1,4 @@
-# Contributing to Screenward
+# Contributing to Screenwarden
 
 Thanks for your interest in contributing. This project is early-stage;
 please open an issue before large changes so effort isn't wasted on
@@ -42,7 +42,7 @@ the repo.
    commit. It fails closed: if gitleaks isn't installed, the commit is
    rejected rather than silently skipping the scan.
 
-   The rule that recognizes Screenward's own token format has its own
+   The rule that recognizes Screenwarden's own token format has its own
    test. Run it after changing `.gitleaks.toml`:
 
    ```sh
@@ -58,11 +58,14 @@ the repo.
 Any change touching authentication needs **two approving reviews**, not
 one. That covers:
 
-- `crates/screenward-server/src/auth/**`
-- `crates/screenward-server/src/clientip.rs` and `ratelimit.rs`
-- `crates/screenward-server/src/routes/auth.rs` and `routes/setup.rs`
+- `crates/screenwarden-server/src/auth/**` (including `invite.rs` and
+  `account_log.rs`)
+- `crates/screenwarden-server/src/clientip.rs` and `ratelimit.rs`
+- `crates/screenwarden-server/src/routes/auth.rs`, `routes/setup.rs`,
+  `routes/users.rs`, `routes/invites.rs` and `routes/account.rs`
 - the `Origin` and error-normalizing middleware
-- any migration that touches `users`, `sessions` or `setup_tokens`
+- any migration that touches `users`, `sessions`, `setup_tokens`,
+  `invite_tokens` or `account_log`
 
 The reason is that the failure mode is quiet. A bug in this code does
 not crash or return a wrong number: it silently accepts a request it

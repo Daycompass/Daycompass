@@ -103,6 +103,6 @@ jobs:
           tar -xzf gitleaks.tar.gz gitleaks
           chmod +x gitleaks
           sudo mv gitleaks /usr/local/bin/gitleaks
-      - name: Verify the Screenward token rule
+      - name: Verify the Screenwarden token rule
         run: .githooks/tests/gitleaks-rules.sh
       - run: gitleaks git --redact --config .gitleaks.toml .
