@@ -11,7 +11,17 @@
 //! first either.
 
 use std::ffi::OsStr;
-use std::process::{Command, Stdio};
+use std::io::Read;
+use std::process::{Child, Command, Stdio};
+use std::time::{Duration, Instant};
+
+/// How long a spawned binary gets before the test kills it and fails,
+/// rather than blocking forever. Every case this file exercises is
+/// supposed to refuse to start almost immediately; a regression that
+/// makes it serve instead - the ordering test below exists precisely
+/// because that is the failure mode a missing check degrades to -
+/// must fail this test in a few seconds, not hang the whole suite.
+const SPAWN_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Runs the real binary with `vars` added to its environment, and
 /// returns its exit code and stderr. The process's own environment is
@@ -38,13 +48,44 @@ fn run_with_env(vars: &[(&OsStr, &OsStr)]) -> (i32, String) {
         command.env(key, value);
     }
 
-    let output = command.output().expect("spawning the binary must succeed");
-    let code = output
-        .status
+    let mut child = command.spawn().expect("spawning the binary must succeed");
+    let status = wait_with_timeout(&mut child, SPAWN_TIMEOUT);
+
+    let mut stderr = String::new();
+    child
+        .stderr
+        .take()
+        .expect("stderr was piped")
+        .read_to_string(&mut stderr)
+        .expect("reading stderr must succeed");
+
+    let code = status
         .code()
         .expect("the process must exit, not be killed by a signal");
-    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
     (code, stderr)
+}
+
+/// Polls rather than calling the blocking, timeout-less `Child::wait`:
+/// every test here expects the binary to refuse to start almost at
+/// once, so a regression that makes it hang - serving instead of
+/// refusing, say - fails this one test within `timeout` instead of
+/// stalling every other test in the run behind it.
+fn wait_with_timeout(child: &mut Child, timeout: Duration) -> std::process::ExitStatus {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if let Some(status) = child.try_wait().expect("polling the child must succeed") {
+            return status;
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!(
+                "the binary did not exit within {timeout:?}; it may be hanging instead of \
+                 refusing to start"
+            );
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
 }
 
 #[test]
@@ -143,5 +184,32 @@ fn an_invalid_name_on_an_unrelated_variable_does_not_panic() {
     assert!(
         stderr.contains("SCREENWARD_BIND_ADDR"),
         "the legacy message must still appear: {stderr}"
+    );
+}
+
+/// Proves the ordering the module doc claims: the legacy check runs
+/// before `Config::from_env`, not merely alongside or after it.
+///
+/// `SCREENWARDEN_BIND_ADDR` here is invalid on its own terms - see
+/// `an_ordinary_invalid_configuration_fails_for_a_different_reason` -
+/// so if `Config::from_env` ran first, the response would be that
+/// ordinary error, which never mentions `SCREENWARD_`. Getting the
+/// legacy message instead is only possible if the legacy check
+/// short-circuits `main` before `Config::from_env` is ever called.
+#[test]
+fn the_legacy_check_runs_before_config_validation() {
+    let (code, stderr) = run_with_vars(&[
+        ("SCREENWARD_BIND_ADDR", "127.0.0.1:0"),
+        ("SCREENWARDEN_BIND_ADDR", "not-an-address"),
+    ]);
+
+    assert_eq!(code, 1, "stderr: {stderr}");
+    assert!(
+        stderr.contains("SCREENWARD_BIND_ADDR"),
+        "the legacy check must win, not the ordinary validation error: {stderr}"
+    );
+    assert!(
+        stderr.contains("SCREENWARDEN_BIND_ADDR"),
+        "stderr must say what to rename it to: {stderr}"
     );
 }
