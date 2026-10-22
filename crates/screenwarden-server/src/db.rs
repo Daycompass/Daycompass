@@ -57,6 +57,17 @@ pub enum DbError {
          screenwarden.sqlite3* name, and restart"
     )]
     LegacyDatabaseFile,
+
+    /// Checking for a legacy file failed for a reason other than it not
+    /// being there - most likely a permissions problem. Names the path
+    /// and nothing else: no directory listing, no error text from
+    /// anywhere but this one `io::Error`.
+    #[error("failed to check for a legacy database file at {}", path.display())]
+    CheckLegacyDatabaseFile {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
 }
 
 /// Where the database lives.
@@ -139,30 +150,54 @@ pub async fn check_reachable(pool: &SqlitePool) -> Result<(), DbError> {
 ///     all - the main one or either auxiliary - means the rename was
 ///     never done, or was done only for some of the files.
 fn check_for_legacy_db_files(data_dir: &Path) -> Result<(), DbError> {
-    let legacy_wal_has_unflushed_writes = std::fs::metadata(data_dir.join(LEGACY_WAL_FILE_NAME))
-        .map(|meta| meta.len() > 0)
-        .unwrap_or(false);
-    if legacy_wal_has_unflushed_writes {
+    if wal_has_unflushed_writes(&data_dir.join(LEGACY_WAL_FILE_NAME))? {
         return Err(DbError::LegacyDatabaseFile);
     }
 
-    if data_dir.join(DB_FILE_NAME).exists() {
+    if path_exists(&data_dir.join(DB_FILE_NAME))? {
         return Ok(());
     }
 
-    let any_legacy_file_exists = [
+    for name in [
         LEGACY_DB_FILE_NAME,
         LEGACY_WAL_FILE_NAME,
         LEGACY_SHM_FILE_NAME,
-    ]
-    .iter()
-    .any(|name| data_dir.join(name).exists());
-
-    if any_legacy_file_exists {
-        return Err(DbError::LegacyDatabaseFile);
+    ] {
+        if path_exists(&data_dir.join(name))? {
+            return Err(DbError::LegacyDatabaseFile);
+        }
     }
 
     Ok(())
+}
+
+/// `Path::exists` swallows every error - a permissions problem looks
+/// exactly like "not there" - which is the wrong default for a check
+/// whose whole point is not to be fooled into starting from an empty
+/// database. `try_exists` is the same check with that one difference:
+/// a real I/O error is reported instead of silently read as `false`.
+fn path_exists(path: &Path) -> Result<bool, DbError> {
+    path.try_exists()
+        .map_err(|source| DbError::CheckLegacyDatabaseFile {
+            path: path.to_owned(),
+            source,
+        })
+}
+
+/// Whether `path` is a legacy WAL file with committed writes still in
+/// it. A missing file is `false`, not an error - there is nothing to
+/// lose if it was never there - but any other failure to read its size
+/// (most likely a permissions problem) is propagated rather than
+/// treated as "empty".
+fn wal_has_unflushed_writes(path: &Path) -> Result<bool, DbError> {
+    match std::fs::metadata(path) {
+        Ok(meta) => Ok(meta.len() > 0),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(source) => Err(DbError::CheckLegacyDatabaseFile {
+            path: path.to_owned(),
+            source,
+        }),
+    }
 }
 
 #[cfg(unix)]
@@ -810,5 +845,67 @@ mod tests {
         assert!(message.contains("-wal"), "{message}");
         assert!(message.contains("-shm"), "{message}");
         assert!(message.contains("stop the server"), "{message}");
+    }
+
+    /// A permissions problem reading a legacy file must be reported,
+    /// not silently read as "not there" the way `Path::exists` would -
+    /// the whole point of this check is to never fall through to a
+    /// fresh empty database by mistake.
+    ///
+    /// Skips itself under root (or anything else bypassing file
+    /// permission bits): `#![forbid(unsafe_code)]` applies to this
+    /// whole crate, including this test module, so checking the
+    /// effective uid directly would need `libc::getuid` behind
+    /// `unsafe` - not available here. Detected behaviourally instead:
+    /// if the lockdown below does not actually block a read, whatever
+    /// is running this suite is not constrained by permission bits,
+    /// and the assertion below cannot be made true in this
+    /// environment.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn file_target_reports_a_permission_error_rather_than_ignoring_it() {
+        use std::os::unix::fs::PermissionsExt;
+        use std::sync::atomic::{AtomicU32, Ordering};
+
+        static COUNTER: AtomicU32 = AtomicU32::new(0);
+        let unique = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let data_dir = std::env::temp_dir().join(format!(
+            "screenwarden-db-permission-test-{}-{unique}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&data_dir).unwrap();
+        std::fs::write(data_dir.join(LEGACY_WAL_FILE_NAME), b"not actually empty").unwrap();
+        // No read, write or execute for anyone: traversing into the
+        // directory to stat a file inside it must fail.
+        std::fs::set_permissions(&data_dir, std::fs::Permissions::from_mode(0o000)).unwrap();
+
+        let permissions_are_enforced =
+            std::fs::metadata(data_dir.join(LEGACY_WAL_FILE_NAME)).is_err();
+
+        if !permissions_are_enforced {
+            std::fs::set_permissions(&data_dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+            std::fs::remove_dir_all(&data_dir).ok();
+            eprintln!(
+                "skipping file_target_reports_a_permission_error_rather_than_ignoring_it: \
+                 running with privileges that bypass file permission bits (root?)"
+            );
+            return;
+        }
+
+        let target = DbTarget::File {
+            data_dir: data_dir.clone(),
+        };
+        let result = connect(&target).await;
+
+        // Restore permissions before cleanup, or remove_dir_all cannot
+        // read the directory either.
+        std::fs::set_permissions(&data_dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+
+        assert!(
+            matches!(result, Err(DbError::CheckLegacyDatabaseFile { .. })),
+            "{result:?}"
+        );
+
+        std::fs::remove_dir_all(&data_dir).ok();
     }
 }
