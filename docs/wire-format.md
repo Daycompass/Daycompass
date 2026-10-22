@@ -50,7 +50,10 @@ Instead an admin creates a **pending** account and hands the person a
 one-time invite token; the person redeems it and chooses their own
 password. The same flow is how an admin resets a forgotten password:
 it does not set a new one, it issues a fresh invite in place of the
-old one.
+old one. Nothing stops an admin from redeeming that invite themselves
+and logging in as the account instead of handing it over; the
+account's own log, below, records that this happened but does not
+prevent it.
 
 ### The `status` field on a user object
 
@@ -153,6 +156,11 @@ of an account that already exists, which is closer in spirit to
 logging in than to creating something new. No CSRF, since there is no
 cookie for a token to be checked against.
 
+As with login, an absent `Origin` is allowed: a non-browser client -
+a sync client, curl, a script - sends no `Origin` and is not refused
+for it. Only a browser's cross-site request carries one at all, and
+that is what this check exists to reject.
+
 ```json
 {
   "invite_token": "swi_…",
@@ -210,9 +218,11 @@ and no admin variant, so an account can never read anyone else's.
 
 `actor_id` is the acting admin's id, present only for
 `password_reset_by_admin` — the other two kinds are the account acting
-on itself, so it is `null`. This is how a reset stays visible to the
-account it was done to, even one an admin redeemed and logged into
-themselves.
+on itself, so it is `null`. The entry is written the moment the reset
+happens, before anyone redeems the new invite, so it is already
+waiting in the log whenever the account holder next manages to log in
+and read it - whether that is right away, or only after a later reset
+actually reaches them.
 
 Newest first, capped at the 200 most recent entries.
 
