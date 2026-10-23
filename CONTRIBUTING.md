@@ -1,4 +1,4 @@
-# Contributing to Screenwarden
+# Contributing to Daycompass
 
 Thanks for your interest in contributing. This project is early-stage;
 please open an issue before large changes so effort isn't wasted on
@@ -42,8 +42,11 @@ the repo.
    commit. It fails closed: if gitleaks isn't installed, the commit is
    rejected rather than silently skipping the scan.
 
-   The rule that recognizes Screenwarden's own token format has its own
-   test. Run it after changing `.gitleaks.toml`:
+   The rules that recognize this project's own token formats - the
+   current `daycompass-app-token` prefix and the retained
+   `screenwarden-app-token` one, kept in case a screenwarden-era token
+   still turns up somewhere - have their own test. Run it after
+   changing `.gitleaks.toml`:
 
    ```sh
    .githooks/tests/gitleaks-rules.sh
@@ -66,10 +69,10 @@ actually enforced rather than just documented here.
 Until then, a solo author is still expected to re-read this section
 before merging a change in scope below. The rule covers:
 
-- `crates/screenwarden-server/src/auth/**` (including `invite.rs` and
+- `crates/daycompass-server/src/auth/**` (including `invite.rs` and
   `account_log.rs`)
-- `crates/screenwarden-server/src/clientip.rs` and `ratelimit.rs`
-- `crates/screenwarden-server/src/routes/auth.rs`, `routes/setup.rs`,
+- `crates/daycompass-server/src/clientip.rs` and `ratelimit.rs`
+- `crates/daycompass-server/src/routes/auth.rs`, `routes/setup.rs`,
   `routes/users.rs`, `routes/invites.rs` and `routes/account.rs`
 - the `Origin` and error-normalizing middleware
 - any migration that touches `users`, `sessions`, `setup_tokens`,

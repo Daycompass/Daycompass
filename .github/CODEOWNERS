@@ -9,13 +9,13 @@
 # here and in CONTRIBUTING.md.
 #
 # It applies to:
-#   crates/screenwarden-server/src/auth/**
-#   crates/screenwarden-server/src/clientip.rs
-#   crates/screenwarden-server/src/ratelimit.rs
-#   crates/screenwarden-server/src/routes/auth.rs
-#   crates/screenwarden-server/src/routes/setup.rs
-#   crates/screenwarden-server/src/middleware.rs
-#   crates/screenwarden-server/migrations/** touching users, sessions or
+#   crates/daycompass-server/src/auth/**
+#   crates/daycompass-server/src/clientip.rs
+#   crates/daycompass-server/src/ratelimit.rs
+#   crates/daycompass-server/src/routes/auth.rs
+#   crates/daycompass-server/src/routes/setup.rs
+#   crates/daycompass-server/src/middleware.rs
+#   crates/daycompass-server/migrations/** touching users, sessions or
 #     setup_tokens
 #
 # See CONTRIBUTING.md for what a reviewer should look for.

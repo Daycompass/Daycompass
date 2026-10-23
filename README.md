@@ -1,6 +1,6 @@
-# Screenwarden
+# Daycompass
 
-Screenwarden is an open-source, self-hosted screentime backend for students,
+Daycompass is an open-source, self-hosted screentime backend for students,
 built so schools and individuals can run their own instance instead of
 relying on a third-party service.
 
@@ -27,10 +27,10 @@ to log in yet. The server notices this, generates a single-use **setup
 token**, and prints it to standard output:
 
 ```text
-Screenwarden first-time setup: no admin account exists yet.
+Daycompass first-time setup: no admin account exists yet.
 Create one within 60 minutes by sending this token, a username and a
 password to POST http://127.0.0.1:8080/api/v1/setup
-Setup token: swb_...
+Setup token: dcb_...
 This token is single use. It appears in this process's output, so treat
 these logs as sensitive until setup is complete.
 ```
@@ -77,7 +77,7 @@ disabled.
 | Endpoint | Purpose |
 | --- | --- |
 | `POST /api/v1/setup` | Redeem the setup token, create the first admin. 404 once one exists. |
-| `POST /api/v1/auth/login` | Sets the `__Host-sws` session cookie, returns a CSRF token. |
+| `POST /api/v1/auth/login` | Sets the `__Host-dcs` session cookie, returns a CSRF token. |
 | `POST /api/v1/auth/logout` | Deletes the session server side and clears the cookie. |
 | `GET /api/v1/auth/me` | The current account, and the session's CSRF token. |
 | `POST /api/v1/auth/password` | Change your own password. |
@@ -93,13 +93,13 @@ plain HTTP a browser will refuse to store the cookie at all. Command
 line clients are unaffected.
 
 If the server is reachable at anything other than a loopback address,
-`SCREENWARDEN_PUBLIC_URL` is required: it is what incoming `Origin`
+`DAYCOMPASS_PUBLIC_URL` is required: it is what incoming `Origin`
 headers are checked against, and the server refuses to start without it.
 
 ### Behind a reverse proxy
 
 `X-Forwarded-For` is ignored unless the connecting peer is listed in
-`SCREENWARDEN_TRUSTED_PROXIES` (a comma-separated list of CIDRs, empty by
+`DAYCOMPASS_TRUSTED_PROXIES` (a comma-separated list of CIDRs, empty by
 default). Set it to the addresses of your own proxies, or per-client
 rate limiting will count every request against the proxy instead.
 
@@ -145,7 +145,7 @@ expired, already-used or malformed token all answer the same
 exactly like a wrong password: neither tells an unauthenticated caller
 anything about which accounts exist or what state they are in.
 
-Invites expire after `SCREENWARDEN_INVITE_TTL_SECS` (72 hours by
+Invites expire after `DAYCOMPASS_INVITE_TTL_SECS` (72 hours by
 default - see `docs/design-decisions.md` for why).
 
 ### What an admin can and cannot do
@@ -207,7 +207,7 @@ The endpoint is rate limited **per session**, in front of the Argon2
 semaphore, because each attempt costs one verification plus one hash -
 the most expensive thing an authenticated caller can ask for. Every
 attempt counts, including successful ones. See
-`SCREENWARDEN_RATE_LIMIT_PW_CHANGE` in `.env.example`.
+`DAYCOMPASS_RATE_LIMIT_PW_CHANGE` in `.env.example`.
 
 Per session rather than per account on purpose: someone who has stolen
 a session cannot exhaust the budget the owner needs to lock them out.
