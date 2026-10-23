@@ -31,11 +31,11 @@ Two kinds of caller, which are never interchangeable.
 
 | | Session (dashboard) | Device (native client) |
 | --- | --- | --- |
-| Credential | `__Host-sws` cookie | `Authorization: Bearer swd_…` |
+| Credential | `__Host-dcs` cookie | `Authorization: Bearer dcd_…` |
 | CSRF | `X-CSRF-Token` required on writes | not applicable |
 | `Origin` | checked on writes | not checked |
 
-A device route **rejects** any request carrying the `__Host-sws`
+A device route **rejects** any request carrying the `__Host-dcs`
 cookie, even one that also presents a valid token. A session route
 rejects any request carrying a `Bearer` credential. Do not send both.
 
@@ -97,7 +97,7 @@ way `platform` is on `/api/v1/pair`.
     "created_at": 1800000000
   },
   "invite": {
-    "token": "swi_…",
+    "token": "dci_…",
     "expires_at": 1800259200
   }
 }
@@ -131,7 +131,7 @@ No request body.
 ```json
 {
   "invite": {
-    "token": "swi_…",
+    "token": "dci_…",
     "expires_at": 1800259200
   },
   "sessions_ended": 1,
@@ -165,7 +165,7 @@ cross-site `POST`, so this is the case the check exists to catch.
 
 ```json
 {
-  "invite_token": "swi_…",
+  "invite_token": "dci_…",
   "new_password": "a long enough passphrase"
 }
 ```
@@ -285,7 +285,7 @@ Case-insensitive.
 
 ```json
 {
-  "device_token": "swd_…",
+  "device_token": "dcd_…",
   "device": {
     "id": "0199…",
     "name": "Alice's Laptop",
@@ -516,7 +516,7 @@ does not distinguish those.
 limited per IP address, so a client that loops on a 401 will exhaust
 that budget and start getting 429s — and because the budget is shared
 by everyone behind the same address, it will do that to every other
-Screenwarden device on the network too. On a school or household NAT
+Daycompass device on the network too. On a school or household NAT
 that means one misconfigured client taking out its neighbours.
 
 The correct response to a 401 is to stop making device requests, keep

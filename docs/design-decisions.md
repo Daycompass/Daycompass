@@ -77,7 +77,7 @@ redeemed at home that evening or the next day rather than on the spot.
 A week would be a long life for a credential a minor is carrying
 around on paper. 72 hours covers a weekend — handed out on a Friday,
 still good on Monday — and nothing more. It is a default
-(`SCREENWARDEN_INVITE_TTL_SECS`), not a fixed constant, so an instance
+(`DAYCOMPASS_INVITE_TTL_SECS`), not a fixed constant, so an instance
 with different needs can change it.
 
 ## Why invite redemption keeps the `Origin` check
