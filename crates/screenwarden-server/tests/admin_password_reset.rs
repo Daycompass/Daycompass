@@ -125,6 +125,38 @@ async fn earlier_invites_stop_working_after_a_reset() {
     assert_eq!(stale.error_code(), Some("invalid_invite_token"));
 }
 
+/// An outstanding, unredeemed pairing code is as much a way back into
+/// the account as a session or a device token - it can mint a brand
+/// new device, independent of either. `docs/design-decisions.md`
+/// states there is no window after a reset other than the invite just
+/// issued; an unspent code left alive would be exactly such a window.
+#[tokio::test]
+async fn an_outstanding_pairing_code_does_not_survive_a_reset() {
+    let app = TestApp::new().await;
+    let (_admin_credentials, admin) = app.provisioned_admin().await;
+    let (bob_id, bob_credentials) = app.create_account(&admin, "bob", "user").await;
+    let bob = app.log_in(&bob_credentials).await;
+    let code = app.issue_pairing_code(&bob).await;
+
+    let response = app.send(reset_request(&bob_id).authenticated(&admin)).await;
+    assert_eq!(response.status, StatusCode::OK, "{:?}", response.body);
+
+    let pair = app
+        .send(TestRequest::post("/api/v1/pair").json(json!({
+            "pairing_code": code,
+            "device_name": "laptop",
+            "platform": "linux",
+        })))
+        .await;
+    assert_eq!(pair.status, StatusCode::UNAUTHORIZED, "{:?}", pair.body);
+    assert_eq!(pair.error_code(), Some("invalid_pairing_code"));
+    assert_eq!(
+        app.count_devices().await,
+        0,
+        "the reset account must not have gained a device"
+    );
+}
+
 /// The reset is visible to the account itself afterwards, naming the
 /// acting admin and the kind - that visibility is the whole reason a
 /// reset is a different thing from the admin silently knowing the

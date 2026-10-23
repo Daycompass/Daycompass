@@ -436,6 +436,30 @@ mod tests {
         );
     }
 
+    /// A session row pointing at a non-active account must not resolve,
+    /// enforced in the SQL `find_session_with_user` runs rather than
+    /// left to a check afterwards. No known path leaves such a row
+    /// behind today - a reset deletes every session in the same
+    /// transaction that clears the password - so the state is forced
+    /// directly, the way `deleting_the_user_removes_their_sessions`
+    /// below forces the account's own disappearance.
+    #[tokio::test]
+    async fn a_session_for_a_non_active_account_does_not_resolve() {
+        let (pool, user_id) = pool_with_user().await;
+        let created = create(&pool, &user_id, policy(), now()).await.unwrap();
+
+        sqlx::query("UPDATE users SET status = 'pending' WHERE id = ?1")
+            .bind(&user_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        assert!(resolve(&pool, created.token.expose(), policy(), now())
+            .await
+            .unwrap()
+            .is_none());
+    }
+
     #[tokio::test]
     async fn the_sweep_removes_expired_sessions_but_keeps_live_ones() {
         let (pool, user_id) = pool_with_user().await;

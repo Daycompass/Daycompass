@@ -1,8 +1,9 @@
-# Wire format: pairing, device auth, and event ingest
+# Wire format: accounts, invites, pairing, device auth, and event ingest
 
-Reference for client implementations. This describes the M2 endpoints
-only — pairing a device, authenticating as one, and reporting events.
-There is deliberately **no way to read events back** in M2.
+Reference for client implementations. This describes the M1d and M2
+endpoints — creating and activating accounts, pairing a device,
+authenticating as one, and reporting events. There is deliberately
+**no way to read events back** in M2.
 
 Everything here is normative for the server as it stands. The
 authoritative definitions live in the code (`src/routes/`,
@@ -39,6 +40,199 @@ cookie, even one that also presents a valid token. A session route
 rejects any request carrying a `Bearer` credential. Do not send both.
 
 The `Bearer` scheme name is matched case-insensitively.
+
+---
+
+## Accounts and invites
+
+An admin never chooses, sees, or stores a new account's password.
+Instead an admin creates a **pending** account and hands the person a
+one-time invite token; the person redeems it and chooses their own
+password. The same flow is how an admin resets a forgotten password:
+it does not set a new one, it issues a fresh invite in place of the
+old one. Nothing stops an admin from redeeming that invite themselves
+and logging in as the account instead of handing it over; the
+account's own log, below, records the reset and which admin performed
+it, but not who went on to redeem the invite, and recording does not
+prevent the takeover.
+
+### The `status` field on a user object
+
+Appears on every account-management response below — `POST`/`GET
+/api/v1/users`, `PATCH /api/v1/users/{id}`, and the `user` object
+inside the two invite responses that follow. It is **absent** from
+`/api/v1/auth/me`, `/api/v1/auth/login`, and `/api/v1/setup`, which
+only ever describe an account that is already usable.
+
+| Value | Meaning |
+| --- | --- |
+| `"active"` | Has a password and can log in. |
+| `"pending"` | Created by an admin, or reset by one, and has not yet redeemed its invite. Cannot log in — a login attempt against a pending account answers identically to an unknown one (`401` `invalid_credentials`). |
+
+### `POST /api/v1/users`
+
+Admin session auth, CSRF required. Creates a pending account and its
+invite.
+
+```json
+{ "username": "alice", "role": "user" }
+```
+
+`username`: 3–32 characters after trimming, from `a-z`, `0-9`, `_`,
+`.`, `-`. Normalized to lowercase ASCII before storage and before the
+uniqueness check, so `Alice` and `alice` are the same account.
+
+`role`: exactly `"admin"` or `"user"`, lowercase — not case-folded the
+way `platform` is on `/api/v1/pair`.
+
+**`201 Created`:**
+
+```json
+{
+  "user": {
+    "id": "0199…",
+    "username": "alice",
+    "role": "user",
+    "status": "pending",
+    "created_at": 1800000000
+  },
+  "invite": {
+    "token": "swi_…",
+    "expires_at": 1800259200
+  }
+}
+```
+
+`invite.token` is shown **exactly once**; the server stores only its
+hash. It is redeemable for 72 hours by default (`expires_at` is the
+authoritative expiry — do not hardcode the 72 hours client-side).
+
+**Failures:**
+
+| Status | Code | Meaning |
+| --- | --- | --- |
+| 400 | `invalid_username` | Fails the length or charset rule above. |
+| 400 | `invalid_role` | Not `admin` or `user`. |
+| 409 | `username_taken` | Another account already normalizes to this username. |
+
+### `POST /api/v1/users/{id}/password-reset`
+
+Admin session auth, CSRF required. Resets an existing account to
+pending in place of whatever password it had: every session the
+account held is ended, every device it had paired is revoked, and any
+pairing code it had minted but not yet redeemed is revoked too — it
+will no longer pair a device. A fresh invite is issued in the same
+step.
+
+No request body.
+
+**`200 OK`:**
+
+```json
+{
+  "invite": {
+    "token": "swi_…",
+    "expires_at": 1800259200
+  },
+  "sessions_ended": 1,
+  "devices_revoked": 1
+}
+```
+
+`sessions_ended` and `devices_revoked` count what **this** reset just
+ended — not a running total for the account.
+
+**Failures:**
+
+| Status | Code | Meaning |
+| --- | --- | --- |
+| 404 | `not_found` | No account with this id. |
+| 409 | `last_admin_protected` | This is the instance's only active admin. |
+
+### `POST /api/v1/invites/redeem`
+
+**No authentication.** Unlike `/api/v1/setup` and `/api/v1/pair`, the
+`Origin` header **is** checked here — redeeming changes the password
+of an account that already exists, which is closer in spirit to
+logging in than to creating something new. No CSRF, since there is no
+cookie for a token to be checked against.
+
+A request with no `Origin` header at all - a native client, curl, a
+script - is allowed, exactly as it is for login. A request that does
+carry one must match the instance's public origin, or it is refused
+with `origin_mismatch` below. A browser always sends `Origin` on a
+cross-site `POST`, so this is the case the check exists to catch.
+
+```json
+{
+  "invite_token": "swi_…",
+  "new_password": "a long enough passphrase"
+}
+```
+
+`new_password`: 12–128 characters, not blank. The password policy is
+checked **before** the token, so a too-short password against an
+unknown or expired token still answers `invalid_password`, not
+`invalid_invite_token`.
+
+**`204 No Content`** — sets no cookie. Log in normally afterward
+through `POST /api/v1/auth/login`.
+
+**Failures:**
+
+| Status | Code | Meaning |
+| --- | --- | --- |
+| 400 | `invalid_password` | Blank, or outside 12–128 characters. |
+| 401 | `invalid_invite_token` | Unknown, expired, already used, or malformed. Deliberately indistinguishable — redeeming is unauthenticated, so the response must not say whether a token ever existed. |
+| 403 | `origin_mismatch` | A present `Origin` header names something other than this instance. |
+| 503 | `server_busy` | Password hashing capacity is exhausted; shed, not refused. Carries `Retry-After`, honour it the same as a 429. |
+| 429 | `rate_limited` | Per-address or instance-wide limit; see below. Carries `Retry-After`. |
+
+**Rate limits**, both counting **every** attempt, successful or not,
+same as pairing:
+
+| Limit | Default | Scope |
+| --- | --- | --- |
+| Per client address | 100 per 5 minutes | One address — sized with headroom for many people redeeming from behind one shared address (a school's NAT), not as a guessing defence. The token is unguessable regardless of this number. |
+| Instance-wide | 600 per minute | A ceiling on total work across every caller, not a per-person budget. |
+
+Both are operator-configurable and may differ from these defaults on
+any given instance.
+
+### `GET /api/v1/account/log`
+
+Session auth, no CSRF (a `GET`). Returns the **caller's own** history
+of invite redemptions and password resets — there is no id parameter
+and no admin variant, so an account can never read anyone else's.
+
+**`200 OK`:**
+
+```json
+{
+  "entries": [
+    { "kind": "invite_redeemed", "actor_id": null, "at": 1800001000 },
+    { "kind": "password_reset_by_admin", "actor_id": "0199…", "at": 1800000000 }
+  ]
+}
+```
+
+`kind` is one of `invite_redeemed`, `password_reset_by_admin`, or
+`password_changed`.
+
+`actor_id` is the acting admin's id, present only for
+`password_reset_by_admin` — the other two kinds are the account acting
+on itself, so it is `null`.
+
+The `password_reset_by_admin` entry is written at the moment of the
+reset, independent of who redeems the resulting invite — but this
+endpoint is session auth, so the entry is only ever readable by
+whoever can log in as the account. If the rightful holder redeems the
+invite, they will see it on their next visit here. If an admin
+redeems it first instead and logs in as the account, the holder never
+gets the password needed to log in at all, and so never sees it
+either. An `invite_redeemed` entry never says who redeemed it.
+
+Newest first, capped at the 200 most recent entries.
 
 ---
 

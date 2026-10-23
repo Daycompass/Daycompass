@@ -572,6 +572,18 @@ pub async fn reset_to_pending(
     .execute(&mut *tx)
     .await?;
 
+    // An outstanding, unredeemed pairing code is another way back into
+    // the account - it can still mint a brand-new device, independent
+    // of any session or the invite just replaced. A spent code
+    // (`used_at` set) is left alone: it is already permanently inert,
+    // since the redemption query itself only ever matches
+    // `used_at IS NULL`, so deleting it here would not close anything
+    // the reset does not already close.
+    sqlx::query("DELETE FROM pairing_codes WHERE user_id = ?1 AND used_at IS NULL")
+        .bind(target_id)
+        .execute(&mut *tx)
+        .await?;
+
     let sessions_ended = sqlx::query("DELETE FROM sessions WHERE user_id = ?1")
         .bind(target_id)
         .execute(&mut *tx)
@@ -651,11 +663,15 @@ pub async fn redeem_invite(
 
     if updated.rows_affected() == 0 {
         // The token was good, but the account was not pending any more
-        // (reset again, or somehow already active). Rolling back
-        // leaves the token spent, which is correct: it named an
+        // (reset again, or somehow already active). Commit, not
+        // rollback: the only write so far is the invite's own
+        // `used_at`, above, and that one must stick - it named an
         // account state that no longer exists, and nothing issues a
-        // second invite from the same row.
-        tx.rollback().await?;
+        // second invite from the same row. A rollback here would undo
+        // that write too and hand the token back live, which defeats
+        // the single-use property this function exists to hold. Add
+        // nothing after this point that would need to survive a retry.
+        tx.commit().await?;
         return Ok(RedeemInviteOutcome::Rejected);
     }
 
@@ -970,6 +986,15 @@ pub async fn insert_session(
 /// One query rather than two so the session and the user are read from a
 /// single consistent view: between two separate reads the account could
 /// be deleted, leaving a handler holding a session that points nowhere.
+///
+/// `u.status = 'active'` is in the `WHERE` rather than left to a caller
+/// to check - the same reasoning as `revoked_at IS NULL` on
+/// [`crate::devices::store::find_live_device_by_token_hash`]. No known
+/// path leaves a session row pointing at a non-active account today
+/// (a reset deletes every session in the same transaction that clears
+/// the password), but a session authenticating one regardless would be
+/// a silent way around that guarantee, and this is the second line
+/// against it.
 pub async fn find_session_with_user(
     pool: &SqlitePool,
     token_hash: &TokenHash,
@@ -988,7 +1013,7 @@ pub async fn find_session_with_user(
                 u.created_at    AS created_at
          FROM sessions s
          JOIN users u ON u.id = s.user_id
-         WHERE s.token_hash = ?1",
+         WHERE s.token_hash = ?1 AND u.status = 'active'",
     )
     .bind(token_hash.as_bytes())
     .fetch_optional(pool)
@@ -1847,6 +1872,64 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(outcome, RedeemInviteOutcome::Rejected);
+    }
+
+    /// A live, unexpired invite whose account is no longer `pending` by
+    /// the time the write lock is held must leave its token spent
+    /// forever, not merely refuse once. Pins the fix for a bug where
+    /// `tx.rollback()` in this branch undid the token's own `used_at`
+    /// write, handing it back live.
+    ///
+    /// There is no production path that reaches this state today - a
+    /// reset always clears the account's invite rows first - so it is
+    /// manufactured directly, the same way `redeeming_an_invite_...`
+    /// above reaches into the row to check `used_at` rather than going
+    /// through a second API.
+    #[tokio::test]
+    async fn redeeming_against_an_account_no_longer_pending_leaves_the_token_spent() {
+        let pool = memory_pool().await;
+        let token = invite_token();
+        let outcome = insert_pending_user_with_invite(
+            &pool,
+            &username("alice"),
+            Role::User,
+            &token.hash(),
+            now(),
+            one_hour_from(now()),
+        )
+        .await
+        .unwrap();
+        let InsertUserOutcome::Created(alice) = outcome else {
+            panic!("alice must be free");
+        };
+
+        sqlx::query("UPDATE users SET status = 'active' WHERE id = ?1")
+            .bind(&alice.id)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let outcome = redeem_invite(&pool, &token.hash(), &opaque_hash("new"), now())
+            .await
+            .unwrap();
+        assert_eq!(outcome, RedeemInviteOutcome::Rejected);
+
+        // Even if the account becomes pending again, the same token
+        // must never redeem: `used_at` has to have survived, which is
+        // exactly what a rollback here would have undone.
+        sqlx::query("UPDATE users SET status = 'pending', password_hash = '' WHERE id = ?1")
+            .bind(&alice.id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let second = redeem_invite(&pool, &token.hash(), &opaque_hash("new-2"), now())
+            .await
+            .unwrap();
+        assert_eq!(
+            second,
+            RedeemInviteOutcome::Rejected,
+            "a rejected redemption must leave the token spent, never live again"
+        );
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
