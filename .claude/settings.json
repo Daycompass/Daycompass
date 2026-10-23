@@ -36,10 +36,8 @@
       "Bash(gh run list:*)",
       "Bash(gh run view:*)"
     ],
-    "ask": [
-      "Bash(gh pr merge:*)"
-    ],
     "deny": [
+      "Bash(gh pr merge:*)",
       "Read(.env)",
       "Read(.env.*)",
       "Read(**/.env)",

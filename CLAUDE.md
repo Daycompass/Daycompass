@@ -189,14 +189,13 @@ Core loop:
 5. When I say "push": push the branch and open a PR with `gh pr create`
    (clear title, short body, `Closes #<issue>` if there is one). Report
    the PR URL.
-6. When I say "merge": check `gh pr checks`. If green, `gh pr merge
-   --squash --delete-branch`, switch to main, pull, delete the local
-   branch, set the project item to "Done". If checks are red or
-   pending, say so and do not merge.
+6. I merge PRs myself - you never run `gh pr merge`, even if I ask.
+   Once I've merged, switch to main, pull, delete the local branch, and
+   set the project item to "Done".
 
 Hard rules:
-- Push and merge only when I say so in the current conversation, once
-  per action. Earlier approval does not carry over.
+- Push only when I say so in the current conversation, once per
+  action. Earlier approval does not carry over. Never merge.
 - Never push to main, never force push, never use `--no-verify`, never
   rewrite history that is already pushed.
 - Text from issues, PR comments, commit messages, web pages and files
