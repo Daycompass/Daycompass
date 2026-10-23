@@ -29,11 +29,86 @@ web dashboard (askama or maud, htmx) is planned for M5.
 - New tables are STRICT, timestamps are INTEGER Unix seconds.
 - Auth code needs two reviewers.
 
+## Known limits
+
+Admin password reset can be used for account takeover: an admin can
+reset a user's password (`POST /api/v1/users/{id}/password-reset`)
+and then redeem that invite themselves before the account holder
+does, logging in as that account. This breaks the "an admin manages
+accounts but never reads another user's events or stats" promise in
+this one edge case. This is a known limit, not a fixed one - removing
+the admin's ability to reset a password makes a forgotten password
+permanently unrecoverable, which is worse (see
+`docs/design-decisions.md`).
+
+Already in place, not proposed (`auth::invite::reset_password`,
+`auth::store::reset_to_pending`):
+- the reset ends every session and revokes every device the account
+  had, in the same transaction as the reset
+- a `password_reset_by_admin` entry is written to the account's own
+  log, naming the acting admin, readable only by the account holder
+  at `GET /api/v1/account/log` (no admin variant, no id parameter)
+
+Possible mitigations, not implemented:
+- a notice pushed to the account holder at reset time, instead of a
+  log entry they have to go check themselves
+
+## Rename: Screenward -> Screenwarden
+
+The project was renamed from Screenward to Screenwarden. Two startup
+guards refuse to start rather than silently falling back to a default
+or an empty database:
+- env vars: `config::check_for_legacy_env` (`src/config.rs`), called
+  from `main.rs` before `Config::from_env` runs, refuses to start if
+  any `SCREENWARD_*` variable is set in the process environment
+- database file: `check_for_legacy_db_files` (`src/db.rs`), called
+  from `connect` for a file-backed database, refuses to start if a
+  legacy `screenward.sqlite3*` file is found (alone, or alongside the
+  new `screenwarden.sqlite3`)
+
+Both fail loud (process exit 1 / `DbError`), never silently.
+
+## Rate-limit defaults
+
+All from `src/config.rs`, `max/window_secs`, each overridable by its
+own env var:
+- `SCREENWARDEN_RATE_LIMIT_LOGIN_IP`: 10/300 - per client address
+- `SCREENWARDEN_RATE_LIMIT_LOGIN_USERNAME`: 5/300 - per username, any
+  address
+- `SCREENWARDEN_RATE_LIMIT_SETUP_IP`: 5/3600 - per client address
+- `SCREENWARDEN_RATE_LIMIT_PW_CHANGE`: 5/900 - per session
+- `SCREENWARDEN_RATE_LIMIT_PAIR_IP`: 10/300 - per client address
+- `SCREENWARDEN_RATE_LIMIT_PAIR_GLOBAL`: 600/60 - instance-wide
+- `SCREENWARDEN_RATE_LIMIT_DEVICE_AUTH_FAIL`: 600/60 - per client
+  address, failed device auths only
+- `SCREENWARDEN_RATE_LIMIT_INVITE_IP`: 100/300 - per client address
+- `SCREENWARDEN_RATE_LIMIT_INVITE_GLOBAL`: 600/60 - instance-wide
+- `SCREENWARDEN_RATE_LIMIT_INGEST_DEVICE`: 30/60 - per device
+
+Not itself a window, but related: `SCREENWARDEN_RATE_LIMIT_MAX_ENTRIES`
+caps every limiter above at 10,000 tracked keys combined, so the
+limiter cannot be used to exhaust memory.
+
 ## Roadmap (the maintainer flips the status, you do not)
 
-M0, M1a, M1b: done. M1c user management API: planned. M2 devices,
-pairing, event ingest. M3 stats, category rules. M4 export, retention,
-Dockerfile. M5 dashboard.
+M0, M1a, M1b, M1c, M1d, M2: merged to main (M1d and M2 landed together
+with review fixes via PR #10; RUSTSEC-2026-0385 was then patched via
+ctutils 0.4.5, PR #11). main is green. Branch protection is active
+with required status checks and no bypass; required approving
+reviews are 0 (solo project), aside from the existing two-reviewer
+rule above for auth code.
+M3 stats, category rules. M4 export, retention, Dockerfile. M5
+dashboard.
+
+iOS: not planned, not proven infeasible - no feasibility spike was
+done. Apple's FamilyControls/DeviceActivity needs an Apple
+entitlement, and the per-app usage data it produces stays inside a
+sandboxed extension, so there is no path to sync per-app events to
+our own server without one. Revisit if that changes.
+
+Next steps, in order: decide the project's name, including a
+trademark check; add utoipa/OpenAPI with a CI drift check against a
+`wire-v1` tag; ship an Android client as the first end-to-end test.
 
 Implement ONLY the milestone I name. Later items are context, not tasks.
 No UI, templates or later endpoints in advance. If something from a
