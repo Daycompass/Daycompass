@@ -14,8 +14,11 @@ something to read without following Rust.
 
 - All timestamps are **integer Unix seconds, UTC**.
 - All request and response bodies are `application/json`.
-- Request bodies reject unknown fields. A stray or misspelled field
-  fails the whole request — it is never silently ignored.
+- Request bodies reject unknown fields, with two exceptions:
+  `POST /api/v1/auth/login` and `POST /api/v1/setup` ignore a field
+  they do not recognize instead of failing the request on it. **Do not
+  rely on either behaviour** — send exactly the fields documented for
+  the endpoint. Both endpoints' own sections repeat this.
 - Errors share one shape:
 
   ```json
@@ -24,6 +27,24 @@ something to read without following Rust.
 
   Branch on `code`, which is stable. `message` is for humans and may be
   reworded. Neither ever echoes back what you sent.
+
+### Errors any endpoint can return
+
+These come from infrastructure that wraps every route, not from an
+endpoint's own logic, and share the error shape above like any other
+failure:
+
+| Status | Code | When |
+| --- | --- | --- |
+| 400 | `bad_request` | Malformed JSON, or a request shape the server could not parse at all. |
+| 401 | `unauthenticated` | No valid session or device credential. |
+| 403 | `forbidden` | Authenticated, but not allowed to do this. |
+| 403 | `csrf_token_missing` / `csrf_token_invalid` | A route that requires `X-CSRF-Token` on writes did not get one, or got one that does not match the session. |
+| 403 | `origin_mismatch` | A present `Origin` header names something other than this instance, on a route that checks it. |
+| 408 | `request_timeout` | The request took longer than 10 seconds end to end. |
+| 413 | `payload_too_large` | Body over the global 64 KiB request limit. Some endpoints set a smaller limit of their own — see that endpoint's section. |
+| 415 | `unsupported_media_type` | `Content-Type` is missing or not `application/json`. |
+| 500 | `internal_server_error` | Something broke on the server. Never carries detail. |
 
 ## Authentication
 
