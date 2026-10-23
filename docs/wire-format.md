@@ -807,27 +807,137 @@ sync interval.
 ## Device management (session auth)
 
 These are dashboard endpoints, listed here only so a client knows what
-a person can do to it.
+a person can do to it. Revoking is **not** deleting: the device row
+and every event it reported are kept. A revoked device's token stops
+working on its very next request, with nothing cached in between —
+expect `401 unauthenticated` and stop retrying. A revoked device
+cannot be un-revoked; pair again. A revoked device is
+indistinguishable from an unknown one in any of these responses — do
+not try to tell them apart.
 
-| Endpoint | Effect |
-| --- | --- |
-| `GET /api/v1/devices` | The caller's own devices, revoked ones included. |
-| `PATCH /api/v1/devices/{id}` | Rename. Body: `{"name": "…"}`. |
-| `POST /api/v1/devices/{id}/revoke` | Revoke. Idempotent. |
+<!-- route: GET /api/v1/devices -->
+### `GET /api/v1/devices`
 
-Revoking is **not** deleting: the device row and every event it reported
-are kept. A revoked device's token stops working on its very next
-request, with nothing cached in between — expect `401 unauthenticated`
-and stop retrying. A revoked device cannot be un-revoked; pair again.
+Session auth, no CSRF (a `GET`). The caller's own devices — revoked
+ones included, with `revoked_at` set for those.
 
-A revoked device is indistinguishable from an unknown one in the
-response. Do not try to tell them apart.
+**`200 OK`:**
+
+```json
+{
+  "devices": [
+    {
+      "id": "0199…",
+      "name": "Alice's Laptop",
+      "platform": "linux",
+      "created_at": 1800000000,
+      "last_seen_at": 1800003600,
+      "revoked_at": null
+    },
+    {
+      "id": "0199…",
+      "name": "Old Phone",
+      "platform": "android",
+      "created_at": 1700000000,
+      "last_seen_at": 1700003600,
+      "revoked_at": 1700090000
+    }
+  ]
+}
+```
+
+Ordered `created_at, id` ascending.
+
+**Failures:** `401 unauthenticated` for no session.
+
+<!-- route: PATCH /api/v1/devices/{id} -->
+### `PATCH /api/v1/devices/{id}`
+
+Session auth, CSRF required. Renames one of the caller's own devices.
+
+```json
+{ "name": "Alice's Laptop" }
+```
+
+Same name policy as `device_name` on
+[`POST /api/v1/pair`](#post-apiv1pair) — repeated here would just be
+two places that could drift apart.
+
+**`200 OK`:** the updated device, same shape as one entry of
+`GET /api/v1/devices` above.
+
+**Failures:**
+
+| Status | Code | Meaning |
+| --- | --- | --- |
+| 400 | `invalid_device_name` | Fails the length or charset rule — one code for both causes. |
+| 404 | `not_found` | No such device, **or** it exists but belongs to someone else — deliberately the same answer, so a caller cannot probe which device ids exist on other accounts. |
+
+<!-- route: POST /api/v1/devices/{id}/revoke -->
+### `POST /api/v1/devices/{id}/revoke`
+
+Session auth, CSRF required. Revokes one of the caller's own devices.
+No request body.
+
+**`200 OK`:** the device, with `revoked_at` set.
+
+**Idempotent.** A second call against an already-revoked device
+answers the same `200` with the same `revoked_at` it already had —
+there is no "already done" error, and the second call does not move
+the timestamp forward.
+
+**Failures:** `404 not_found` — same "no such device, or not yours"
+meaning as above.
 
 ## Admin endpoints
 
-`GET /api/v1/admin/devices` and
-`POST /api/v1/admin/devices/{id}/revoke`.
-
 An admin sees device **metadata only** — id, owner, name, platform, and
 the three timestamps. An admin has no way to read any user's events, by
-design and enforced by tests.
+design and enforced by `tests/no_event_reads.rs`.
+
+<!-- route: GET /api/v1/admin/devices -->
+### `GET /api/v1/admin/devices`
+
+Admin session auth, no CSRF (a `GET`). Every device on the instance,
+any owner, revoked ones included.
+
+**`200 OK`:**
+
+```json
+{
+  "devices": [
+    {
+      "id": "0199…",
+      "owner_id": "0199…",
+      "owner_username": "alice",
+      "name": "Alice's Laptop",
+      "platform": "linux",
+      "created_at": 1800000000,
+      "last_seen_at": 1800003600,
+      "revoked_at": null
+    }
+  ]
+}
+```
+
+Ordered `d.created_at, d.id` ascending.
+
+**Failures:** `403 forbidden` for a non-admin session; `401
+unauthenticated` for no session.
+
+<!-- route: POST /api/v1/admin/devices/{id}/revoke -->
+### `POST /api/v1/admin/devices/{id}/revoke`
+
+Admin session auth, CSRF required. Revokes any device on the instance,
+regardless of owner. No request body.
+
+**Responds with the owner's `DeviceView`, not `AdminDeviceView`** — the
+same shape as `GET /api/v1/devices`' entries, with **no** `owner_id` or
+`owner_username` in it. Easy to assume otherwise; it is not a superset
+of the list response.
+
+**`200 OK`:** the device, with `revoked_at` set. Same idempotency as
+the owner-scoped revoke above: a second call answers the same `200`
+with the same `revoked_at`.
+
+**Failures:** `404 not_found`.
