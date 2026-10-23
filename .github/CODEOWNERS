@@ -1,11 +1,15 @@
 # Placeholder CODEOWNERS - replace with real GitHub usernames/teams
 # before enforcing required reviews.
 #
-# Authentication code requires TWO approving reviews, not one. This file
-# cannot express that - GitHub's "Require approvals" count is a branch
-# protection setting, not a CODEOWNERS one - so the rule is configured
-# in the repository settings and recorded here and in CONTRIBUTING.md so
-# it is discoverable from the repository itself.
+# Authentication code is intended to require TWO approving reviews,
+# not one, but that is not enforced today: this project currently has
+# a single maintainer, and main's branch protection requires 0
+# approving reviews. This file cannot express the two-review rule
+# either way - GitHub's "Require approvals" count is a branch
+# protection setting, not a CODEOWNERS one. Once a second maintainer
+# exists, branch protection must be updated to require two approvals
+# so the rule below is actually enforced rather than just documented
+# here and in CONTRIBUTING.md.
 #
 # It applies to:
 #   crates/screenwarden-server/src/auth/**

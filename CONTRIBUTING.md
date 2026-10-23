@@ -55,8 +55,16 @@ the repo.
 
 ## Authentication code needs two reviewers
 
-Any change touching authentication needs **two approving reviews**, not
-one. That covers:
+Any change touching authentication should get **two approving
+reviews**, not one, once that is possible. It is not enforced today:
+this project currently has a single maintainer, and main's branch
+protection requires 0 approving reviews. The rule is intended to
+apply once a second maintainer exists, at which point branch
+protection must be updated to require two approvals so the rule is
+actually enforced rather than just documented here.
+
+Until then, a solo author is still expected to re-read this section
+before merging a change in scope below. The rule covers:
 
 - `crates/screenwarden-server/src/auth/**` (including `invite.rs` and
   `account_log.rs`)
