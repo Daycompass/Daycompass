@@ -36,22 +36,32 @@ reset a user's password (`POST /api/v1/users/{id}/password-reset`)
 and then redeem that invite themselves before the account holder
 does, logging in as that account. This breaks the "an admin manages
 accounts but never reads another user's events or stats" promise in
-this one edge case. This is a known limit, not a fixed one - removing
-the admin's ability to reset a password makes a forgotten password
-permanently unrecoverable, which is worse (see
-`docs/design-decisions.md`).
+this one edge case.
 
-Already in place, not proposed (`auth::invite::reset_password`,
-`auth::store::reset_to_pending`):
-- the reset ends every session and revokes every device the account
-  had, in the same transaction as the reset
-- a `password_reset_by_admin` entry is written to the account's own
-  log, naming the acting admin, readable only by the account holder
-  at `GET /api/v1/account/log` (no admin variant, no id parameter)
+Neither of the following protects against the takeover itself
+(`auth::invite::reset_password`, `auth::store::reset_to_pending`,
+`docs/design-decisions.md`):
+- the `password_reset_by_admin` entry is only readable through the
+  account's own session, at `GET /api/v1/account/log` (no admin
+  variant, no id parameter). After a takeover the admin is the one
+  who holds that session; the former holder is locked out and cannot
+  read it until they somehow regain access.
+- ending every session and revoking every device on reset does not
+  stop the takeover either - it only makes the reset *visible* to the
+  holder, because their devices stop syncing.
+
+Removing the admin's ability to reset a password is not a clean fix
+either: it would make a forgotten password unrecoverable, but only
+because no other recovery mechanism exists today - there is no
+email-based or other self-service reset (see "No telemetry, no
+outgoing requests" above).
 
 Possible mitigations, not implemented:
 - a notice pushed to the account holder at reset time, instead of a
-  log entry they have to go check themselves
+  log entry they can only read once they are already back in. This
+  needs an outgoing notification channel (e.g. email), which does not
+  exist in this codebase today and would itself be a new design
+  decision (see "No telemetry, no outgoing requests" above).
 
 ## Rename: Screenward -> Screenwarden
 
@@ -86,25 +96,31 @@ own env var:
 - `SCREENWARDEN_RATE_LIMIT_INGEST_DEVICE`: 30/60 - per device
 
 Not itself a window, but related: `SCREENWARDEN_RATE_LIMIT_MAX_ENTRIES`
-caps every limiter above at 10,000 tracked keys combined, so the
-limiter cannot be used to exhaust memory.
+bounds each of the per-key limiters above separately (login/IP,
+login/username, setup/IP, pw-change, pair/IP, ingest/device,
+device-auth-fail, invite/IP) to 10,000 tracked keys each - not a
+total shared across them (`src/state.rs`). The two instance-wide
+limiters (`RATE_LIMIT_PAIR_GLOBAL`, `RATE_LIMIT_INVITE_GLOBAL`) use a
+single shared bucket and are unaffected by this setting. When a
+bounded limiter is full: expired windows are reclaimed first; if that
+still is not enough, the oldest-started entry is evicted and the new
+key is admitted. A full map is never refused, so it cannot become a
+lockout (`src/ratelimit.rs`).
 
 ## Roadmap (the maintainer flips the status, you do not)
 
 M0, M1a, M1b, M1c, M1d, M2: merged to main (M1d and M2 landed together
 with review fixes via PR #10; RUSTSEC-2026-0385 was then patched via
-ctutils 0.4.5, PR #11). main is green. Branch protection is active
-with required status checks and no bypass; required approving
-reviews are 0 (solo project), aside from the existing two-reviewer
-rule above for auth code.
+ctutils 0.4.5, PR #11). main is green.
 M3 stats, category rules. M4 export, retention, Dockerfile. M5
 dashboard.
 
 iOS: not planned, not proven infeasible - no feasibility spike was
 done. Apple's FamilyControls/DeviceActivity needs an Apple
 entitlement, and the per-app usage data it produces stays inside a
-sandboxed extension, so there is no path to sync per-app events to
-our own server without one. Revisit if that changes.
+sandboxed extension; as far as known, no supported path exists to
+sync per-app events to our own server without one. Revisit if that
+changes.
 
 Next steps, in order: decide the project's name, including a
 trademark check; add utoipa/OpenAPI with a CI drift check against a
