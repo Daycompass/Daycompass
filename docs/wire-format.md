@@ -1,14 +1,21 @@
 # Wire format: accounts, invites, pairing, device auth, and event ingest
 
-Reference for client implementations. This describes the M1d and M2
-endpoints — creating and activating accounts, pairing a device,
-authenticating as one, and reporting events. There is deliberately
-**no way to read events back** in M2.
+Reference for client implementations: every route this server answers
+— setup, login and session management, account and device
+administration, pairing a device, authenticating as one, and reporting
+events. There is deliberately **no way to read events back** in M2.
 
 Everything here is normative for the server as it stands. The
 authoritative definitions live in the code (`src/routes/`,
 `src/events/validate.rs`); this file exists so client repositories have
 something to read without following Rust.
+
+Every route in `src/routes/mod.rs`'s `INVENTORY` has a section below,
+each preceded by an HTML-comment anchor naming its method and path.
+`tests/wire_format_documented.rs` enforces the correspondence in both
+directions: a route added to `INVENTORY` with no matching section here
+fails the test, and so does a section whose anchor names a route that
+no longer exists.
 
 ## Conventions
 
@@ -61,6 +68,174 @@ cookie, even one that also presents a valid token. A session route
 rejects any request carrying a `Bearer` credential. Do not send both.
 
 The `Bearer` scheme name is matched case-insensitively.
+
+---
+
+## Health
+
+<!-- route: GET /healthz -->
+### `GET /healthz`
+
+No authentication, no CSRF, no rate limit. A liveness probe: it
+reports only whether the database is reachable right now, nothing
+about why not.
+
+**`200 OK`:**
+
+```json
+{ "status": "ok" }
+```
+
+**`503 service_unavailable`** — the handler itself answers with an
+empty body, but `normalize_error_responses`
+(`src/middleware.rs`) rewrites every non-2xx response that is not
+already in the server's uniform shape into it before it reaches the
+wire, this one included:
+
+```json
+{ "error": { "code": "service_unavailable", "message": "service unavailable" } }
+```
+
+The underlying database error is logged server-side and never appears
+in the response — a client learns only "ok" or "not ok", nothing more
+specific.
+
+---
+
+## Setup
+
+<!-- route: POST /api/v1/setup -->
+### `POST /api/v1/setup`
+
+Creates the instance's first admin account. Authenticated by the setup
+token printed to stdout at server startup — an unguessable capability
+in the body, not a session — so there is no CSRF check and no `Origin`
+check: neither protects a cookie that does not exist here. Unknown
+fields are ignored (see [Conventions](#conventions)).
+
+```json
+{ "setup_token": "…", "username": "alice", "password": "a long enough passphrase" }
+```
+
+`username` and `password` follow the same rules as account creation —
+see [`POST /api/v1/users`](#post-apiv1users) below.
+
+**`201 Created`:**
+
+```json
+{ "user": { "id": "0199…", "username": "alice", "role": "admin" } }
+```
+
+Note what this is missing, unlike every other account view: no
+`status`, no `created_at` — see
+["The `status` field on a user object"](#the-status-field-on-a-user-object)
+below. It describes an account that is already usable, the same as
+`/api/v1/auth/login` and `/api/v1/auth/me`. The response sets **no
+cookie**; log in afterward through `POST /api/v1/auth/login`.
+
+**Failures:**
+
+| Status | Code | Meaning |
+| --- | --- | --- |
+| 404 | `not_found` | An admin already exists. Byte-identical to the response an unknown route gives, so a provisioned instance is indistinguishable from one that never had this endpoint. |
+| 401 | `invalid_setup_token` | Unknown or wrong token. |
+| 400 | `invalid_username` | Fails the length or charset rule. |
+| 400 | `invalid_password` | Blank, or outside 12–128 characters. |
+| 503 | `server_busy` | Password hashing capacity is exhausted; shed, not refused. Carries `Retry-After`, honour it the same as a `429`. |
+| 429 | `rate_limited` | Per client address, 5 per hour by default, operator-configurable. Counts every attempt, successful or not. |
+
+---
+
+## Sessions
+
+<!-- route: POST /api/v1/auth/login -->
+### `POST /api/v1/auth/login`
+
+**No authentication**, but `Origin` **is** checked — a successful login
+mints a session cookie, so this is exactly the route login CSRF would
+target. Unknown fields are ignored (see [Conventions](#conventions)).
+
+```json
+{ "username": "alice", "password": "…" }
+```
+
+**`200 OK`:**
+
+```json
+{
+  "user": { "id": "0199…", "username": "alice", "role": "user" },
+  "csrf_token": "…"
+}
+```
+
+Sets `Set-Cookie: __Host-dcs=…; Path=/; HttpOnly; Secure; SameSite=Strict`
+— no `Max-Age`: the server decides when a session ends, not the
+client's clock. Keep `csrf_token` in memory and send it back as
+`X-CSRF-Token` on every write this session makes.
+
+**Failures:**
+
+| Status | Code | Meaning |
+| --- | --- | --- |
+| 401 | `invalid_credentials` | Wrong password, unknown account, or a **pending** account that has not redeemed its invite — all three answer identically; see [the `status` field](#the-status-field-on-a-user-object). |
+| 503 | `server_busy` | Password hashing capacity is exhausted. Carries `Retry-After`. |
+| 429 | `rate_limited` | Two buckets, either can produce this: per client address (10 per 5 minutes by default) and per username across every address (5 per 5 minutes by default). Both are operator-configurable and may differ from these defaults on any given instance. The response does not say which. Both count every attempt. |
+
+<!-- route: POST /api/v1/auth/logout -->
+### `POST /api/v1/auth/logout`
+
+Session auth, CSRF required, no body.
+
+**`204 No Content`**, with the cookie cleared (`Max-Age=0`). The
+session row is deleted server-side — that is what actually ends the
+session — and the cookie clear is cosmetic on top of it.
+
+<!-- route: GET /api/v1/auth/me -->
+### `GET /api/v1/auth/me`
+
+Session auth. The documented way to get the CSRF token back after a
+page reload or in a new tab: the value is derived from the session
+cookie, so any tab holding it can ask.
+
+**`200 OK`:** same shape as login's success response, minus the
+`Set-Cookie` header — `{"user": {...}, "csrf_token": "…"}`. No
+`status` field on `user`; see
+[the `status` field](#the-status-field-on-a-user-object).
+
+**Failures:** `401 unauthenticated` — no valid session.
+
+<!-- route: POST /api/v1/auth/password -->
+### `POST /api/v1/auth/password`
+
+Session auth, CSRF required. Changes the caller's **own** password —
+there is no account parameter, so no request can aim this at somebody
+else.
+
+```json
+{ "current_password": "…", "new_password": "a long enough passphrase" }
+```
+
+This body rejects unknown fields (no exception here).
+
+**`200 OK`:**
+
+```json
+{ "other_sessions_ended": 2 }
+```
+
+The session that made this request survives and keeps working;
+`other_sessions_ended` counts only the rest.
+
+**Failures:**
+
+| Status | Code | Meaning |
+| --- | --- | --- |
+| 403 | `invalid_current_password` | **403, not 401** — the calling session stays valid. A password-change form must not react to this by logging the user out. |
+| 400 | `invalid_password` | The new password is blank, or outside 12–128 characters. |
+| 409 | `password_change_conflict` | Another request changed the password first; retry with the new current password. |
+| 401 | `unauthenticated` | The account was deleted between the session being resolved and the change being applied. |
+| 503 | `server_busy` | Password hashing capacity is exhausted. Carries `Retry-After`. |
+| 429 | `rate_limited` | Per **session**, not per account — 5 per 15 minutes by default, operator-configurable — so a stolen session cannot spend the budget the rightful owner needs to lock it out. |
 
 ---
 
