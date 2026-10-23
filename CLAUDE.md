@@ -27,7 +27,6 @@ web dashboard (askama or maud, htmx) is planned for M5.
 - No telemetry, no outgoing requests.
 - Events carry no category, categories are assigned at query time.
 - New tables are STRICT, timestamps are INTEGER Unix seconds.
-- Auth code needs two reviewers.
 
 ## Known limits
 
@@ -144,7 +143,13 @@ refused, so it cannot become a lockout (`src/ratelimit.rs`).
 
 M0, M1a, M1b, M1c, M1d, M2: merged to main (M1d and M2 landed together
 with review fixes via PR #10; RUSTSEC-2026-0385 was then patched via
-ctutils 0.4.5, PR #11). main is green.
+ctutils 0.4.5, PR #11). main is green. Branch protection on main
+requires a pull request with 0 required approving reviews (solo
+project), 6 required status checks (cargo clippy -- -D warnings,
+cargo audit, cargo deny check, cargo fmt --check, cargo test
+--locked, gitleaks), strict status checks (branches must be up to
+date), and enforce_admins on, so there is no admin bypass; code
+owner review is not required.
 M3 stats, category rules. M4 export, retention, Dockerfile. M5
 dashboard.
 
