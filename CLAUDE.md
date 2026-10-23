@@ -72,8 +72,8 @@ deletion behavior, not a bug - deleting an account deletes the
 account's log, which is deletion of the account, not editing of the
 log. Consequently the account log is an informational account log,
 not a tamper-proof audit trail. A real audit trail would need a
-table without that cascade (e.g. one keyed by a surviving id, or none
-at all) and is a separate design decision, not assumed here.
+table without that cascade (e.g. keyed by an id that survives account
+deletion) and is a separate design decision, not assumed here.
 
 ## Rename: Screenward -> Screenwarden
 
@@ -112,11 +112,16 @@ unless that peer is a configured trusted proxy
 (`SCREENWARDEN_TRUSTED_PROXIES`, empty by default), in which case
 `X-Forwarded-For` is read right to left, skipping trusted hops, to
 find the first untrusted address - otherwise the header is ignored
-outright and a client cannot choose its own address. The resulting
-address is then normalized into a `ClientKey`: an IPv4 address is
-keyed per address, an IPv6 address is keyed per `/64`, because a
-single residential or hosted IPv6 assignment is routinely a whole
-`/64` or larger - keying per address would let one client walk
+outright and a client cannot choose its own address. An entry that
+fails to parse stops the walk and falls back to the peer address,
+rather than being skipped - skipping it would let a client append
+garbage to reach an entry further left that it controls. If every
+entry is a trusted hop (or the header is empty), the walk also falls
+back to the peer, since there is no untrusted entry to return. The
+resulting address is then normalized into a `ClientKey`: an IPv4
+address is keyed per address, an IPv6 address is keyed per `/64`,
+because a single residential or hosted IPv6 assignment is routinely
+a whole `/64` or larger - keying per address would let one client walk
 through billions of addresses and never hit a limit.
 
 Not itself a window, but related: `SCREENWARDEN_RATE_LIMIT_MAX_ENTRIES`
