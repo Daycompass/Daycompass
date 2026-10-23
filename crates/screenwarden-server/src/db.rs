@@ -852,6 +852,35 @@ mod tests {
         std::fs::remove_dir_all(&data_dir).ok();
     }
 
+    /// A non-empty legacy WAL with neither the new main file nor the
+    /// legacy main file present: the new main file is missing, so this
+    /// must take the safe-to-rename-everything branch and return
+    /// `LegacyDatabaseFile`, not `LegacyWalAlongsideNewFile` - that
+    /// error is reserved for when a rename would overwrite an existing
+    /// new file, which is not the case here.
+    #[tokio::test]
+    async fn file_target_refuses_a_non_empty_legacy_wal_when_the_new_file_is_missing() {
+        use std::sync::atomic::{AtomicU32, Ordering};
+
+        static COUNTER: AtomicU32 = AtomicU32::new(0);
+        let unique = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let data_dir = std::env::temp_dir().join(format!(
+            "screenwarden-db-non-empty-wal-no-new-file-test-{}-{unique}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&data_dir).unwrap();
+        std::fs::write(data_dir.join(LEGACY_WAL_FILE_NAME), b"not actually empty").unwrap();
+
+        let target = DbTarget::File {
+            data_dir: data_dir.clone(),
+        };
+        let result = connect(&target).await;
+
+        assert!(matches!(result, Err(DbError::LegacyDatabaseFile)));
+
+        std::fs::remove_dir_all(&data_dir).ok();
+    }
+
     /// The flip side of the test above: an *empty* legacy WAL - the
     /// ordinary leftover of a rename that already finished cleanly -
     /// must not block every later start of an otherwise working
