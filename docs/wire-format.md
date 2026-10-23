@@ -1,21 +1,31 @@
 # Wire format: accounts, invites, pairing, device auth, and event ingest
 
-Reference for client implementations. This describes the M1d and M2
-endpoints — creating and activating accounts, pairing a device,
-authenticating as one, and reporting events. There is deliberately
-**no way to read events back** in M2.
+Reference for client implementations: every route this server answers
+— setup, login and session management, account and device
+administration, pairing a device, authenticating as one, and reporting
+events. There is deliberately **no way to read events back** in M2.
 
 Everything here is normative for the server as it stands. The
 authoritative definitions live in the code (`src/routes/`,
 `src/events/validate.rs`); this file exists so client repositories have
 something to read without following Rust.
 
+Every route in `src/routes/mod.rs`'s `INVENTORY` has a section below,
+each preceded by an HTML-comment anchor naming its method and path.
+`tests/wire_format_documented.rs` enforces the correspondence in both
+directions: a route added to `INVENTORY` with no matching section here
+fails the test, and so does a section whose anchor names a route that
+no longer exists.
+
 ## Conventions
 
 - All timestamps are **integer Unix seconds, UTC**.
 - All request and response bodies are `application/json`.
-- Request bodies reject unknown fields. A stray or misspelled field
-  fails the whole request — it is never silently ignored.
+- Request bodies reject unknown fields, with two exceptions:
+  `POST /api/v1/auth/login` and `POST /api/v1/setup` ignore a field
+  they do not recognize instead of failing the request on it. **Do not
+  rely on either behaviour** — send exactly the fields documented for
+  the endpoint. Both endpoints' own sections repeat this.
 - Errors share one shape:
 
   ```json
@@ -24,6 +34,24 @@ something to read without following Rust.
 
   Branch on `code`, which is stable. `message` is for humans and may be
   reworded. Neither ever echoes back what you sent.
+
+### Errors any endpoint can return
+
+These come from infrastructure that wraps every route, not from an
+endpoint's own logic, and share the error shape above like any other
+failure:
+
+| Status | Code | When |
+| --- | --- | --- |
+| 400 | `bad_request` | Malformed JSON, or a request shape the server could not parse at all. |
+| 401 | `unauthenticated` | No valid session or device credential. |
+| 403 | `forbidden` | Authenticated, but not allowed to do this. |
+| 403 | `csrf_token_missing` / `csrf_token_invalid` | A route that requires `X-CSRF-Token` on writes did not get one, or got one that does not match the session. |
+| 403 | `origin_mismatch` | A present `Origin` header names something other than this instance, on a route that checks it. |
+| 408 | `request_timeout` | The request took longer than 10 seconds end to end. |
+| 413 | `payload_too_large` | Body over the global 64 KiB request limit. Some endpoints set a smaller limit of their own — see that endpoint's section. |
+| 415 | `unsupported_media_type` | `Content-Type` is missing or not `application/json`. |
+| 500 | `internal_server_error` | Something broke on the server. Never carries detail. |
 
 ## Authentication
 
@@ -40,6 +68,174 @@ cookie, even one that also presents a valid token. A session route
 rejects any request carrying a `Bearer` credential. Do not send both.
 
 The `Bearer` scheme name is matched case-insensitively.
+
+---
+
+## Health
+
+<!-- route: GET /healthz -->
+### `GET /healthz`
+
+No authentication, no CSRF, no rate limit. A liveness probe: it
+reports only whether the database is reachable right now, nothing
+about why not.
+
+**`200 OK`:**
+
+```json
+{ "status": "ok" }
+```
+
+**`503 service_unavailable`** — the handler itself answers with an
+empty body, but `normalize_error_responses`
+(`src/middleware.rs`) rewrites every non-2xx response that is not
+already in the server's uniform shape into it before it reaches the
+wire, this one included:
+
+```json
+{ "error": { "code": "service_unavailable", "message": "service unavailable" } }
+```
+
+The underlying database error is logged server-side and never appears
+in the response — a client learns only "ok" or "not ok", nothing more
+specific.
+
+---
+
+## Setup
+
+<!-- route: POST /api/v1/setup -->
+### `POST /api/v1/setup`
+
+Creates the instance's first admin account. Authenticated by the setup
+token printed to stdout at server startup — an unguessable capability
+in the body, not a session — so there is no CSRF check and no `Origin`
+check: neither protects a cookie that does not exist here. Unknown
+fields are ignored (see [Conventions](#conventions)).
+
+```json
+{ "setup_token": "…", "username": "alice", "password": "a long enough passphrase" }
+```
+
+`username` and `password` follow the same rules as account creation —
+see [`POST /api/v1/users`](#post-apiv1users) below.
+
+**`201 Created`:**
+
+```json
+{ "user": { "id": "0199…", "username": "alice", "role": "admin" } }
+```
+
+Note what this is missing, unlike every other account view: no
+`status`, no `created_at` — see
+["The `status` field on a user object"](#the-status-field-on-a-user-object)
+below. It describes an account that is already usable, the same as
+`/api/v1/auth/login` and `/api/v1/auth/me`. The response sets **no
+cookie**; log in afterward through `POST /api/v1/auth/login`.
+
+**Failures:**
+
+| Status | Code | Meaning |
+| --- | --- | --- |
+| 404 | `not_found` | An admin already exists. Byte-identical to the response an unknown route gives, so a provisioned instance is indistinguishable from one that never had this endpoint. |
+| 401 | `invalid_setup_token` | Unknown or wrong token. |
+| 400 | `invalid_username` | Fails the length or charset rule. |
+| 400 | `invalid_password` | Blank, or outside 12–128 characters. |
+| 503 | `server_busy` | Password hashing capacity is exhausted; shed, not refused. Carries `Retry-After`, honour it the same as a `429`. |
+| 429 | `rate_limited` | Per client address, 5 per hour by default, operator-configurable. Counts every attempt, successful or not. |
+
+---
+
+## Sessions
+
+<!-- route: POST /api/v1/auth/login -->
+### `POST /api/v1/auth/login`
+
+**No authentication**, but `Origin` **is** checked — a successful login
+mints a session cookie, so this is exactly the route login CSRF would
+target. Unknown fields are ignored (see [Conventions](#conventions)).
+
+```json
+{ "username": "alice", "password": "…" }
+```
+
+**`200 OK`:**
+
+```json
+{
+  "user": { "id": "0199…", "username": "alice", "role": "user" },
+  "csrf_token": "…"
+}
+```
+
+Sets `Set-Cookie: __Host-dcs=…; Path=/; HttpOnly; Secure; SameSite=Strict`
+— no `Max-Age`: the server decides when a session ends, not the
+client's clock. Keep `csrf_token` in memory and send it back as
+`X-CSRF-Token` on every write this session makes.
+
+**Failures:**
+
+| Status | Code | Meaning |
+| --- | --- | --- |
+| 401 | `invalid_credentials` | Wrong password, unknown account, or a **pending** account that has not redeemed its invite — all three answer identically; see [the `status` field](#the-status-field-on-a-user-object). |
+| 503 | `server_busy` | Password hashing capacity is exhausted. Carries `Retry-After`. |
+| 429 | `rate_limited` | Two buckets, either can produce this: per client address (10 per 5 minutes by default) and per username across every address (5 per 5 minutes by default). Both are operator-configurable and may differ from these defaults on any given instance. The response does not say which. Both count every attempt. |
+
+<!-- route: POST /api/v1/auth/logout -->
+### `POST /api/v1/auth/logout`
+
+Session auth, CSRF required, no body.
+
+**`204 No Content`**, with the cookie cleared (`Max-Age=0`). The
+session row is deleted server-side — that is what actually ends the
+session — and the cookie clear is cosmetic on top of it.
+
+<!-- route: GET /api/v1/auth/me -->
+### `GET /api/v1/auth/me`
+
+Session auth. The documented way to get the CSRF token back after a
+page reload or in a new tab: the value is derived from the session
+cookie, so any tab holding it can ask.
+
+**`200 OK`:** same shape as login's success response, minus the
+`Set-Cookie` header — `{"user": {...}, "csrf_token": "…"}`. No
+`status` field on `user`; see
+[the `status` field](#the-status-field-on-a-user-object).
+
+**Failures:** `401 unauthenticated` — no valid session.
+
+<!-- route: POST /api/v1/auth/password -->
+### `POST /api/v1/auth/password`
+
+Session auth, CSRF required. Changes the caller's **own** password —
+there is no account parameter, so no request can aim this at somebody
+else.
+
+```json
+{ "current_password": "…", "new_password": "a long enough passphrase" }
+```
+
+This body rejects unknown fields (no exception here).
+
+**`200 OK`:**
+
+```json
+{ "other_sessions_ended": 2 }
+```
+
+The session that made this request survives and keeps working;
+`other_sessions_ended` counts only the rest.
+
+**Failures:**
+
+| Status | Code | Meaning |
+| --- | --- | --- |
+| 403 | `invalid_current_password` | **403, not 401** — the calling session stays valid. A password-change form must not react to this by logging the user out. |
+| 400 | `invalid_password` | The new password is blank, or outside 12–128 characters. |
+| 409 | `password_change_conflict` | Another request changed the password first; retry with the new current password. |
+| 401 | `unauthenticated` | The account was deleted between the session being resolved and the change being applied. |
+| 503 | `server_busy` | Password hashing capacity is exhausted. Carries `Retry-After`. |
+| 429 | `rate_limited` | Per **session**, not per account — 5 per 15 minutes by default, operator-configurable — so a stolen session cannot spend the budget the rightful owner needs to lock it out. |
 
 ---
 
@@ -69,6 +265,7 @@ only ever describe an account that is already usable.
 | `"active"` | Has a password and can log in. |
 | `"pending"` | Created by an admin, or reset by one, and has not yet redeemed its invite. Cannot log in — a login attempt against a pending account answers identically to an unknown one (`401` `invalid_credentials`). |
 
+<!-- route: POST /api/v1/users -->
 ### `POST /api/v1/users`
 
 Admin session auth, CSRF required. Creates a pending account and its
@@ -115,6 +312,79 @@ authoritative expiry — do not hardcode the 72 hours client-side).
 | 400 | `invalid_role` | Not `admin` or `user`. |
 | 409 | `username_taken` | Another account already normalizes to this username. |
 
+<!-- route: GET /api/v1/users -->
+### `GET /api/v1/users`
+
+Admin session auth, no CSRF (a `GET`). Lists every account on the
+instance.
+
+**`200 OK`:**
+
+```json
+{
+  "users": [
+    { "id": "0199…", "username": "alice", "role": "user", "status": "active", "created_at": 1800000000 }
+  ]
+}
+```
+
+Ordered `created_at, id` ascending — stable across requests, including
+between two accounts created in the same second.
+
+**Failures:** `403 forbidden` for a non-admin session; `401
+unauthenticated` for no session.
+
+<!-- route: PATCH /api/v1/users/{id} -->
+### `PATCH /api/v1/users/{id}`
+
+Admin session auth, CSRF required. Changes an account's role — nothing
+else. There is no way to rename an account or touch its password here;
+that is `POST /api/v1/users/{id}/password-reset`, below.
+
+```json
+{ "role": "admin" }
+```
+
+`role`: exactly `"admin"` or `"user"`, lowercase — same rule as
+creation.
+
+**`200 OK`:**
+
+```json
+{ "user": { "id": "0199…", "username": "alice", "role": "admin", "status": "active", "created_at": 1800000000 } }
+```
+
+**Failures:**
+
+| Status | Code | Meaning |
+| --- | --- | --- |
+| 400 | `invalid_role` | Not `admin` or `user`. |
+| 404 | `not_found` | No account with this id. |
+| 409 | `last_admin_protected` | This account is the instance's only active admin, and the change would demote it. |
+
+<!-- route: DELETE /api/v1/users/{id} -->
+### `DELETE /api/v1/users/{id}`
+
+Admin session auth, CSRF required. The **only** destructive account
+operation — do not confuse it with a password reset, which keeps the
+account and only replaces its credential.
+
+No request body.
+
+**`204 No Content`**, no body. Deleting cascades: every session,
+device (and every event that device reported), pairing code, invite
+and account-log entry belonging to this account is deleted with it
+(`ON DELETE CASCADE`, migrations `0002_auth.sql` through
+`0004_invites_account_log.sql`).
+
+**Failures:**
+
+| Status | Code | Meaning |
+| --- | --- | --- |
+| 404 | `not_found` | No account with this id. |
+| 409 | `last_admin_protected` | This is the instance's only active admin. |
+
+<!-- route: POST /api/v1/users/{id}/password-reset -->
 ### `POST /api/v1/users/{id}/password-reset`
 
 Admin session auth, CSRF required. Resets an existing account to
@@ -149,6 +419,7 @@ ended — not a running total for the account.
 | 404 | `not_found` | No account with this id. |
 | 409 | `last_admin_protected` | This is the instance's only active admin. |
 
+<!-- route: POST /api/v1/invites/redeem -->
 ### `POST /api/v1/invites/redeem`
 
 **No authentication.** Unlike `/api/v1/setup` and `/api/v1/pair`, the
@@ -199,6 +470,7 @@ same as pairing:
 Both are operator-configurable and may differ from these defaults on
 any given instance.
 
+<!-- route: GET /api/v1/account/log -->
 ### `GET /api/v1/account/log`
 
 Session auth, no CSRF (a `GET`). Returns the **caller's own** history
@@ -238,6 +510,7 @@ Newest first, capped at the 200 most recent entries.
 
 ## Pairing
 
+<!-- route: POST /api/v1/pairing-codes -->
 ### `POST /api/v1/pairing-codes`
 
 Session auth, CSRF required. Mints a code for the calling account.
@@ -255,6 +528,7 @@ Session auth, CSRF required. Mints a code for the calling account.
 - At most 5 live codes per account; a sixth returns `409`
   `pairing_code_limit_reached`.
 
+<!-- route: POST /api/v1/pair -->
 ### `POST /api/v1/pair`
 
 **No authentication.** No `Origin` check, no CSRF. This is the one
@@ -317,6 +591,7 @@ Rate limits count **every** attempt, not only failures.
 
 ## Device endpoints
 
+<!-- route: GET /api/v1/device/me -->
 ### `GET /api/v1/device/me`
 
 Device auth. Confirms identity and reports the server's clock.
@@ -351,6 +626,7 @@ keep in step. Both are also covered by the per-address limit on
 ["Handling errors on device routes"](#handling-errors-on-device-routes)
 below for what to do with either 429.
 
+<!-- route: POST /api/v1/events -->
 ### `POST /api/v1/events`
 
 Device auth. Reports observed activity.
@@ -531,27 +807,137 @@ sync interval.
 ## Device management (session auth)
 
 These are dashboard endpoints, listed here only so a client knows what
-a person can do to it.
+a person can do to it. Revoking is **not** deleting: the device row
+and every event it reported are kept. A revoked device's token stops
+working on its very next request, with nothing cached in between —
+expect `401 unauthenticated` and stop retrying. A revoked device
+cannot be un-revoked; pair again. A revoked device is
+indistinguishable from an unknown one in any of these responses — do
+not try to tell them apart.
 
-| Endpoint | Effect |
-| --- | --- |
-| `GET /api/v1/devices` | The caller's own devices, revoked ones included. |
-| `PATCH /api/v1/devices/{id}` | Rename. Body: `{"name": "…"}`. |
-| `POST /api/v1/devices/{id}/revoke` | Revoke. Idempotent. |
+<!-- route: GET /api/v1/devices -->
+### `GET /api/v1/devices`
 
-Revoking is **not** deleting: the device row and every event it reported
-are kept. A revoked device's token stops working on its very next
-request, with nothing cached in between — expect `401 unauthenticated`
-and stop retrying. A revoked device cannot be un-revoked; pair again.
+Session auth, no CSRF (a `GET`). The caller's own devices — revoked
+ones included, with `revoked_at` set for those.
 
-A revoked device is indistinguishable from an unknown one in the
-response. Do not try to tell them apart.
+**`200 OK`:**
+
+```json
+{
+  "devices": [
+    {
+      "id": "0199…",
+      "name": "Alice's Laptop",
+      "platform": "linux",
+      "created_at": 1800000000,
+      "last_seen_at": 1800003600,
+      "revoked_at": null
+    },
+    {
+      "id": "0199…",
+      "name": "Old Phone",
+      "platform": "android",
+      "created_at": 1700000000,
+      "last_seen_at": 1700003600,
+      "revoked_at": 1700090000
+    }
+  ]
+}
+```
+
+Ordered `created_at, id` ascending.
+
+**Failures:** `401 unauthenticated` for no session.
+
+<!-- route: PATCH /api/v1/devices/{id} -->
+### `PATCH /api/v1/devices/{id}`
+
+Session auth, CSRF required. Renames one of the caller's own devices.
+
+```json
+{ "name": "Alice's Laptop" }
+```
+
+Same name policy as `device_name` on
+[`POST /api/v1/pair`](#post-apiv1pair) — repeated here would just be
+two places that could drift apart.
+
+**`200 OK`:** the updated device, same shape as one entry of
+`GET /api/v1/devices` above.
+
+**Failures:**
+
+| Status | Code | Meaning |
+| --- | --- | --- |
+| 400 | `invalid_device_name` | Fails the length or charset rule — one code for both causes. |
+| 404 | `not_found` | No such device, **or** it exists but belongs to someone else — deliberately the same answer, so a caller cannot probe which device ids exist on other accounts. |
+
+<!-- route: POST /api/v1/devices/{id}/revoke -->
+### `POST /api/v1/devices/{id}/revoke`
+
+Session auth, CSRF required. Revokes one of the caller's own devices.
+No request body.
+
+**`200 OK`:** the device, with `revoked_at` set.
+
+**Idempotent.** A second call against an already-revoked device
+answers the same `200` with the same `revoked_at` it already had —
+there is no "already done" error, and the second call does not move
+the timestamp forward.
+
+**Failures:** `404 not_found` — same "no such device, or not yours"
+meaning as above.
 
 ## Admin endpoints
 
-`GET /api/v1/admin/devices` and
-`POST /api/v1/admin/devices/{id}/revoke`.
-
 An admin sees device **metadata only** — id, owner, name, platform, and
 the three timestamps. An admin has no way to read any user's events, by
-design and enforced by tests.
+design and enforced by `tests/no_event_reads.rs`.
+
+<!-- route: GET /api/v1/admin/devices -->
+### `GET /api/v1/admin/devices`
+
+Admin session auth, no CSRF (a `GET`). Every device on the instance,
+any owner, revoked ones included.
+
+**`200 OK`:**
+
+```json
+{
+  "devices": [
+    {
+      "id": "0199…",
+      "owner_id": "0199…",
+      "owner_username": "alice",
+      "name": "Alice's Laptop",
+      "platform": "linux",
+      "created_at": 1800000000,
+      "last_seen_at": 1800003600,
+      "revoked_at": null
+    }
+  ]
+}
+```
+
+Ordered `d.created_at, d.id` ascending.
+
+**Failures:** `403 forbidden` for a non-admin session; `401
+unauthenticated` for no session.
+
+<!-- route: POST /api/v1/admin/devices/{id}/revoke -->
+### `POST /api/v1/admin/devices/{id}/revoke`
+
+Admin session auth, CSRF required. Revokes any device on the instance,
+regardless of owner. No request body.
+
+**Responds with the owner's `DeviceView`, not `AdminDeviceView`** — the
+same shape as `GET /api/v1/devices`' entries, with **no** `owner_id` or
+`owner_username` in it. Easy to assume otherwise; it is not a superset
+of the list response.
+
+**`200 OK`:** the device, with `revoked_at` set. Same idempotency as
+the owner-scoped revoke above: a second call answers the same `200`
+with the same `revoked_at`.
+
+**Failures:** `404 not_found`.

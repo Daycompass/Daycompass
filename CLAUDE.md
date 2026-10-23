@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-Screenwarden: self-hosted, open-source (AGPL-3.0) screen time backend for
+Daycompass: self-hosted, open-source (AGPL-3.0) screen time backend for
 students. Backend only. Clients live in other repos. A server-rendered
 web dashboard (askama or maud, htmx) is planned for M5.
 
@@ -74,41 +74,44 @@ not a tamper-proof audit trail. A real audit trail would need a
 table without that cascade (e.g. keyed by an id that survives account
 deletion) and is a separate design decision, not assumed here.
 
-## Rename: Screenward -> Screenwarden
+## Renames: Screenward -> Screenwarden -> Daycompass
 
-The project was renamed from Screenward to Screenwarden. Two startup
-guards refuse to start rather than silently falling back to a default
-or an empty database:
+The project has been renamed twice so far. Two startup guards refuse
+to start rather than silently falling back to a default or an empty
+database, for *either* past name:
 - env vars: `config::check_for_legacy_env` (`src/config.rs`), called
   from `main.rs` before `Config::from_env` runs, refuses to start if
-  any `SCREENWARD_*` variable is set in the process environment
+  any `SCREENWARD_*` or `SCREENWARDEN_*` variable is set in the
+  process environment
 - database file: `check_for_legacy_db_files` (`src/db.rs`), called
   from `connect` for a file-backed database, refuses to start if a
-  legacy `screenward.sqlite3*` file is found (alone, or alongside the
-  new `screenwarden.sqlite3`)
+  legacy `screenward.sqlite3*` or `screenwarden.sqlite3*` file is
+  found (alone, or alongside the new `daycompass.sqlite3`)
 
-Both fail loud (process exit 1 / `DbError`), never silently.
+Both fail loud (process exit 1 / `DbError`), never silently. Each past
+name is one entry in `src/legacy.rs`'s `GENERATIONS`, so the next
+rename adds an entry there rather than touching either check's logic.
 
 ## Rate-limit defaults
 
 All from `src/config.rs`, `max/window_secs`, each overridable by its
 own env var:
-- `SCREENWARDEN_RATE_LIMIT_LOGIN_IP`: 10/300 - per client address
-- `SCREENWARDEN_RATE_LIMIT_LOGIN_USERNAME`: 5/300 - per username, any
+- `DAYCOMPASS_RATE_LIMIT_LOGIN_IP`: 10/300 - per client address
+- `DAYCOMPASS_RATE_LIMIT_LOGIN_USERNAME`: 5/300 - per username, any
   address
-- `SCREENWARDEN_RATE_LIMIT_SETUP_IP`: 5/3600 - per client address
-- `SCREENWARDEN_RATE_LIMIT_PW_CHANGE`: 5/900 - per session
-- `SCREENWARDEN_RATE_LIMIT_PAIR_IP`: 10/300 - per client address
-- `SCREENWARDEN_RATE_LIMIT_PAIR_GLOBAL`: 600/60 - instance-wide
-- `SCREENWARDEN_RATE_LIMIT_DEVICE_AUTH_FAIL`: 600/60 - per client
+- `DAYCOMPASS_RATE_LIMIT_SETUP_IP`: 5/3600 - per client address
+- `DAYCOMPASS_RATE_LIMIT_PW_CHANGE`: 5/900 - per session
+- `DAYCOMPASS_RATE_LIMIT_PAIR_IP`: 10/300 - per client address
+- `DAYCOMPASS_RATE_LIMIT_PAIR_GLOBAL`: 600/60 - instance-wide
+- `DAYCOMPASS_RATE_LIMIT_DEVICE_AUTH_FAIL`: 600/60 - per client
   address, failed device auths only
-- `SCREENWARDEN_RATE_LIMIT_INVITE_IP`: 100/300 - per client address
-- `SCREENWARDEN_RATE_LIMIT_INVITE_GLOBAL`: 600/60 - instance-wide
-- `SCREENWARDEN_RATE_LIMIT_INGEST_DEVICE`: 30/60 - per device
+- `DAYCOMPASS_RATE_LIMIT_INVITE_IP`: 100/300 - per client address
+- `DAYCOMPASS_RATE_LIMIT_INVITE_GLOBAL`: 600/60 - instance-wide
+- `DAYCOMPASS_RATE_LIMIT_INGEST_DEVICE`: 30/60 - per device
 
 "Per client address" (`src/clientip.rs`) means: the TCP peer address,
 unless that peer is a configured trusted proxy
-(`SCREENWARDEN_TRUSTED_PROXIES`, empty by default), in which case
+(`DAYCOMPASS_TRUSTED_PROXIES`, empty by default), in which case
 `X-Forwarded-For` is read right to left, skipping trusted hops, to
 find the first untrusted address - otherwise the header is ignored
 outright and a client cannot choose its own address. An entry that
@@ -123,7 +126,7 @@ because a single residential or hosted IPv6 assignment is routinely
 a whole `/64` or larger - keying per address would let one client walk
 through billions of addresses and never hit a limit.
 
-Not itself a window, but related: `SCREENWARDEN_RATE_LIMIT_MAX_ENTRIES`
+Not itself a window, but related: `DAYCOMPASS_RATE_LIMIT_MAX_ENTRIES`
 bounds each of the per-key limiters above separately (login/IP,
 login/username, setup/IP, pw-change, pair/IP, ingest/device,
 device-auth-fail, invite/IP) to 10,000 tracked keys each - not a
