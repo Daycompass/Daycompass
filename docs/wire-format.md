@@ -265,6 +265,7 @@ only ever describe an account that is already usable.
 | `"active"` | Has a password and can log in. |
 | `"pending"` | Created by an admin, or reset by one, and has not yet redeemed its invite. Cannot log in — a login attempt against a pending account answers identically to an unknown one (`401` `invalid_credentials`). |
 
+<!-- route: POST /api/v1/users -->
 ### `POST /api/v1/users`
 
 Admin session auth, CSRF required. Creates a pending account and its
@@ -311,6 +312,79 @@ authoritative expiry — do not hardcode the 72 hours client-side).
 | 400 | `invalid_role` | Not `admin` or `user`. |
 | 409 | `username_taken` | Another account already normalizes to this username. |
 
+<!-- route: GET /api/v1/users -->
+### `GET /api/v1/users`
+
+Admin session auth, no CSRF (a `GET`). Lists every account on the
+instance.
+
+**`200 OK`:**
+
+```json
+{
+  "users": [
+    { "id": "0199…", "username": "alice", "role": "user", "status": "active", "created_at": 1800000000 }
+  ]
+}
+```
+
+Ordered `created_at, id` ascending — stable across requests, including
+between two accounts created in the same second.
+
+**Failures:** `403 forbidden` for a non-admin session; `401
+unauthenticated` for no session.
+
+<!-- route: PATCH /api/v1/users/{id} -->
+### `PATCH /api/v1/users/{id}`
+
+Admin session auth, CSRF required. Changes an account's role — nothing
+else. There is no way to rename an account or touch its password here;
+that is `POST /api/v1/users/{id}/password-reset`, below.
+
+```json
+{ "role": "admin" }
+```
+
+`role`: exactly `"admin"` or `"user"`, lowercase — same rule as
+creation.
+
+**`200 OK`:**
+
+```json
+{ "user": { "id": "0199…", "username": "alice", "role": "admin", "status": "active", "created_at": 1800000000 } }
+```
+
+**Failures:**
+
+| Status | Code | Meaning |
+| --- | --- | --- |
+| 400 | `invalid_role` | Not `admin` or `user`. |
+| 404 | `not_found` | No account with this id. |
+| 409 | `last_admin_protected` | This account is the instance's only active admin, and the change would demote it. |
+
+<!-- route: DELETE /api/v1/users/{id} -->
+### `DELETE /api/v1/users/{id}`
+
+Admin session auth, CSRF required. The **only** destructive account
+operation — do not confuse it with a password reset, which keeps the
+account and only replaces its credential.
+
+No request body.
+
+**`204 No Content`**, no body. Deleting cascades: every session,
+device (and every event that device reported), pairing code, invite
+and account-log entry belonging to this account is deleted with it
+(`ON DELETE CASCADE`, migrations `0002_auth.sql` through
+`0004_invites_account_log.sql`).
+
+**Failures:**
+
+| Status | Code | Meaning |
+| --- | --- | --- |
+| 404 | `not_found` | No account with this id. |
+| 409 | `last_admin_protected` | This is the instance's only active admin. |
+
+<!-- route: POST /api/v1/users/{id}/password-reset -->
 ### `POST /api/v1/users/{id}/password-reset`
 
 Admin session auth, CSRF required. Resets an existing account to
@@ -345,6 +419,7 @@ ended — not a running total for the account.
 | 404 | `not_found` | No account with this id. |
 | 409 | `last_admin_protected` | This is the instance's only active admin. |
 
+<!-- route: POST /api/v1/invites/redeem -->
 ### `POST /api/v1/invites/redeem`
 
 **No authentication.** Unlike `/api/v1/setup` and `/api/v1/pair`, the
@@ -395,6 +470,7 @@ same as pairing:
 Both are operator-configurable and may differ from these defaults on
 any given instance.
 
+<!-- route: GET /api/v1/account/log -->
 ### `GET /api/v1/account/log`
 
 Session auth, no CSRF (a `GET`). Returns the **caller's own** history
@@ -434,6 +510,7 @@ Newest first, capped at the 200 most recent entries.
 
 ## Pairing
 
+<!-- route: POST /api/v1/pairing-codes -->
 ### `POST /api/v1/pairing-codes`
 
 Session auth, CSRF required. Mints a code for the calling account.
@@ -451,6 +528,7 @@ Session auth, CSRF required. Mints a code for the calling account.
 - At most 5 live codes per account; a sixth returns `409`
   `pairing_code_limit_reached`.
 
+<!-- route: POST /api/v1/pair -->
 ### `POST /api/v1/pair`
 
 **No authentication.** No `Origin` check, no CSRF. This is the one
@@ -513,6 +591,7 @@ Rate limits count **every** attempt, not only failures.
 
 ## Device endpoints
 
+<!-- route: GET /api/v1/device/me -->
 ### `GET /api/v1/device/me`
 
 Device auth. Confirms identity and reports the server's clock.
@@ -547,6 +626,7 @@ keep in step. Both are also covered by the per-address limit on
 ["Handling errors on device routes"](#handling-errors-on-device-routes)
 below for what to do with either 429.
 
+<!-- route: POST /api/v1/events -->
 ### `POST /api/v1/events`
 
 Device auth. Reports observed activity.
