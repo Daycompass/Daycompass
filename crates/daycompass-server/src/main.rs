@@ -13,7 +13,8 @@ use daycompass_server::state::AppState;
 #[tokio::main]
 async fn main() {
     // Checked before anything else, including `Config::from_env`: a
-    // stray `SCREENWARD_*` variable must never be silently ignored in
+    // stray variable from any past generation's env prefix (see
+    // `crate::legacy::GENERATIONS`) must never be silently ignored in
     // favor of a default (loopback bind, no trusted proxies, the
     // compiled-in rate limits).
     if let Err(err) = config::check_for_legacy_env() {

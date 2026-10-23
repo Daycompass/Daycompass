@@ -12,19 +12,6 @@ use sqlx::SqlitePool;
 /// Database filename inside the data directory.
 pub const DB_FILE_NAME: &str = "daycompass.sqlite3";
 
-/// The filename used before the Screenward -> Screenwarden rename. Only
-/// checked for at startup, to refuse an upgrade that would otherwise
-/// silently start from an empty database under the new name.
-const LEGACY_DB_FILE_NAME: &str = "screenward.sqlite3";
-
-/// SQLite's WAL auxiliary files, under the legacy name. `connect` below
-/// opens every database - old name or new - in WAL mode, so these are
-/// not incidental: recent commits can live in `-wal` and not yet be in
-/// the main file at all, and `-shm` is the index a reader needs to make
-/// sense of it.
-const LEGACY_WAL_FILE_NAME: &str = "screenward.sqlite3-wal";
-const LEGACY_SHM_FILE_NAME: &str = "screenward.sqlite3-shm";
-
 /// How long a connection waits on a lock before giving up.
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -52,31 +39,40 @@ pub enum DbError {
 
     /// The new main file does not exist yet, so renaming every legacy
     /// file onto its matching new name is safe - there is nothing
-    /// there to overwrite.
+    /// there to overwrite. `generation_name` and `legacy_stem` name
+    /// whichever past generation's file was found (see
+    /// [`crate::legacy::GENERATIONS`]); `current_stem` is always
+    /// [`DB_FILE_NAME`].
     #[error(
-        "found a legacy screenward.sqlite3* file in the data directory; \
-         stop the server cleanly, then rename every file named \
-         screenward.sqlite3* - including -wal and -shm - to the matching \
-         daycompass.sqlite3* name, and restart"
+        "found a legacy {generation_name} database file ({legacy_stem}*) \
+         in the data directory; stop the server cleanly, then rename \
+         every file named {legacy_stem}* - including -wal and -shm - to \
+         the matching {current_stem}* name, and restart"
     )]
-    LegacyDatabaseFile,
+    LegacyDatabaseFile {
+        generation_name: &'static str,
+        legacy_stem: &'static str,
+        current_stem: &'static str,
+    },
 
     /// The new main file already exists - this is the case
     /// `LegacyDatabaseFile`'s blanket "rename every file" instruction
     /// must never be given for, since a rename that lands on an
-    /// existing `daycompass.sqlite3*` overwrites it and can destroy
-    /// live data.
+    /// existing current-name file overwrites it and can destroy live
+    /// data.
     #[error(
-        "found a non-empty legacy screenward.sqlite3-wal next to an \
-         existing daycompass.sqlite3; stop the server cleanly, and \
-         never overwrite daycompass.sqlite3* by renaming a legacy \
-         file onto it. If daycompass.sqlite3 was only just created \
-         by renaming the old main file, rename screenward.sqlite3-wal \
-         (and -shm, if present) to match it the same way; if \
-         daycompass.sqlite3 already held live data, move the legacy \
-         files out of the data directory instead"
+        "found a non-empty legacy {legacy_stem}-wal next to an existing \
+         {current_stem}; stop the server cleanly, and never overwrite \
+         {current_stem}* by renaming a legacy file onto it. If \
+         {current_stem} was only just created by renaming the old main \
+         file, rename {legacy_stem}-wal (and -shm, if present) to match \
+         it the same way; if {current_stem} already held live data, \
+         move the legacy files out of the data directory instead"
     )]
-    LegacyWalAlongsideNewFile,
+    LegacyWalAlongsideNewFile {
+        legacy_stem: &'static str,
+        current_stem: &'static str,
+    },
 
     /// Checking for a legacy file failed for a reason other than it not
     /// being there - most likely a permissions problem. Names the path
@@ -151,55 +147,74 @@ pub async fn check_reachable(pool: &SqlitePool) -> Result<(), DbError> {
         .map_err(DbError::Connect)
 }
 
-/// Refuses to start if the data directory shows the Screenward ->
-/// Screenwarden rename was missed or only partly done - or shows a
-/// stray legacy WAL it would be dangerous to advise renaming onto an
-/// already-present new file.
+/// Refuses to start if the data directory shows any past generation's
+/// rename (see [`crate::legacy::GENERATIONS`]) was missed or only
+/// partly done - or shows a stray legacy WAL it would be dangerous to
+/// advise renaming onto an already-present new file.
 ///
-/// Two independent checks, returning one of two errors depending on
-/// whether the new main file already exists - that is what decides
-/// whether "just rename everything" is safe advice to give:
+/// Two independent checks per generation, returning one of two errors
+/// depending on whether the new main file already exists - that is
+/// what decides whether "just rename everything" is safe advice to
+/// give. Checked across every generation before either check moves on,
+/// so an old-enough `-wal` is never shadowed by a fresher generation's
+/// missing main file:
 ///
-///   * A non-empty `screenward.sqlite3-wal` is refused **regardless**
-///     of whether `daycompass.sqlite3` already exists. A WAL file is
-///     only ever read by a connection to the exact main-file name it
-///     was created next to, so a connection to the new name never
-///     looks at the old one's `-wal` at all - any commits still
-///     sitting in it are not stale, they are permanently orphaned. An
-///     empty one (just past a clean checkpoint) has nothing left to
-///     lose, so it does not trip this; otherwise a leftover from a
-///     *completed* rename, long since harmless, would block every
-///     later start forever. This is [`DbError::LegacyWalAlongsideNewFile`]
-///     if the new main file exists already - where a blanket rename
-///     would overwrite it - or the ordinary [`DbError::LegacyDatabaseFile`]
-///     if it does not.
+///   * A non-empty `<legacy stem>-wal` is refused **regardless** of
+///     whether [`DB_FILE_NAME`] already exists. A WAL file is only
+///     ever read by a connection to the exact main-file name it was
+///     created next to, so a connection to the new name never looks at
+///     the old one's `-wal` at all - any commits still sitting in it
+///     are not stale, they are permanently orphaned. An empty one (just
+///     past a clean checkpoint) has nothing left to lose, so it does
+///     not trip this; otherwise a leftover from a *completed* rename,
+///     long since harmless, would block every later start forever.
+///     This is [`DbError::LegacyWalAlongsideNewFile`] if the new main
+///     file exists already (where a blanket rename would overwrite it),
+///     or the ordinary [`DbError::LegacyDatabaseFile`] otherwise.
 ///   * Otherwise, if the new main file is missing, any legacy file at
-///     all - the main one or either auxiliary - means the rename was
-///     never done, or was done only for some of the files:
-///     [`DbError::LegacyDatabaseFile`], since nothing exists yet at the
-///     new name for a rename to clobber.
+///     all - the main one or either auxiliary, from any generation -
+///     means the rename was never done, or was done only for some of
+///     the files: [`DbError::LegacyDatabaseFile`], since nothing exists
+///     yet at the new name for a rename to clobber.
 fn check_for_legacy_db_files(data_dir: &Path) -> Result<(), DbError> {
     let new_main_file_exists = path_exists(&data_dir.join(DB_FILE_NAME))?;
 
-    if wal_is_non_empty(&data_dir.join(LEGACY_WAL_FILE_NAME))? {
-        return Err(if new_main_file_exists {
-            DbError::LegacyWalAlongsideNewFile
-        } else {
-            DbError::LegacyDatabaseFile
-        });
+    for generation in crate::legacy::GENERATIONS {
+        let wal_path = data_dir.join(format!("{}-wal", generation.db_file_name));
+        if wal_is_non_empty(&wal_path)? {
+            return Err(if new_main_file_exists {
+                DbError::LegacyWalAlongsideNewFile {
+                    legacy_stem: generation.db_file_name,
+                    current_stem: DB_FILE_NAME,
+                }
+            } else {
+                DbError::LegacyDatabaseFile {
+                    generation_name: generation.name,
+                    legacy_stem: generation.db_file_name,
+                    current_stem: DB_FILE_NAME,
+                }
+            });
+        }
     }
 
     if new_main_file_exists {
         return Ok(());
     }
 
-    for name in [
-        LEGACY_DB_FILE_NAME,
-        LEGACY_WAL_FILE_NAME,
-        LEGACY_SHM_FILE_NAME,
-    ] {
-        if path_exists(&data_dir.join(name))? {
-            return Err(DbError::LegacyDatabaseFile);
+    for generation in crate::legacy::GENERATIONS {
+        let names = [
+            generation.db_file_name.to_owned(),
+            format!("{}-wal", generation.db_file_name),
+            format!("{}-shm", generation.db_file_name),
+        ];
+        for name in names {
+            if path_exists(&data_dir.join(&name))? {
+                return Err(DbError::LegacyDatabaseFile {
+                    generation_name: generation.name,
+                    legacy_stem: generation.db_file_name,
+                    current_stem: DB_FILE_NAME,
+                });
+            }
         }
     }
 
@@ -718,107 +733,138 @@ mod tests {
         std::fs::remove_dir_all(&data_dir).ok();
     }
 
-    /// Only the legacy filename is present: startup must refuse rather
-    /// than silently create a fresh, empty database under the new name.
-    #[tokio::test]
-    async fn file_target_refuses_a_legacy_only_data_dir() {
+    /// A fresh, uniquely named data directory under the system temp
+    /// dir. Shared by every test below so the generation-parametrized
+    /// ones do not repeat this boilerplate per iteration.
+    fn temp_data_dir(label: &str) -> PathBuf {
         use std::sync::atomic::{AtomicU32, Ordering};
-
         static COUNTER: AtomicU32 = AtomicU32::new(0);
         let unique = COUNTER.fetch_add(1, Ordering::Relaxed);
-        let data_dir = std::env::temp_dir().join(format!(
-            "screenwarden-db-legacy-test-{}-{unique}",
+        std::env::temp_dir().join(format!(
+            "daycompass-db-{label}-test-{}-{unique}",
             std::process::id()
-        ));
-        std::fs::create_dir_all(&data_dir).unwrap();
-        std::fs::write(data_dir.join(LEGACY_DB_FILE_NAME), b"").unwrap();
+        ))
+    }
 
-        let target = DbTarget::File {
-            data_dir: data_dir.clone(),
-        };
-        let result = connect(&target).await;
+    /// Only the legacy filename is present, for every past generation:
+    /// startup must refuse rather than silently create a fresh, empty
+    /// database under the new name.
+    #[tokio::test]
+    async fn file_target_refuses_a_legacy_only_data_dir() {
+        for generation in crate::legacy::GENERATIONS {
+            let data_dir = temp_data_dir("legacy-only");
+            std::fs::create_dir_all(&data_dir).unwrap();
+            std::fs::write(data_dir.join(generation.db_file_name), b"").unwrap();
 
-        assert!(matches!(result, Err(DbError::LegacyDatabaseFile)));
+            let target = DbTarget::File {
+                data_dir: data_dir.clone(),
+            };
+            let result = connect(&target).await;
 
-        std::fs::remove_dir_all(&data_dir).ok();
+            assert!(
+                matches!(
+                    &result,
+                    Err(DbError::LegacyDatabaseFile { generation_name, .. })
+                        if *generation_name == generation.name
+                ),
+                "{}: {result:?}",
+                generation.name
+            );
+
+            std::fs::remove_dir_all(&data_dir).ok();
+        }
     }
 
     /// Both files present (an upgrade already completed once, or a
-    /// deliberate copy): the current filename wins and startup proceeds.
+    /// deliberate copy), for every past generation: the current
+    /// filename wins and startup proceeds.
     #[tokio::test]
     async fn file_target_succeeds_when_both_files_are_present() {
-        use std::sync::atomic::{AtomicU32, Ordering};
+        for generation in crate::legacy::GENERATIONS {
+            let data_dir = temp_data_dir("both");
+            std::fs::create_dir_all(&data_dir).unwrap();
+            std::fs::write(data_dir.join(generation.db_file_name), b"").unwrap();
+            std::fs::write(data_dir.join(DB_FILE_NAME), b"").unwrap();
 
-        static COUNTER: AtomicU32 = AtomicU32::new(0);
-        let unique = COUNTER.fetch_add(1, Ordering::Relaxed);
-        let data_dir = std::env::temp_dir().join(format!(
-            "screenwarden-db-both-test-{}-{unique}",
-            std::process::id()
-        ));
-        std::fs::create_dir_all(&data_dir).unwrap();
-        std::fs::write(data_dir.join(LEGACY_DB_FILE_NAME), b"").unwrap();
-        std::fs::write(data_dir.join(DB_FILE_NAME), b"").unwrap();
+            let target = DbTarget::File {
+                data_dir: data_dir.clone(),
+            };
+            let pool = connect(&target).await.unwrap_or_else(|err| {
+                panic!(
+                    "{}: the current filename must win when both are present: {err}",
+                    generation.name
+                )
+            });
+            pool.close().await;
 
-        let target = DbTarget::File {
-            data_dir: data_dir.clone(),
-        };
-        let pool = connect(&target)
-            .await
-            .expect("the current filename must win when both are present");
-        pool.close().await;
-
-        std::fs::remove_dir_all(&data_dir).ok();
+            std::fs::remove_dir_all(&data_dir).ok();
+        }
     }
 
     /// Only the legacy WAL file is present - the main legacy file was
     /// already removed or renamed, but the rename was not completed -
     /// and the new main file does not exist either: still a refusal,
-    /// not a fresh empty database under the new name.
+    /// not a fresh empty database under the new name. Checked for
+    /// every past generation.
     #[tokio::test]
     async fn file_target_refuses_when_only_a_legacy_wal_exists() {
-        use std::sync::atomic::{AtomicU32, Ordering};
+        for generation in crate::legacy::GENERATIONS {
+            let data_dir = temp_data_dir("legacy-wal");
+            std::fs::create_dir_all(&data_dir).unwrap();
+            std::fs::write(
+                data_dir.join(format!("{}-wal", generation.db_file_name)),
+                b"",
+            )
+            .unwrap();
 
-        static COUNTER: AtomicU32 = AtomicU32::new(0);
-        let unique = COUNTER.fetch_add(1, Ordering::Relaxed);
-        let data_dir = std::env::temp_dir().join(format!(
-            "screenwarden-db-legacy-wal-test-{}-{unique}",
-            std::process::id()
-        ));
-        std::fs::create_dir_all(&data_dir).unwrap();
-        std::fs::write(data_dir.join(LEGACY_WAL_FILE_NAME), b"").unwrap();
+            let target = DbTarget::File {
+                data_dir: data_dir.clone(),
+            };
+            let result = connect(&target).await;
 
-        let target = DbTarget::File {
-            data_dir: data_dir.clone(),
-        };
-        let result = connect(&target).await;
+            assert!(
+                matches!(
+                    &result,
+                    Err(DbError::LegacyDatabaseFile { generation_name, .. })
+                        if *generation_name == generation.name
+                ),
+                "{}: {result:?}",
+                generation.name
+            );
 
-        assert!(matches!(result, Err(DbError::LegacyDatabaseFile)));
-
-        std::fs::remove_dir_all(&data_dir).ok();
+            std::fs::remove_dir_all(&data_dir).ok();
+        }
     }
 
-    /// Same as above, for the `-shm` file.
+    /// Same as above, for the `-shm` file, for every past generation.
     #[tokio::test]
     async fn file_target_refuses_when_only_a_legacy_shm_exists() {
-        use std::sync::atomic::{AtomicU32, Ordering};
+        for generation in crate::legacy::GENERATIONS {
+            let data_dir = temp_data_dir("legacy-shm");
+            std::fs::create_dir_all(&data_dir).unwrap();
+            std::fs::write(
+                data_dir.join(format!("{}-shm", generation.db_file_name)),
+                b"",
+            )
+            .unwrap();
 
-        static COUNTER: AtomicU32 = AtomicU32::new(0);
-        let unique = COUNTER.fetch_add(1, Ordering::Relaxed);
-        let data_dir = std::env::temp_dir().join(format!(
-            "screenwarden-db-legacy-shm-test-{}-{unique}",
-            std::process::id()
-        ));
-        std::fs::create_dir_all(&data_dir).unwrap();
-        std::fs::write(data_dir.join(LEGACY_SHM_FILE_NAME), b"").unwrap();
+            let target = DbTarget::File {
+                data_dir: data_dir.clone(),
+            };
+            let result = connect(&target).await;
 
-        let target = DbTarget::File {
-            data_dir: data_dir.clone(),
-        };
-        let result = connect(&target).await;
+            assert!(
+                matches!(
+                    &result,
+                    Err(DbError::LegacyDatabaseFile { generation_name, .. })
+                        if *generation_name == generation.name
+                ),
+                "{}: {result:?}",
+                generation.name
+            );
 
-        assert!(matches!(result, Err(DbError::LegacyDatabaseFile)));
-
-        std::fs::remove_dir_all(&data_dir).ok();
+            std::fs::remove_dir_all(&data_dir).ok();
+        }
     }
 
     /// A non-empty legacy WAL is refused even when the new main file
@@ -827,29 +873,32 @@ mod tests {
     /// ever associates a `-wal` with the exact main-file name it was
     /// created next to. The dangerous case, so it gets the error that
     /// warns against overwriting rather than the ordinary one that
-    /// says to rename everything.
+    /// says to rename everything. Checked for every past generation.
     #[tokio::test]
     async fn file_target_refuses_a_non_empty_legacy_wal_even_when_the_new_file_exists() {
-        use std::sync::atomic::{AtomicU32, Ordering};
+        for generation in crate::legacy::GENERATIONS {
+            let data_dir = temp_data_dir("stray-wal");
+            std::fs::create_dir_all(&data_dir).unwrap();
+            std::fs::write(data_dir.join(DB_FILE_NAME), b"").unwrap();
+            std::fs::write(
+                data_dir.join(format!("{}-wal", generation.db_file_name)),
+                b"not actually empty",
+            )
+            .unwrap();
 
-        static COUNTER: AtomicU32 = AtomicU32::new(0);
-        let unique = COUNTER.fetch_add(1, Ordering::Relaxed);
-        let data_dir = std::env::temp_dir().join(format!(
-            "screenwarden-db-stray-wal-test-{}-{unique}",
-            std::process::id()
-        ));
-        std::fs::create_dir_all(&data_dir).unwrap();
-        std::fs::write(data_dir.join(DB_FILE_NAME), b"").unwrap();
-        std::fs::write(data_dir.join(LEGACY_WAL_FILE_NAME), b"not actually empty").unwrap();
+            let target = DbTarget::File {
+                data_dir: data_dir.clone(),
+            };
+            let result = connect(&target).await;
 
-        let target = DbTarget::File {
-            data_dir: data_dir.clone(),
-        };
-        let result = connect(&target).await;
+            assert!(
+                matches!(result, Err(DbError::LegacyWalAlongsideNewFile { .. })),
+                "{}: {result:?}",
+                generation.name
+            );
 
-        assert!(matches!(result, Err(DbError::LegacyWalAlongsideNewFile)));
-
-        std::fs::remove_dir_all(&data_dir).ok();
+            std::fs::remove_dir_all(&data_dir).ok();
+        }
     }
 
     /// A non-empty legacy WAL with neither the new main file nor the
@@ -857,88 +906,117 @@ mod tests {
     /// must take the safe-to-rename-everything branch and return
     /// `LegacyDatabaseFile`, not `LegacyWalAlongsideNewFile` - that
     /// error is reserved for when a rename would overwrite an existing
-    /// new file, which is not the case here.
+    /// new file, which is not the case here. Checked for every past
+    /// generation.
     #[tokio::test]
     async fn file_target_refuses_a_non_empty_legacy_wal_when_the_new_file_is_missing() {
-        use std::sync::atomic::{AtomicU32, Ordering};
+        for generation in crate::legacy::GENERATIONS {
+            let data_dir = temp_data_dir("non-empty-wal-no-new-file");
+            std::fs::create_dir_all(&data_dir).unwrap();
+            std::fs::write(
+                data_dir.join(format!("{}-wal", generation.db_file_name)),
+                b"not actually empty",
+            )
+            .unwrap();
 
-        static COUNTER: AtomicU32 = AtomicU32::new(0);
-        let unique = COUNTER.fetch_add(1, Ordering::Relaxed);
-        let data_dir = std::env::temp_dir().join(format!(
-            "screenwarden-db-non-empty-wal-no-new-file-test-{}-{unique}",
-            std::process::id()
-        ));
-        std::fs::create_dir_all(&data_dir).unwrap();
-        std::fs::write(data_dir.join(LEGACY_WAL_FILE_NAME), b"not actually empty").unwrap();
+            let target = DbTarget::File {
+                data_dir: data_dir.clone(),
+            };
+            let result = connect(&target).await;
 
-        let target = DbTarget::File {
-            data_dir: data_dir.clone(),
-        };
-        let result = connect(&target).await;
+            assert!(
+                matches!(
+                    &result,
+                    Err(DbError::LegacyDatabaseFile { generation_name, .. })
+                        if *generation_name == generation.name
+                ),
+                "{}: {result:?}",
+                generation.name
+            );
 
-        assert!(matches!(result, Err(DbError::LegacyDatabaseFile)));
-
-        std::fs::remove_dir_all(&data_dir).ok();
+            std::fs::remove_dir_all(&data_dir).ok();
+        }
     }
 
     /// The flip side of the test above: an *empty* legacy WAL - the
     /// ordinary leftover of a rename that already finished cleanly -
     /// must not block every later start of an otherwise working
-    /// instance forever.
+    /// instance forever. Checked for every past generation.
     #[tokio::test]
     async fn file_target_tolerates_an_empty_legacy_wal_when_the_new_file_exists() {
-        use std::sync::atomic::{AtomicU32, Ordering};
+        for generation in crate::legacy::GENERATIONS {
+            let data_dir = temp_data_dir("empty-stray-wal");
+            std::fs::create_dir_all(&data_dir).unwrap();
+            std::fs::write(data_dir.join(DB_FILE_NAME), b"").unwrap();
+            std::fs::write(
+                data_dir.join(format!("{}-wal", generation.db_file_name)),
+                b"",
+            )
+            .unwrap();
 
-        static COUNTER: AtomicU32 = AtomicU32::new(0);
-        let unique = COUNTER.fetch_add(1, Ordering::Relaxed);
-        let data_dir = std::env::temp_dir().join(format!(
-            "screenwarden-db-empty-stray-wal-test-{}-{unique}",
-            std::process::id()
-        ));
-        std::fs::create_dir_all(&data_dir).unwrap();
-        std::fs::write(data_dir.join(DB_FILE_NAME), b"").unwrap();
-        std::fs::write(data_dir.join(LEGACY_WAL_FILE_NAME), b"").unwrap();
+            let target = DbTarget::File {
+                data_dir: data_dir.clone(),
+            };
+            let pool = connect(&target).await.unwrap_or_else(|err| {
+                panic!(
+                    "{}: an empty legacy WAL must not block startup: {err}",
+                    generation.name
+                )
+            });
+            pool.close().await;
 
-        let target = DbTarget::File {
-            data_dir: data_dir.clone(),
-        };
-        let pool = connect(&target)
-            .await
-            .expect("an empty legacy WAL must not block startup");
-        pool.close().await;
-
-        std::fs::remove_dir_all(&data_dir).ok();
+            std::fs::remove_dir_all(&data_dir).ok();
+        }
     }
 
     /// `LegacyDatabaseFile` - the new main file is missing, so a
     /// blanket rename is safe - names both auxiliary files and tells
     /// the operator to stop the server first, not just to rename
-    /// something while it might still be writing to it.
+    /// something while it might still be writing to it. Checked for
+    /// every past generation.
     #[test]
     fn the_legacy_database_file_message_covers_wal_and_shm_and_stopping_first() {
-        let message = DbError::LegacyDatabaseFile.to_string();
-        assert!(message.contains("-wal"), "{message}");
-        assert!(message.contains("-shm"), "{message}");
-        assert!(message.contains("stop the server"), "{message}");
+        for generation in crate::legacy::GENERATIONS {
+            let message = DbError::LegacyDatabaseFile {
+                generation_name: generation.name,
+                legacy_stem: generation.db_file_name,
+                current_stem: DB_FILE_NAME,
+            }
+            .to_string();
+            assert!(message.contains("-wal"), "{message}");
+            assert!(message.contains("-shm"), "{message}");
+            assert!(message.contains("stop the server"), "{message}");
+            assert!(message.contains(generation.db_file_name), "{message}");
+            assert!(message.contains(DB_FILE_NAME), "{message}");
+        }
     }
 
     /// `LegacyWalAlongsideNewFile` - the new main file already exists -
     /// must never give the same unconditional "rename every file"
     /// instruction as `LegacyDatabaseFile` above: landing a rename on
-    /// an existing `screenwarden.sqlite3*` overwrites it. It must
-    /// instead say explicitly not to overwrite.
+    /// an existing current-name file overwrites it. It must instead say
+    /// explicitly not to overwrite. Checked for every past generation.
     #[test]
     fn the_legacy_wal_alongside_new_file_message_warns_against_overwriting() {
-        let message = DbError::LegacyWalAlongsideNewFile.to_string();
-        assert!(
-            !message.contains("rename every file named screenward.sqlite3*"),
-            "must not give the same unconditional rename-everything \
-             instruction as the main-file-missing case: {message}"
-        );
-        assert!(
-            message.contains("never") && message.contains("overwrite"),
-            "must explicitly warn against overwriting: {message}"
-        );
+        for generation in crate::legacy::GENERATIONS {
+            let message = DbError::LegacyWalAlongsideNewFile {
+                legacy_stem: generation.db_file_name,
+                current_stem: DB_FILE_NAME,
+            }
+            .to_string();
+            assert!(
+                !message.contains(&format!(
+                    "rename every file named {}*",
+                    generation.db_file_name
+                )),
+                "must not give the same unconditional rename-everything \
+                 instruction as the main-file-missing case: {message}"
+            );
+            assert!(
+                message.contains("never") && message.contains("overwrite"),
+                "must explicitly warn against overwriting: {message}"
+            );
+        }
     }
 
     /// A permissions problem reading a legacy file must be reported,
@@ -961,20 +1039,24 @@ mod tests {
         use std::os::unix::fs::PermissionsExt;
         use std::sync::atomic::{AtomicU32, Ordering};
 
+        // Not generation-specific: any generation's WAL name hits the
+        // same I/O-error path, so the first generation stands in for
+        // all of them here.
+        let legacy_wal_name = format!("{}-wal", crate::legacy::GENERATIONS[0].db_file_name);
+
         static COUNTER: AtomicU32 = AtomicU32::new(0);
         let unique = COUNTER.fetch_add(1, Ordering::Relaxed);
         let data_dir = std::env::temp_dir().join(format!(
-            "screenwarden-db-permission-test-{}-{unique}",
+            "daycompass-db-permission-test-{}-{unique}",
             std::process::id()
         ));
         std::fs::create_dir_all(&data_dir).unwrap();
-        std::fs::write(data_dir.join(LEGACY_WAL_FILE_NAME), b"not actually empty").unwrap();
+        std::fs::write(data_dir.join(&legacy_wal_name), b"not actually empty").unwrap();
         // No read, write or execute for anyone: traversing into the
         // directory to stat a file inside it must fail.
         std::fs::set_permissions(&data_dir, std::fs::Permissions::from_mode(0o000)).unwrap();
 
-        let permissions_are_enforced =
-            std::fs::metadata(data_dir.join(LEGACY_WAL_FILE_NAME)).is_err();
+        let permissions_are_enforced = std::fs::metadata(data_dir.join(&legacy_wal_name)).is_err();
 
         if !permissions_are_enforced {
             std::fs::set_permissions(&data_dir, std::fs::Permissions::from_mode(0o700)).unwrap();

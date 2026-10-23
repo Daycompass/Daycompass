@@ -317,54 +317,75 @@ impl VarSource for NoEnv {
     }
 }
 
-/// The prefix every variable used before the Screenward -> Screenwarden
-/// rename. Checked as this exact prefix, trailing underscore included:
-/// `SCREENWARDEN_` also starts with `SCREENWARD`, but not with
-/// `SCREENWARD_` (its twelfth character is `E`, not `_`), so a renamed
-/// variable never trips this check.
-const LEGACY_PREFIX: &str = "SCREENWARD_";
-
-/// Finds the first name starting with [`LEGACY_PREFIX`], if any. Pure and
-/// unit-testable: takes an iterator of names rather than reading the
-/// process environment itself.
-fn find_legacy_var(names: impl Iterator<Item = String>) -> Option<String> {
-    names
-        .into_iter()
-        .find(|name| name.starts_with(LEGACY_PREFIX))
+/// Finds the first name starting with any past generation's env prefix
+/// (see [`crate::legacy::GENERATIONS`]), if any, together with which
+/// generation it matched. Pure and unit-testable: takes an iterator of
+/// names rather than reading the process environment itself.
+///
+/// Walks `names` once, checking every generation against each name in
+/// turn, so the result is still "the first *name*, in environment
+/// order, that matches any generation" - not "the first generation
+/// that matches any name". That ordering is what the non-UTF-8 tests
+/// below depend on: if a later name were preferred over an earlier one
+/// just because it happened to match a different generation, a legacy
+/// variable sitting after a malformed one could be skipped for the
+/// wrong reason.
+fn find_legacy_var(
+    names: impl Iterator<Item = String>,
+) -> Option<(String, &'static crate::legacy::Generation)> {
+    for name in names {
+        if let Some(generation) = crate::legacy::GENERATIONS
+            .iter()
+            .find(|generation| name.starts_with(generation.env_prefix))
+        {
+            return Some((name, generation));
+        }
+    }
+    None
 }
 
-/// A legacy `SCREENWARD_*` variable is set in the process environment.
+/// A legacy variable, from any past generation, is set in the process
+/// environment.
 ///
 /// A separate type from [`ConfigError`], whose variants all hold a
 /// `&'static str` naming one of this module's own constants - a property
 /// worth keeping, since it means no `ConfigError` ever carries a value
 /// read from the environment. This error does, so it gets its own type.
 #[derive(Debug)]
-pub struct LegacyEnvVar(String);
+pub struct LegacyEnvVar {
+    name: String,
+    generation: &'static crate::legacy::Generation,
+}
 
 impl fmt::Display for LegacyEnvVar {
     /// Prints the variable name only if it looks like an environment
     /// variable name (`[A-Z0-9_]`); otherwise prints only the prefix, so
     /// nothing arbitrary from the environment reaches stderr.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let looks_like_a_var_name = !self.0.is_empty()
+        let looks_like_a_var_name = !self.name.is_empty()
             && self
-                .0
+                .name
                 .bytes()
                 .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'_');
         if looks_like_a_var_name {
             write!(
                 f,
-                "{} is a legacy Screenward variable; Screenward was renamed to \
-                 Screenwarden, rename it to {}",
-                self.0,
-                self.0.replacen(LEGACY_PREFIX, "SCREENWARDEN_", 1)
+                "{} is a legacy {} variable; rename it to {}",
+                self.name,
+                self.generation.name,
+                self.name.replacen(
+                    self.generation.env_prefix,
+                    crate::legacy::CURRENT_ENV_PREFIX,
+                    1
+                )
             )
         } else {
             write!(
                 f,
-                "a legacy {LEGACY_PREFIX}* variable is set; Screenward was renamed \
-                 to Screenwarden, rename it to SCREENWARDEN_*"
+                "a legacy {}* variable is set ({}); rename it to {}*",
+                self.generation.env_prefix,
+                self.generation.name,
+                crate::legacy::CURRENT_ENV_PREFIX
             )
         }
     }
@@ -372,24 +393,26 @@ impl fmt::Display for LegacyEnvVar {
 
 impl std::error::Error for LegacyEnvVar {}
 
-/// Refuses to continue if any `SCREENWARD_*` variable is set in the real
-/// process environment. Without this, a missed rename falls back to
-/// every default silently: loopback bind, no trusted proxies, the
+/// Refuses to continue if any past generation's env var prefix (see
+/// [`crate::legacy::GENERATIONS`]) is set in the real process
+/// environment. Without this, a missed rename falls back to every
+/// default silently: loopback bind, no trusted proxies, the
 /// compiled-in rate limits - exactly the configuration an operator who
-/// set `SCREENWARD_PUBLIC_URL` (for example) believed they had changed.
+/// set, say, `SCREENWARD_PUBLIC_URL` or `SCREENWARDEN_PUBLIC_URL`
+/// believed they had changed.
 ///
 /// Reads `vars_os`, not `vars`: the latter panics if *any* variable in
 /// the whole environment - not just one this function cares about -
 /// has a name or value that is not valid Unicode, which would turn an
 /// unrelated variable into a startup crash instead of this check's
 /// ordinary refusal. A name that is not valid UTF-8 cannot start with
-/// [`LEGACY_PREFIX`] (an ASCII string) anyway, so dropping such names
+/// any generation's (ASCII) env prefix anyway, so dropping such names
 /// loses nothing; values are never inspected, so they are never even
 /// looked at.
 pub fn check_for_legacy_env() -> Result<(), LegacyEnvVar> {
     let names = std::env::vars_os().filter_map(|(name, _value)| name.into_string().ok());
     match find_legacy_var(names) {
-        Some(name) => Err(LegacyEnvVar(name)),
+        Some((name, generation)) => Err(LegacyEnvVar { name, generation }),
         None => Ok(()),
     }
 }
@@ -933,49 +956,83 @@ mod tests {
     use super::*;
     use std::collections::HashMap;
 
+    /// Every generation's prefix must be independently detected, each
+    /// against a name actually built from that generation's own
+    /// `env_prefix` rather than a literal - so a typo in the test data
+    /// cannot silently drift from what `crate::legacy::GENERATIONS`
+    /// actually holds.
     #[test]
-    fn find_legacy_var_finds_a_legacy_prefixed_name() {
-        let names = vec!["PATH".to_owned(), "SCREENWARD_BIND_ADDR".to_owned()];
-        assert_eq!(
-            find_legacy_var(names.into_iter()),
-            Some("SCREENWARD_BIND_ADDR".to_owned())
-        );
+    fn find_legacy_var_finds_every_generations_prefix() {
+        for generation in crate::legacy::GENERATIONS {
+            let legacy_name = format!("{}BIND_ADDR", generation.env_prefix);
+            let names = vec!["PATH".to_owned(), legacy_name.clone()];
+            let (found_name, found_generation) = find_legacy_var(names.into_iter())
+                .unwrap_or_else(|| panic!("{} must be detected as legacy", generation.name));
+            assert_eq!(found_name, legacy_name);
+            assert_eq!(found_generation.name, generation.name);
+        }
     }
 
     #[test]
     fn find_legacy_var_finds_nothing_when_nothing_matches() {
-        let names = vec!["PATH".to_owned(), "SCREENWARDEN_BIND_ADDR".to_owned()];
-        assert_eq!(find_legacy_var(names.into_iter()), None);
+        let names = vec!["PATH".to_owned(), "DAYCOMPASS_BIND_ADDR".to_owned()];
+        assert!(find_legacy_var(names.into_iter()).is_none());
     }
 
-    /// The one subtlety named in the module doc: `SCREENWARDEN_*` starts
-    /// with `SCREENWARD`, but not with the full `SCREENWARD_` prefix
-    /// (trailing underscore included), so it must not trip the check.
+    /// The subtlety named in `crate::legacy`'s own tests: one
+    /// generation's prefix starting with another's letters, but not
+    /// with the other's full prefix (trailing underscore included),
+    /// must not trip the check. `SCREENWARDEN_` is the concrete case -
+    /// it starts with `SCREENWARD` but not with `SCREENWARD_`, since
+    /// its twelfth character is `E`, not `_` - checked here against
+    /// every *other* generation's prefix, not just that one pair, so a
+    /// future generation added to the list is covered automatically.
     #[test]
-    fn find_legacy_var_does_not_match_the_renamed_prefix() {
-        let names = vec![
-            "SCREENWARDEN_BIND_ADDR".to_owned(),
-            "SCREENWARDEN_PUBLIC_URL".to_owned(),
-        ];
-        assert_eq!(find_legacy_var(names.into_iter()), None);
+    fn find_legacy_var_does_not_cross_match_generations() {
+        for generation in crate::legacy::GENERATIONS {
+            let names = vec![
+                format!("{}BIND_ADDR", generation.env_prefix),
+                format!("{}PUBLIC_URL", generation.env_prefix),
+            ];
+            let (_, found) = find_legacy_var(names.into_iter())
+                .expect("the generation's own prefix must still match");
+            assert_eq!(
+                found.name, generation.name,
+                "must match its own generation, not a different one"
+            );
+        }
     }
 
     #[test]
     fn legacy_env_var_display_names_a_well_formed_variable() {
-        let err = LegacyEnvVar("SCREENWARD_BIND_ADDR".to_owned());
-        let message = err.to_string();
-        assert!(message.contains("SCREENWARD_BIND_ADDR"));
-        assert!(message.contains("SCREENWARDEN_BIND_ADDR"));
+        for generation in crate::legacy::GENERATIONS {
+            let name = format!("{}BIND_ADDR", generation.env_prefix);
+            let err = LegacyEnvVar {
+                name: name.clone(),
+                generation,
+            };
+            let message = err.to_string();
+            assert!(message.contains(&name), "{message}");
+            assert!(message.contains(generation.name), "{message}");
+            assert!(
+                message.contains(&format!("{}BIND_ADDR", crate::legacy::CURRENT_ENV_PREFIX)),
+                "{message}"
+            );
+        }
     }
 
     /// A variable name containing anything outside `[A-Z0-9_]` cannot
     /// reach stderr, however it got into `std::env::vars()`.
     #[test]
     fn legacy_env_var_display_hides_a_malformed_name() {
-        let err = LegacyEnvVar("SCREENWARD_\u{1b}[31mnot really a name".to_owned());
+        let generation = &crate::legacy::GENERATIONS[0];
+        let err = LegacyEnvVar {
+            name: format!("{}\u{1b}[31mnot really a name", generation.env_prefix),
+            generation,
+        };
         let message = err.to_string();
         assert!(!message.contains("not really a name"));
-        assert!(message.contains(LEGACY_PREFIX));
+        assert!(message.contains(generation.env_prefix));
     }
 
     /// In-memory stand-in for the process environment, so tests never
