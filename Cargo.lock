@@ -291,6 +291,34 @@ dependencies = [
 ]
 
 [[package]]
+name = "daycompass-proto"
+version = "0.0.0"
+
+[[package]]
+name = "daycompass-server"
+version = "0.0.0"
+dependencies = [
+ "argon2",
+ "axum",
+ "base64 0.23.1",
+ "getrandom",
+ "ipnet",
+ "serde",
+ "serde_json",
+ "sha2 0.11.1",
+ "sqlx",
+ "subtle",
+ "thiserror",
+ "tokio",
+ "tower",
+ "tower-http",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+ "zeroize",
+]
+
+[[package]]
 name = "digest"
 version = "0.10.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1057,34 +1085,6 @@ name = "scopeguard"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
-
-[[package]]
-name = "screenwarden-proto"
-version = "0.0.0"
-
-[[package]]
-name = "screenwarden-server"
-version = "0.0.0"
-dependencies = [
- "argon2",
- "axum",
- "base64 0.23.1",
- "getrandom",
- "ipnet",
- "serde",
- "serde_json",
- "sha2 0.11.1",
- "sqlx",
- "subtle",
- "thiserror",
- "tokio",
- "tower",
- "tower-http",
- "tracing",
- "tracing-subscriber",
- "uuid",
- "zeroize",
-]
 
 [[package]]
 name = "serde"

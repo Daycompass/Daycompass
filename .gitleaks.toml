@@ -1,4 +1,4 @@
-title = "Screenwarden gitleaks config"
+title = "Daycompass gitleaks config"
 
 [extend]
 # Start from gitleaks' default ruleset and add our own rule on top.
@@ -22,6 +22,23 @@ regex = '''sw[a-z]_[A-Za-z0-9_-]{43}'''
 # prefix letter not in the list - exactly the bug that widening the
 # regex from sw[ds]_ was meant to avoid. The regex is specific enough
 # on its own.
+#
+# `.githooks/tests/gitleaks-rules.sh` pins this behaviour.
+#
+# Kept after the Screenwarden -> Daycompass rename even though no token
+# can carry this prefix going forward: it still catches a leftover
+# screenwarden-era token in history, a screenshot, or a backup.
+
+[[rules]]
+id = "daycompass-app-token"
+description = "Daycompass application token (dc<letter>_ prefixed)"
+# The current generation of the same scheme: dcs_ (session), dcb_
+# (bootstrap/setup), dcd_ (device), dci_ (invite), and whatever comes
+# next. Same shape as "screenwarden-app-token" above - see that rule's
+# comments for why the prefix letter is unanchored and why there are no
+# `keywords`.
+regex = '''dc[a-z]_[A-Za-z0-9_-]{43}'''
+# No `keywords`, same reasoning as "screenwarden-app-token" above.
 #
 # `.githooks/tests/gitleaks-rules.sh` pins this behaviour.
 
