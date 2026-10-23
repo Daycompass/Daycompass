@@ -63,6 +63,18 @@ Possible mitigations, not implemented:
   exist in this codebase today and would itself be a new design
   decision (see "No telemetry, no outgoing requests" above).
 
+`account_log` rows are deleted by `ON DELETE CASCADE` when the account
+is deleted (`DELETE /api/v1/users/{id}`, migration
+`0004_invites_account_log.sql`), so an admin who wants to remove the
+`password_reset_by_admin` entry can do so by deleting the account
+afterwards, together with all its other data. This is intended
+deletion behavior, not a bug - deleting an account deletes the
+account's log, which is deletion of the account, not editing of the
+log. Consequently the account log is an informational account log,
+not a tamper-proof audit trail. A real audit trail would need a
+table without that cascade (e.g. one keyed by a surviving id, or none
+at all) and is a separate design decision, not assumed here.
+
 ## Rename: Screenward -> Screenwarden
 
 The project was renamed from Screenward to Screenwarden. Two startup
@@ -95,6 +107,18 @@ own env var:
 - `SCREENWARDEN_RATE_LIMIT_INVITE_GLOBAL`: 600/60 - instance-wide
 - `SCREENWARDEN_RATE_LIMIT_INGEST_DEVICE`: 30/60 - per device
 
+"Per client address" (`src/clientip.rs`) means: the TCP peer address,
+unless that peer is a configured trusted proxy
+(`SCREENWARDEN_TRUSTED_PROXIES`, empty by default), in which case
+`X-Forwarded-For` is read right to left, skipping trusted hops, to
+find the first untrusted address - otherwise the header is ignored
+outright and a client cannot choose its own address. The resulting
+address is then normalized into a `ClientKey`: an IPv4 address is
+keyed per address, an IPv6 address is keyed per `/64`, because a
+single residential or hosted IPv6 assignment is routinely a whole
+`/64` or larger - keying per address would let one client walk
+through billions of addresses and never hit a limit.
+
 Not itself a window, but related: `SCREENWARDEN_RATE_LIMIT_MAX_ENTRIES`
 bounds each of the per-key limiters above separately (login/IP,
 login/username, setup/IP, pw-change, pair/IP, ingest/device,
@@ -104,8 +128,12 @@ limiters (`RATE_LIMIT_PAIR_GLOBAL`, `RATE_LIMIT_INVITE_GLOBAL`) use a
 single shared bucket and are unaffected by this setting. When a
 bounded limiter is full: expired windows are reclaimed first; if that
 still is not enough, the oldest-started entry is evicted and the new
-key is admitted. A full map is never refused, so it cannot become a
-lockout (`src/ratelimit.rs`).
+key is admitted. Because eviction removes the oldest key's window
+outright rather than merely making room, an attacker who creates
+enough distinct keys (e.g. invented usernames, or addresses from a
+large-enough address space) can evict another key's entry and thereby
+reset its counter back to a fresh window. A full map is never
+refused, so it cannot become a lockout (`src/ratelimit.rs`).
 
 ## Roadmap (the maintainer flips the status, you do not)
 
