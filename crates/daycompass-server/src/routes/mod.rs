@@ -629,6 +629,21 @@ pub const INVENTORY: &[RouteSpec] = &[
             RateLimit::new(Bucket::IngestDevice, LimitKey::Device),
         ],
     },
+    // The owner's own events, inside a bounded time window. The
+    // opposite shape from the write above on purpose: session auth,
+    // `Origin`-checked, no CSRF because `GET` is a safe method. No
+    // admin variant exists, and none is planned - see
+    // `events::query` and `tests/no_event_reads.rs`.
+    RouteSpec {
+        method: "GET",
+        path: "/api/v1/events",
+        access: Access::Session,
+        origin: OriginRule::Checked,
+        csrf: false,
+        sets_session_cookie: false,
+        max_body_bytes: None,
+        rate_limits: &[],
+    },
     // Lets a client detect clock skew, which is what makes the
     // validator's future-dating rules diagnosable from the outside.
     RouteSpec {
@@ -739,6 +754,7 @@ pub fn router(state: AppState) -> Router {
     table.add("POST", "/api/v1/pairing-codes", pairing::create_code);
     table.add("POST", "/api/v1/pair", pairing::pair_device);
     table.add("POST", "/api/v1/events", events::ingest);
+    table.add("GET", "/api/v1/events", events::list_own);
     table.add("GET", "/api/v1/device/me", events::device_me);
     table.add("GET", "/api/v1/devices", devices::list_own);
     table.add("PATCH", "/api/v1/devices/{id}", devices::rename_own);
