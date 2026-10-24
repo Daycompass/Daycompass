@@ -1,28 +1,43 @@
-//! The rule that M2 has no way to read an event back.
+//! Who may read an event back, and through which one route.
 //!
-//! Not an endpoint, not a service function, not a join. An admin
-//! manages accounts and devices and must never reach a single event;
-//! an owner cannot read theirs back either, because the read path does
-//! not exist yet at all. Statistics and category rules are M3.
+//! M2 shipped with no read path for anyone - not an endpoint, not a
+//! service function, not a join. M3 adds exactly one:
+//! `GET /api/v1/events`, session-scoped to the caller's own account.
+//! This file's rule is narrower now than "nobody, ever" - it is
+//! *nobody else, and no other path* - but it is still a rule this file
+//! checks against the sources rather than trusting it to be
+//! remembered.
 //!
-//! Three checks, deliberately overlapping, because each one catches a
+//! An admin still reaches zero event data, full stop: there is no
+//! admin variant of the route and no id parameter anywhere that could
+//! point it at another account. [`query::list_own`] only ever takes
+//! the caller's own id, resolved from the session the access layer
+//! already authenticated.
+//!
+//! Four checks, deliberately overlapping, because each one catches a
 //! different way the rule could be broken:
 //!
-//!   1. The route inventory has exactly one route that touches events,
-//!      and it is the write.
+//!   1. The route inventory has exactly two routes that touch events:
+//!      the write, and the owner's own read.
 //!   2. No source file outside `events/store.rs` mentions the `events`
-//!      table in SQL.
-//!   3. The responses that an admin and an owner actually receive have
-//!      exactly the fields they are supposed to, and no more.
+//!      table in SQL, and that one file's read is provably scoped by
+//!      the caller's own `user_id` rather than a bare, unscoped
+//!      `SELECT`.
+//!   3. The responses an admin and an owner actually receive from
+//!      *other* routes have exactly the fields they are supposed to,
+//!      and no more.
+//!   4. The owner's route returns only the caller's own events, inside
+//!      the requested window, to a session - and nothing at all to an
+//!      anonymous caller or a device's bearer token.
 //!
-//! # A note for M3 and M4
+//! # A note for M4
 //!
-//! The source scan in check 2 **is expected to be edited** when M3
-//! adds the first read query, and again when M4 adds retention
-//! deletes. That is the point of it: extending the allowed list is a
-//! line in a diff that a reviewer sees and has to agree with. Deleting
-//! the test, or widening it to "anything under src/", is not the same
-//! thing and is not what it is for.
+//! The source scan in check 2 **is expected to be edited again** when
+//! M4 adds retention deletes. That is the point of it: extending the
+//! allowed list or the allowed verbs is a line in a diff that a
+//! reviewer sees and has to agree with. Deleting the test, or widening
+//! it to "anything under src/", is not the same thing and is not what
+//! it is for.
 
 mod common;
 
@@ -31,16 +46,17 @@ use std::path::{Path, PathBuf};
 use axum::http::StatusCode;
 
 use common::{TestApp, TestRequest, GOOD_ORIGIN};
-use daycompass_server::routes::INVENTORY;
+use daycompass_server::routes::{Access, INVENTORY};
 
-/// The one route allowed to touch events, and the direction it goes.
-const THE_ONLY_EVENT_ROUTE: (&str, &str) = ("POST", "/api/v1/events");
+/// The two routes allowed to touch events, and the direction each
+/// goes.
+const EVENT_ROUTES: &[(&str, &str)] = &[("POST", "/api/v1/events"), ("GET", "/api/v1/events")];
 
 /// Files permitted to name the `events` table in SQL.
 ///
 /// Extend this deliberately, with a reviewer, when a milestone adds a
-/// legitimate reason - M3's statistics queries, M4's retention
-/// deletes. Do not widen the scan instead.
+/// legitimate reason - M4's retention deletes. Do not widen the scan
+/// instead.
 const FILES_ALLOWED_TO_QUERY_EVENTS: &[&str] = &["events/store.rs"];
 
 /// SQL shapes that read, write or delete a named table.
@@ -58,26 +74,38 @@ const SQL_VERBS: &[&str] = &[
     "table events",
 ];
 
-/// The inventory may contain exactly one route that touches events,
-/// and it must be the write.
+/// The inventory may contain exactly the write and the owner's own
+/// read, and the read must be session-scoped - never admin, never a
+/// device's bearer token.
 #[test]
-fn the_inventory_has_no_event_read_route() {
-    let touching: Vec<(&str, &str)> = INVENTORY
+fn the_inventory_has_exactly_the_write_and_the_owner_read() {
+    let mut touching: Vec<(&str, &str)> = INVENTORY
         .iter()
         .filter(|spec| spec.path.contains("event"))
         .map(|spec| (spec.method, spec.path))
         .collect();
+    touching.sort_unstable();
 
+    let mut expected = EVENT_ROUTES.to_vec();
+    expected.sort_unstable();
     assert_eq!(
-        touching,
-        vec![THE_ONLY_EVENT_ROUTE],
-        "a route touching events appeared; M2 has one, and it is the write"
+        touching, expected,
+        "a route touching events appeared outside the write and the owner's own read"
     );
 
-    // And nothing may read events under another name. Any safe method
-    // on a path that is not the write is a read by definition.
+    let read = daycompass_server::routes::spec_for("GET", "/api/v1/events")
+        .expect("the owner's read must be in the table");
+    assert_eq!(
+        read.access,
+        Access::Session,
+        "the owner's read must be session-scoped, never admin and never a device"
+    );
+
+    // And nothing may read events under another name. Any route on a
+    // path that is neither of the two above is a read by definition
+    // if it even looks like one.
     for spec in INVENTORY {
-        if (spec.method, spec.path) == THE_ONLY_EVENT_ROUTE {
+        if EVENT_ROUTES.contains(&(spec.method, spec.path)) {
             continue;
         }
         assert!(
@@ -139,24 +167,37 @@ fn no_source_file_outside_the_ingest_store_queries_events() {
     );
 }
 
-/// And the allowed file really does contain the write, so the scan is
-/// not passing because the needle is wrong.
+/// The allowed file really does contain the write and the read, so
+/// the scan is not passing because its needles are wrong - and the
+/// read really is scoped by the caller's own `user_id`, not a bare
+/// `SELECT` that would trust something else to filter it.
 #[test]
-fn the_scan_finds_the_one_statement_that_is_allowed() {
+fn the_scan_finds_the_write_and_the_owner_scoped_read() {
     let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     let store = src.join("events").join("store.rs");
-    let text = std::fs::read_to_string(&store).expect("the ingest store must exist");
+    let text = std::fs::read_to_string(&store).expect("the events store must exist");
     let normalized = normalize(&text);
 
     assert!(
         normalized.contains("into events"),
         "the ingest insert must be here, or the scan's needles are wrong"
     );
-    // The write is an insert and nothing else.
-    for verb in ["from events", "join events", "update events"] {
+    assert!(
+        normalized.contains("from events") && normalized.contains("join devices"),
+        "the owner's read must be here, joined against devices, or the scan's needles are wrong"
+    );
+    assert!(
+        normalized.contains("where d.user_id ="),
+        "the read must scope by the caller's own user id in its WHERE clause, \
+         not merely by an id a caller could supply"
+    );
+
+    // Still nothing may update or delete an event. M4 adds retention
+    // deletes, deliberately, with its own review of this test.
+    for verb in ["update events", "delete from events"] {
         assert!(
             !normalized.contains(verb),
-            "even the ingest store may not {verb}"
+            "even the owner's read may not {verb}"
         );
     }
 }
@@ -341,9 +382,10 @@ async fn the_admin_device_listing_carries_metadata_and_nothing_else() {
     }
 }
 
-/// The same for the owner's own listing. An owner may see their
-/// devices; M2 gives them no way to read back what those devices
-/// reported.
+/// The same for the owner's own device listing. An owner may see
+/// their devices; `GET /api/v1/devices` itself still carries no event
+/// data - that is the one job of the dedicated `GET /api/v1/events`
+/// route below, and this route is not it.
 #[tokio::test]
 async fn the_owners_device_listing_carries_no_event_data_either() {
     let app = TestApp::new().await;
@@ -399,17 +441,16 @@ async fn the_owners_device_listing_carries_no_event_data_either() {
     assert!(!listing.body.to_string().contains("org.example.secretgame"));
 }
 
-/// No `GET` anywhere returns an event, to anybody.
+/// No `GET` other than the owner's own events route ever returns an
+/// event, to anybody.
 ///
 /// The property asserted is "never 2xx, and no event data in the
-/// body", not a particular status code. `GET /api/v1/events` answers
-/// 401 rather than 405, because the device layer is attached to the
-/// whole method router and runs before the method mismatch is turned
-/// into a response - which is fine: it serves nothing either way.
-/// Pinning 404/405 would have been pinning an implementation detail
-/// of how axum orders those two.
+/// body", not a particular status code. `GET /api/v1/events` itself
+/// is excluded from this sweep and tested on its own below, with its
+/// query string, where it is supposed to answer with the caller's own
+/// events; every other path here must still refuse to.
 #[tokio::test]
-async fn no_get_anywhere_returns_an_event() {
+async fn no_get_other_than_the_owners_events_route_returns_an_event() {
     let app = TestApp::new().await;
     let (_credentials, admin) = app.provisioned_admin().await;
     let device = app.pair_device(&admin, "laptop", "linux").await;
@@ -443,15 +484,15 @@ async fn no_get_anywhere_returns_an_event() {
         "private.example",
     ];
 
-    // Every path in the inventory, plus the ones a reader might
-    // reasonably expect to exist.
+    // Every path in the inventory except the owner's own events
+    // route, plus the ones a reader might reasonably expect to exist.
     let mut paths: Vec<String> = INVENTORY
         .iter()
+        .filter(|spec| spec.path != "/api/v1/events")
         .map(|spec| spec.path.replace("{id}", &device.id))
         .collect();
     paths.extend(
         [
-            "/api/v1/events",
             "/api/v1/stats",
             "/api/v1/devices/events",
             "/api/v1/admin/events",
@@ -486,4 +527,111 @@ async fn no_get_anywhere_returns_an_event() {
             }
         }
     }
+}
+
+/// `GET /api/v1/events` returns only the caller's own events, inside
+/// the requested window - never another account's, even an admin's
+/// own session querying it directly.
+///
+/// This is the regression the rule in this file exists to catch now:
+/// an admin manages `bob`'s account and devices, but their own
+/// session is still a different `user_id`, and the route takes no
+/// parameter that could point it anywhere else.
+#[tokio::test]
+async fn the_owner_route_returns_only_the_callers_own_events_in_window() {
+    let app = TestApp::new().await;
+    let (_credentials, admin) = app.provisioned_admin().await;
+    let (_bob_id, bob_credentials) = app.create_account(&admin, "bob", "user").await;
+    let bob = app.log_in(&bob_credentials).await;
+
+    let admin_device = app.pair_device(&admin, "admins-laptop", "linux").await;
+    let bobs_device = app.pair_device(&bob, "bobs-laptop", "android").await;
+
+    let me = app
+        .send(TestRequest::get("/api/v1/device/me").authenticated_as_device(&admin_device))
+        .await;
+    let now = me.body["server_time"].as_i64().unwrap();
+
+    for (device, domain) in [
+        (&admin_device, "admin.example"),
+        (&bobs_device, "private.example"),
+    ] {
+        let ingested = app
+            .send(
+                TestRequest::post("/api/v1/events")
+                    .authenticated_as_device(device)
+                    .json(serde_json::json!({
+                        "events": [{
+                            "event_id": "0123456789abcdef0123456789abcdef",
+                            "start_ts": now - 600,
+                            "duration_secs": 300,
+                            "app_id": "org.example.secretgame",
+                            "domain": domain,
+                        }],
+                    })),
+            )
+            .await;
+        assert_eq!(ingested.body["accepted"], 1, "{:?}", ingested.body);
+    }
+
+    let path = format!(
+        "/api/v1/events?start_ts={}&end_ts={}",
+        now - 3600,
+        now + 3600
+    );
+
+    let as_bob = app
+        .send(
+            TestRequest::get(&path)
+                .origin(GOOD_ORIGIN)
+                .authenticated(&bob),
+        )
+        .await;
+    assert_eq!(as_bob.status, StatusCode::OK, "{:?}", as_bob.body);
+    let bobs_events = as_bob.body["events"].as_array().expect("an array");
+    assert_eq!(bobs_events.len(), 1);
+    assert_eq!(bobs_events[0]["domain"], "private.example");
+    assert_eq!(as_bob.body["truncated"], false);
+
+    let as_admin = app
+        .send(
+            TestRequest::get(&path)
+                .origin(GOOD_ORIGIN)
+                .authenticated(&admin),
+        )
+        .await;
+    assert_eq!(as_admin.status, StatusCode::OK, "{:?}", as_admin.body);
+    let admins_events = as_admin.body["events"].as_array().expect("an array");
+    assert_eq!(admins_events.len(), 1);
+    assert_eq!(admins_events[0]["domain"], "admin.example");
+
+    // The admin manages bob's account and devices, but their own
+    // session must never surface bob's event through this route.
+    assert!(!as_admin.body.to_string().contains("private.example"));
+}
+
+/// `GET /api/v1/events` refuses an anonymous caller and a device's
+/// bearer token alike - both answer `401`, and neither sees a body
+/// with an `events` array in it.
+///
+/// Pinning `401` rather than a generic "never 2xx" here is deliberate:
+/// unlike the sweep above, this route's own contract is being tested,
+/// not merely that it keeps quiet.
+#[tokio::test]
+async fn the_owner_route_refuses_anonymous_and_device_callers() {
+    let app = TestApp::new().await;
+    let (_credentials, admin) = app.provisioned_admin().await;
+    let device = app.pair_device(&admin, "laptop", "linux").await;
+
+    let path = "/api/v1/events?start_ts=0&end_ts=100";
+
+    let anonymous = app.send(TestRequest::get(path).origin(GOOD_ORIGIN)).await;
+    assert_eq!(anonymous.status, StatusCode::UNAUTHORIZED);
+    assert!(anonymous.body.get("events").is_none());
+
+    let as_device = app
+        .send(TestRequest::get(path).authenticated_as_device(&device))
+        .await;
+    assert_eq!(as_device.status, StatusCode::UNAUTHORIZED);
+    assert!(as_device.body.get("events").is_none());
 }
