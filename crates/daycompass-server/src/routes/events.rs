@@ -43,6 +43,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::auth::device::DeviceContext;
 use crate::auth::time::UnixTime;
+use crate::categories::resolve::Resolver;
+use crate::categories::service as categories;
 use crate::devices::platform::Platform;
 use crate::error::{ApiError, ErrorKind};
 use crate::events::ingest::{self, MAX_BATCH_EVENTS};
@@ -228,8 +230,10 @@ pub struct EventsQueryParams {
 ///
 /// No `id`: the internal primary key is not meaningful on the wire,
 /// and `event_id` - the one the client itself chose - already
-/// identifies the row together with `device_id`. No category either;
-/// events carry none, by design.
+/// identifies the row together with `device_id`. `category` is never
+/// stored on the row itself - it is resolved from the caller's own
+/// category rules at read time, here, and omitted when nothing
+/// matches.
 #[derive(Serialize)]
 struct EventView {
     device_id: String,
@@ -241,10 +245,18 @@ struct EventView {
     label: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     domain: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    category: Option<String>,
 }
 
-impl From<&QueriedEvent> for EventView {
-    fn from(event: &QueriedEvent) -> Self {
+impl EventView {
+    /// Builds the view, resolving `category` from `resolver` rather
+    /// than from anything stored on `event`.
+    fn from_event(event: &QueriedEvent, resolver: &Resolver<'_>) -> Self {
+        let category = resolver
+            .category_for(&event.app_id, event.domain.as_deref())
+            .map(str::to_owned);
+
         Self {
             device_id: event.device_id.clone(),
             event_id: event.event_id.clone(),
@@ -253,6 +265,7 @@ impl From<&QueriedEvent> for EventView {
             app_id: event.app_id.clone(),
             label: event.label.clone(),
             domain: event.domain.clone(),
+            category,
         }
     }
 }
@@ -272,6 +285,11 @@ struct EventsResponse {
 /// admin variant and no id parameter that could point it at anyone
 /// else - same shape as `GET /api/v1/account/log`, for the same
 /// reason.
+///
+/// This handler stays thin: it calls [`query::list_own`] for the
+/// events and [`categories::list_own_rules`] for the caller's own
+/// rules, then hands both to [`Resolver`] - the matching logic itself
+/// lives entirely in `crate::categories::resolve`, not here.
 pub async fn list_own(
     State(state): State<AppState>,
     session: SessionContext,
@@ -279,23 +297,38 @@ pub async fn list_own(
 ) -> Response {
     let user_id = &session.auth().user.id;
 
-    match query::list_own(&state.pool, user_id, params.start_ts, params.end_ts).await {
-        Ok(page) => (
-            StatusCode::OK,
-            Json(EventsResponse {
-                events: page.events.iter().map(EventView::from).collect(),
-                truncated: page.truncated,
-            }),
-        )
-            .into_response(),
+    let page = match query::list_own(&state.pool, user_id, params.start_ts, params.end_ts).await {
+        Ok(page) => page,
         Err(EventsQueryError::Range(RangeError::Inverted)) => {
-            ApiError::of(ErrorKind::EventRangeInverted).into_response()
+            return ApiError::of(ErrorKind::EventRangeInverted).into_response();
         }
         Err(EventsQueryError::Range(RangeError::TooWide)) => {
-            ApiError::of(ErrorKind::EventRangeTooWide).into_response()
+            return ApiError::of(ErrorKind::EventRangeTooWide).into_response();
         }
         Err(EventsQueryError::Store(err)) => {
             tracing::error!(error = %err, user_id = %user_id, "reading events failed");
+            return ApiError::of(ErrorKind::InternalError).into_response();
+        }
+    };
+
+    match categories::list_own_rules(&state.pool, user_id).await {
+        Ok(rules) => {
+            let resolver = Resolver::build(&rules);
+            (
+                StatusCode::OK,
+                Json(EventsResponse {
+                    events: page
+                        .events
+                        .iter()
+                        .map(|event| EventView::from_event(event, &resolver))
+                        .collect(),
+                    truncated: page.truncated,
+                }),
+            )
+                .into_response()
+        }
+        Err(err) => {
+            tracing::error!(error = %err, user_id = %user_id, "reading category rules failed");
             ApiError::of(ErrorKind::InternalError).into_response()
         }
     }
