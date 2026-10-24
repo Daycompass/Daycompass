@@ -99,3 +99,46 @@ though a redemption itself never sets a cookie. `RouteSpec::validate`
 permits a `BodySecret` route to stay `Origin`-checked; only the
 *exemption* is whitelisted, and this route deliberately does not claim
 it.
+
+## Why reading events back is a bounded window with a flag, not a cursor
+
+`GET /api/v1/events` (`events::query::list_own`) requires both
+`start_ts` and `end_ts`, caps how wide their span may be
+(`MAX_RANGE_SECS`), and caps how many rows one response carries
+(`MAX_ROWS`) independently of that span — a window across many devices
+can still hold more rows than is reasonable to return at once. A
+response that hit the row cap says so with `truncated: true` rather
+than handing back a cursor to resume with.
+
+Retention does not exist yet — that is M4 — so an account's history has
+no upper bound in rows or in age. Without *some* cap, one request could
+ask the database to do an unbounded amount of work on a single SQLite
+connection shared by the whole instance, which is a cost to everyone
+else's requests, not just the caller's own. A cursor would let a client
+walk an arbitrarily large result a page at a time, which is more
+machinery than this first read needs: a client that sees `truncated:
+true` narrows its own window and asks again, exactly as a client that
+oversends to `POST /api/v1/events` splits its batch rather than being
+handed a page token. Real pagination can be added later if a real use
+ever needs it; until then, the extra state a cursor implies (what it
+encodes, how long it stays valid, what happens if the underlying data
+changes between pages) is complexity this endpoint does not have to
+carry.
+
+## Why the event read has no admin variant, and never gets one on this route
+
+`GET /api/v1/events` takes no id parameter and resolves its caller from
+the session alone (`crate::auth::extract::SessionContext`), the same
+shape as `GET /api/v1/account/log`. An admin calling it sees their own
+events, if they have any — never another account's, however many
+accounts or devices that admin manages.
+
+This is not an oversight waiting for an "admin view" to be added later.
+"An admin manages accounts and devices but can never read another
+user's events or stats" is a fixed design decision (see `CLAUDE.md`),
+and the one case where an admin *can* end up seeing an account's data —
+resetting its password and redeeming the invite themselves — is a
+documented, logged trade-off (see "An admin can still reset a password"
+above), not a second way to reach this endpoint. Any future admin-
+facing view of usage would need its own explicit decision and its own
+review, not a parameter bolted onto this route.

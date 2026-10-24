@@ -1,12 +1,16 @@
 //! Every SQL statement that touches the `events` table.
 //!
-//! There is exactly one, and it is an insert. **This file is the only
-//! place in the codebase allowed to name the `events` table**, and
-//! `tests/no_event_reads.rs` fails the build if that stops being true.
+//! **This file is the only place in the codebase allowed to name the
+//! `events` table**, and `tests/no_event_reads.rs` fails the build if
+//! that stops being true.
 //!
-//! M2 deliberately has no way to read an event back: no endpoint, no
-//! service function, no join. Statistics and category rules are M3,
-//! and an admin never gets event data at all.
+//! Two statements live here: the insert ingest uses, and the one read
+//! M3 adds - an owner's own events, joined against `devices` to prove
+//! ownership in the `WHERE` clause rather than trusting a caller-
+//! supplied id. There is still no statement here for anyone else: an
+//! admin manages accounts and devices and must never reach event data,
+//! full stop. Category rules are a later piece of M3, built on top of
+//! this read rather than inside it.
 //!
 //! # Why `ON CONFLICT ... DO NOTHING` and not `INSERT OR IGNORE`
 //!
@@ -21,7 +25,7 @@
 //! "Accepted" and "duplicate" are then told apart by how many rows the
 //! statement affected: one, or none.
 
-use sqlx::SqlitePool;
+use sqlx::{Row, SqlitePool};
 
 use super::validate::ValidEvent;
 use crate::auth::store::{new_id, StoreError};
@@ -85,4 +89,74 @@ pub async fn insert_batch(
 
     tx.commit().await?;
     Ok(outcomes)
+}
+
+/// One event as read back, with the device that reported it.
+///
+/// Deliberately not [`ValidEvent`]: that type is what ingest wrote,
+/// this is what a read hands back, and `device_id` is only meaningful
+/// on the way out - a client never sends it, since the device layer
+/// already knows which device is calling.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct QueriedEvent {
+    pub device_id: String,
+    /// Canonical: 32 lowercase hex characters, as stored.
+    pub event_id: String,
+    pub start_ts: i64,
+    pub duration_secs: i64,
+    pub app_id: String,
+    pub label: Option<String>,
+    pub domain: Option<String>,
+}
+
+fn queried_event_from_row(row: &sqlx::sqlite::SqliteRow) -> Result<QueriedEvent, StoreError> {
+    Ok(QueriedEvent {
+        device_id: row.try_get("device_id")?,
+        event_id: row.try_get("event_id")?,
+        start_ts: row.try_get("start_ts")?,
+        duration_secs: row.try_get("duration_secs")?,
+        app_id: row.try_get("app_id")?,
+        label: row.try_get("label")?,
+        domain: row.try_get("domain")?,
+    })
+}
+
+/// An account's own events whose `start_ts` falls in `[start_ts,
+/// end_ts)`, across every device it owns - live or revoked, since
+/// revoking a device does not erase what it already reported.
+///
+/// `limit` is always `events::query::MAX_ROWS + 1`: the caller asks
+/// for one more row than it will ever show, purely to tell "there were
+/// exactly this many" apart from "there were more" without a second
+/// `COUNT` query.
+///
+/// The `JOIN` against `devices` is what makes this ownership check a
+/// property of the query rather than of the caller remembering to
+/// filter: there is no code path here that can return a row for a
+/// device this account does not own, because the row would not match
+/// the `WHERE` clause in the first place.
+pub async fn select_own_in_range(
+    pool: &SqlitePool,
+    user_id: &str,
+    start_ts: i64,
+    end_ts: i64,
+    limit: i64,
+) -> Result<Vec<QueriedEvent>, StoreError> {
+    let rows = sqlx::query(
+        "SELECT e.device_id, e.event_id, e.start_ts, e.duration_secs, e.app_id, e.label,
+                e.domain
+         FROM events e
+         JOIN devices d ON d.id = e.device_id
+         WHERE d.user_id = ?1 AND e.start_ts >= ?2 AND e.start_ts < ?3
+         ORDER BY e.start_ts ASC, e.device_id ASC, e.event_id ASC
+         LIMIT ?4",
+    )
+    .bind(user_id)
+    .bind(start_ts)
+    .bind(end_ts)
+    .bind(limit)
+    .fetch_all(pool)
+    .await?;
+
+    rows.iter().map(queried_event_from_row).collect()
 }

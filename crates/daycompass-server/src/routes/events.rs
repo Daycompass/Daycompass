@@ -1,9 +1,15 @@
 //! `POST /api/v1/events` - a device reports what it observed.
 //! `GET /api/v1/device/me` - a device checks who it is and what time
 //! the server thinks it is.
+//! `GET /api/v1/events` - an account reads its own events back,
+//! bounded by a time window.
 //!
-//! Both are `Access::Device`: bearer token only, session cookie
-//! refused, no `Origin` check, all attached from the route inventory.
+//! The first two are `Access::Device`: bearer token only, session
+//! cookie refused, no `Origin` check, all attached from the route
+//! inventory. The third is the opposite shape on purpose:
+//! `Access::Session`, cookie-authenticated, `Origin`-checked - a
+//! device reports what it saw, an owner reads what was reported, and
+//! the two never share a credential.
 //!
 //! # Why ingest answers 200 with a list
 //!
@@ -29,7 +35,7 @@
 //! costs it nothing and costs the server no decision about which
 //! input is safe to reflect.
 
-use axum::extract::State;
+use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
@@ -40,7 +46,10 @@ use crate::auth::time::UnixTime;
 use crate::devices::platform::Platform;
 use crate::error::{ApiError, ErrorKind};
 use crate::events::ingest::{self, MAX_BATCH_EVENTS};
+use crate::events::query::{self, EventsQueryError, RangeError};
+use crate::events::store::QueriedEvent;
 use crate::events::validate::RawEvent;
+use crate::routes::SessionContext;
 use crate::state::AppState;
 
 /// One event as it arrives on the wire.
@@ -201,4 +210,93 @@ pub async fn device_me(device: DeviceContext) -> Response {
 /// type holds no allocation for it.
 const fn platform_str(platform: Platform) -> &'static str {
     platform.as_str()
+}
+
+/// `start_ts` and `end_ts` on `GET /api/v1/events`, both required.
+///
+/// `deny_unknown_fields`, same as every other input this server
+/// parses: a stray query parameter is a client bug to surface, not
+/// something to silently ignore.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EventsQueryParams {
+    start_ts: i64,
+    end_ts: i64,
+}
+
+/// One event as handed back to its owner.
+///
+/// No `id`: the internal primary key is not meaningful on the wire,
+/// and `event_id` - the one the client itself chose - already
+/// identifies the row together with `device_id`. No category either;
+/// events carry none, by design.
+#[derive(Serialize)]
+struct EventView {
+    device_id: String,
+    event_id: String,
+    start_ts: i64,
+    duration_secs: i64,
+    app_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    label: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    domain: Option<String>,
+}
+
+impl From<&QueriedEvent> for EventView {
+    fn from(event: &QueriedEvent) -> Self {
+        Self {
+            device_id: event.device_id.clone(),
+            event_id: event.event_id.clone(),
+            start_ts: event.start_ts,
+            duration_secs: event.duration_secs,
+            app_id: event.app_id.clone(),
+            label: event.label.clone(),
+            domain: event.domain.clone(),
+        }
+    }
+}
+
+#[derive(Serialize)]
+struct EventsResponse {
+    events: Vec<EventView>,
+    /// `true` when more events matched the window than this response
+    /// carries. The caller narrows the window and asks again; there is
+    /// no cursor to resume with - see `events::query` for why.
+    truncated: bool,
+}
+
+/// An account's own events, inside `[start_ts, end_ts)`.
+///
+/// Session-authenticated, scoped to the caller alone. There is no
+/// admin variant and no id parameter that could point it at anyone
+/// else - same shape as `GET /api/v1/account/log`, for the same
+/// reason.
+pub async fn list_own(
+    State(state): State<AppState>,
+    session: SessionContext,
+    Query(params): Query<EventsQueryParams>,
+) -> Response {
+    let user_id = &session.auth().user.id;
+
+    match query::list_own(&state.pool, user_id, params.start_ts, params.end_ts).await {
+        Ok(page) => (
+            StatusCode::OK,
+            Json(EventsResponse {
+                events: page.events.iter().map(EventView::from).collect(),
+                truncated: page.truncated,
+            }),
+        )
+            .into_response(),
+        Err(EventsQueryError::Range(RangeError::Inverted)) => {
+            ApiError::of(ErrorKind::EventRangeInverted).into_response()
+        }
+        Err(EventsQueryError::Range(RangeError::TooWide)) => {
+            ApiError::of(ErrorKind::EventRangeTooWide).into_response()
+        }
+        Err(EventsQueryError::Store(err)) => {
+            tracing::error!(error = %err, user_id = %user_id, "reading events failed");
+            ApiError::of(ErrorKind::InternalError).into_response()
+        }
+    }
 }

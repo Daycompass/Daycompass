@@ -106,6 +106,11 @@ pub enum ErrorKind {
     PlatformUnknown,
     /// The batch carried more events than one request may.
     BatchTooLarge,
+    /// `end_ts` on an event query was not strictly after `start_ts`.
+    EventRangeInverted,
+    /// The span between `start_ts` and `end_ts` on an event query was
+    /// wider than the server allows in one request.
+    EventRangeTooWide,
 
     // Input policies. These describe public rules and never echo what
     // was sent.
@@ -130,7 +135,9 @@ impl ErrorKind {
             | Self::RoleUnknown
             | Self::DeviceNameLength
             | Self::DeviceNameCharset
-            | Self::PlatformUnknown => StatusCode::BAD_REQUEST,
+            | Self::PlatformUnknown
+            | Self::EventRangeInverted
+            | Self::EventRangeTooWide => StatusCode::BAD_REQUEST,
             Self::Unauthorized
             | Self::Unauthenticated
             | Self::InvalidCredentials
@@ -197,6 +204,7 @@ impl ErrorKind {
             Self::PlatformUnknown => "invalid_platform",
             Self::BatchTooLarge => "batch_too_large",
             Self::DeviceNameLength | Self::DeviceNameCharset => "invalid_device_name",
+            Self::EventRangeInverted | Self::EventRangeTooWide => "invalid_event_range",
         }
     }
 
@@ -256,6 +264,12 @@ impl ErrorKind {
             Self::DeviceNameCharset => {
                 "the device name may not contain control or text-direction characters"
             }
+            Self::EventRangeInverted => {
+                "end_ts must be strictly after start_ts"
+            }
+            Self::EventRangeTooWide => {
+                "the time range between start_ts and end_ts is wider than this server allows in one request"
+            }
         }
     }
 }
@@ -300,6 +314,8 @@ pub(crate) const ALL_ERROR_KINDS: &[ErrorKind] = &[
     ErrorKind::BatchTooLarge,
     ErrorKind::DeviceNameLength,
     ErrorKind::DeviceNameCharset,
+    ErrorKind::EventRangeInverted,
+    ErrorKind::EventRangeTooWide,
 ];
 
 /// Compile-time proof that every code and message is a constant.
@@ -562,6 +578,17 @@ mod tests {
     #[test]
     fn the_batch_message_states_no_number() {
         let message = ErrorKind::BatchTooLarge.message();
+        assert!(
+            !message.chars().any(|c| c.is_ascii_digit()),
+            "a number here would be a constant waiting to drift: {message}"
+        );
+    }
+
+    /// Same reasoning as the batch cap: the maximum query width lives
+    /// in `events::query` as a constant, not duplicated here.
+    #[test]
+    fn the_event_range_too_wide_message_states_no_number() {
+        let message = ErrorKind::EventRangeTooWide.message();
         assert!(
             !message.chars().any(|c| c.is_ascii_digit()),
             "a number here would be a constant waiting to drift: {message}"
