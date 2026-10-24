@@ -16,9 +16,10 @@ a hardened HTTP skeleton (`/healthz`), authentication (the first-admin
 setup flow, login, logout, sessions with CSRF protection, rate
 limiting), account management by invite (an admin creates a pending
 account or resets an existing one to pending, and the person redeems
-their own invite to choose a password), devices and pairing, and event
-ingest. There is no way to read events back yet, and no category
-rules or dashboard. Expect breaking changes at any time.
+their own invite to choose a password), devices and pairing, event
+ingest, and an account reading its own events back within a time
+window. There are no category rules or dashboard yet. Expect breaking
+changes at any time.
 
 ## First start
 
@@ -151,7 +152,8 @@ default - see `docs/design-decisions.md` for why).
 ### What an admin can and cannot do
 
 An admin manages accounts. An admin **cannot** read another account's
-usage events or stats, and will not be able to when those exist.
+usage events or stats - not now that an owner can read their own back,
+and not once stats exist either.
 
 An admin *can* reset any account's password - and after doing so,
 could in principle redeem the new invite and log in as that account.
@@ -234,6 +236,7 @@ behind the parts that are not obvious.
 | `POST /api/v1/pair` | Redeem a code, receive a device token. Public. |
 | `POST /api/v1/events` | Report events. Device. |
 | `GET /api/v1/device/me` | Identity and the server's clock. Device. |
+| `GET /api/v1/events` | Your own events, within a time window. Session. |
 | `GET /api/v1/devices` | Your own devices. Session. |
 | `PATCH /api/v1/devices/{id}` | Rename your own device. Session. |
 | `POST /api/v1/devices/{id}/revoke` | Revoke your own device. Session. |
@@ -303,6 +306,21 @@ foreground application and a browser domain at once is normal, as is
 two devices covering the same span; deciding what an overlap means is a
 query-time question.
 
+### Reading your own events back
+
+`GET /api/v1/events?start_ts=...&end_ts=...` returns the caller's own
+events across every device they own, inside that half-open window.
+Both parameters are required and bounded - a window wider than the
+server allows, or with the end not strictly after the start, is
+refused rather than silently clamped. A response wider than the
+server's row cap says so in a `truncated` flag instead of a cursor: a
+client that hits it narrows its own window and asks again, the same
+way an oversized batch is split on the way in.
+
+This is the first and, for now, only read path. There is still no
+category on an event and no stats endpoint - both are later work built
+on top of this read, not part of it.
+
 ### Revoking
 
 Revoking keeps the device row and every event it reported - it is not a
@@ -319,12 +337,15 @@ An admin can list every device on the instance and revoke any of them,
 and sees metadata only: id, owner, name, platform, and the three
 timestamps.
 
-An admin has **no way to read anyone's events**. There is no endpoint,
-no service function and no query that returns one - in fact M2 has no
-event read path for anybody at all, including a device's own owner.
-That is checked rather than remembered: a test fails if a route
-touching events appears in the inventory, if any file outside the ingest
-store queries the table, or if either device view grows a field.
+An admin has **no way to read anyone's events** - not even their own
+account's, through this endpoint. There is no admin variant of
+`GET /api/v1/events` and no id parameter on it that could point it at
+another account; it always answers for the session that called it,
+whoever that is. That is checked rather than remembered: a test fails
+if a route touching events appears in the inventory outside the one
+write and the one owner-scoped read, if any file outside the events
+store queries the table without scoping by the caller's own user id,
+or if either device view grows a field.
 
 ## Design decisions
 

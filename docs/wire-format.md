@@ -1,9 +1,11 @@
-# Wire format: accounts, invites, pairing, device auth, and event ingest
+# Wire format: accounts, invites, pairing, device auth, and events
 
 Reference for client implementations: every route this server answers
 — setup, login and session management, account and device
-administration, pairing a device, authenticating as one, and reporting
-events. There is deliberately **no way to read events back** in M2.
+administration, pairing a device, authenticating as one, reporting
+events, and reading an account's own events back. There is still no
+category on an event and no stats endpoint; both are later M3 work
+built on top of the read documented here, not part of it.
 
 Everything here is normative for the server as it stands. The
 authoritative definitions live in the code (`src/routes/`,
@@ -888,6 +890,73 @@ the timestamp forward.
 
 **Failures:** `404 not_found` — same "no such device, or not yours"
 meaning as above.
+
+## Reading your own events (session auth)
+
+<!-- route: GET /api/v1/events -->
+### `GET /api/v1/events`
+
+Session auth, no CSRF (a `GET`). The caller's own events, across every
+device they own — revoked devices included, since revoking is not
+deleting and their past events are kept. There is no admin variant and
+no id parameter that could point this at another account; see
+["Admin endpoints"](#admin-endpoints) below for what an admin may and
+may not see.
+
+**Query parameters, both required:**
+
+| Parameter | Meaning |
+| --- | --- |
+| `start_ts` | Inclusive start of the window, Unix seconds. |
+| `end_ts` | Exclusive end of the window, Unix seconds. |
+
+The window is `[start_ts, end_ts)`: an event starting exactly at
+`end_ts` is outside it. Querying consecutive windows back to back —
+this call's `end_ts` as the next call's `start_ts` — therefore never
+double-counts or skips the event sitting on the boundary.
+
+```
+GET /api/v1/events?start_ts=1799990000&end_ts=1800000000
+```
+
+**`200 OK`:**
+
+```json
+{
+  "events": [
+    {
+      "device_id": "0199…",
+      "event_id": "0123456789abcdef0123456789abcdef",
+      "start_ts": 1799996400,
+      "duration_secs": 300,
+      "app_id": "org.mozilla.firefox",
+      "label": "Firefox",
+      "domain": "example.com"
+    }
+  ],
+  "truncated": false
+}
+```
+
+Ordered `start_ts, device_id, event_id` ascending. `label` and
+`domain` are omitted when the event has none — same optionality as on
+the way in. **There is no `category` field here either**, for the
+same reason there is none on ingest: categories are assigned at query
+time, from rules, which is separate M3 work built on top of this read.
+
+**`truncated`:** `true` when more events matched the window than this
+response carries. There is no cursor to resume with — narrow
+`start_ts`/`end_ts` and ask again, the same way a client that oversends
+to `POST /api/v1/events` splits its batch rather than being handed a
+page token.
+
+**Failures:**
+
+| Status | Code | Meaning |
+| --- | --- | --- |
+| 400 | `bad_request` | `start_ts` or `end_ts` missing, not a number, or an unknown query parameter was sent. |
+| 400 | `invalid_event_range` | `end_ts` is not strictly after `start_ts`, **or** the span between them is wider than this server allows in one request. |
+| 401 | `unauthenticated` | No session. A device's bearer token does not substitute for one — this route does not accept it. |
 
 ## Admin endpoints
 
