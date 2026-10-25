@@ -1,5 +1,30 @@
-{#- Swapped in whole after every add or delete. #}
-<section id="rules" class="dc-card dc-stack">
+{% import "macros.html" as icons -%}
+{#- Swapped in whole after every add or delete, the add form with it, so
+    a rule that was saved leaves an empty form behind. #}
+<div id="rules" class="dc-stack dc-stack--lg">
+<section class="dc-card dc-stack">
+    <h2 class="dc-heading-3">Add a rule</h2>
+    <p class="dc-muted">A rule puts every app or website that matches it into a category. Rules apply to everything already tracked, too.</p>
+    <form class="dc-stack" method="post" action="/category-rules" hx-post="/category-rules" hx-target="#rules" hx-swap="outerHTML" hx-disabled-elt="find button">
+      <div class="dc-field">
+        <label class="dc-field__label" for="kind">Match by</label>
+        <select class="dc-field__input" id="kind" name="kind">
+          <option value="app_id">App id</option>
+          <option value="domain">Domain</option>
+        </select>
+      </div>
+      <div class="dc-field">
+        <label class="dc-field__label" for="pattern">App id or domain</label>
+        <input class="dc-field__input" id="pattern" name="pattern" type="text" placeholder="org.example.notes or example.com" autocapitalize="none" spellcheck="false" required>
+      </div>
+      <div class="dc-field">
+        <label class="dc-field__label" for="category">Category</label>
+        <input class="dc-field__input" id="category" name="category" type="text" placeholder="Study" required>
+      </div>
+      <div><button class="dc-btn dc-btn--primary" type="submit">{% call icons::icon("plus") %}{% endcall %}<span class="dc-spin" aria-hidden="true"></span>Add rule</button></div>
+    </form>
+  </section>
+<section class="dc-card dc-stack">
   <h2 class="dc-heading-3">Your rules</h2>
   {% if rules.is_empty() %}
   <p class="dc-muted">No rules yet. Everything shows up as Uncategorized until you add one.</p>
@@ -19,3 +44,4 @@
   </ul>
   {% endif %}
 </section>
+</div>

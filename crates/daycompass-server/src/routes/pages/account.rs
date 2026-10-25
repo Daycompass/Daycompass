@@ -17,7 +17,7 @@ use axum::response::{IntoResponse, Response};
 use axum::Form;
 use serde::Deserialize;
 
-use super::{format_utc, render, Shell};
+use super::{format_utc, render, render_fragment, Shell};
 use crate::auth::account_log::{self, LogKind};
 use crate::auth::secret::SecretString;
 use crate::error::{ApiError, ErrorKind};
@@ -91,7 +91,7 @@ pub async fn change_password(
     {
         // A fresh, empty form: the passwords never travel back to the
         // page, not even as field values.
-        Ok(other_sessions_ended) => render(&PasswordForm {
+        Ok(other_sessions_ended) => render_fragment(&PasswordForm {
             changed: Some(other_sessions_ended),
         }),
         Err(error) => error.into_response(),

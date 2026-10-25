@@ -26,7 +26,7 @@ use axum::response::{IntoResponse, Response};
 use axum::Form;
 use serde::Deserialize;
 
-use super::{format_utc, render, Shell};
+use super::{format_utc, render, render_fragment, Shell};
 use crate::auth::invite::IssuedInvite;
 use crate::auth::store::UserSummary;
 use crate::auth::users;
@@ -121,7 +121,7 @@ async fn account_fragment(
     invite: Option<InviteNotice>,
 ) -> Response {
     match account_list(state, admin, invite).await {
-        Ok(list) => render(&list),
+        Ok(list) => render_fragment(&list),
         Err(error) => error.into_response(),
     }
 }
@@ -266,7 +266,7 @@ pub async fn revoke_device(
 ) -> Response {
     match devices::revoke_any_for_admin(&state, &admin, &device_id).await {
         Ok(_) => match device_list(&state).await {
-            Ok(list) => render(&list),
+            Ok(list) => render_fragment(&list),
             Err(error) => error.into_response(),
         },
         Err(err) => devices::action_error(err).into_response(),

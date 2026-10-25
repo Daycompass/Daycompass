@@ -179,6 +179,46 @@ async fn category_rules_are_added_and_deleted_from_the_page() {
     assert!(!deleted.text.contains("docs.example.com"));
 }
 
+/// A write that succeeds empties the flash area (an older error banner
+/// must not outlive it) and brings back an empty add form; a refused one
+/// leaves the form alone and says what went wrong in sentence case.
+#[tokio::test]
+async fn a_successful_write_clears_the_flash_and_the_form() {
+    let app = TestApp::new().await;
+    let (_credentials, admin) = app.provisioned_admin().await;
+    let fields = [
+        ("kind", "app_id"),
+        ("pattern", "org.example.chat"),
+        ("category", "Social"),
+    ];
+
+    let added = app
+        .send(write("/category-rules", &admin).form(&fields))
+        .await;
+    assert_eq!(added.status, StatusCode::OK);
+    assert!(added.text.contains(
+        r#"<div id="dc-flash" class="dc-flash" aria-live="polite" hx-swap-oob="true"></div>"#
+    ));
+    assert!(
+        added.text.contains(r#"action="/category-rules""#),
+        "the form is re-rendered"
+    );
+    assert!(
+        !added.text.contains(r#"value="org.example.chat""#),
+        "the re-rendered form is empty"
+    );
+
+    let refused = app
+        .send(write("/category-rules", &admin).form(&fields))
+        .await;
+    assert_eq!(refused.status, StatusCode::CONFLICT);
+    assert!(
+        !refused.text.contains("hx-swap-oob"),
+        "an error must not clear itself"
+    );
+    assert!(refused.text.contains(r#"<span class="dc-message">"#));
+}
+
 #[tokio::test]
 async fn another_accounts_rule_cannot_be_deleted() {
     let app = TestApp::new().await;

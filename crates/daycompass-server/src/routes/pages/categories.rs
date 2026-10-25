@@ -10,7 +10,7 @@ use axum::response::{IntoResponse, Response};
 use axum::Form;
 use serde::Deserialize;
 
-use super::{render, Shell};
+use super::{render, render_fragment, Shell};
 use crate::auth::time::UnixTime;
 use crate::categories::service;
 use crate::categories::store::CategoryRuleRecord;
@@ -77,7 +77,7 @@ pub async fn page(State(state): State<AppState>, session: SessionContext) -> Res
 
 async fn list_fragment(state: &AppState, session: &SessionContext) -> Response {
     match own_list(state, session).await {
-        Ok(list) => render(&list),
+        Ok(list) => render_fragment(&list),
         Err(error) => error.into_response(),
     }
 }

@@ -1,2 +1,2 @@
 {% import "macros.html" as icons -%}
-<div class="dc-banner dc-banner--error" role="alert" data-error-code="{{ code }}">{% call icons::icon("error") %}{% endcall %}<div><b>{{ title }}</b>{{ message }}</div></div>
+<div class="dc-banner dc-banner--error" role="alert" data-error-code="{{ code }}">{% call icons::icon("error") %}{% endcall %}<div><b>{{ title }}</b><span class="dc-message">{{ message }}</span></div></div>
