@@ -40,6 +40,7 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use serde::{Deserialize, Serialize};
+use utoipa::{IntoParams, ToSchema};
 
 use crate::auth::device::DeviceContext;
 use crate::auth::time::UnixTime;
@@ -62,7 +63,7 @@ use crate::state::AppState;
 /// happens in serde before the handler sees anything - a client that
 /// sends the wrong schema has a bug to fix, which is different from a
 /// client sending one event whose values are out of range.
-#[derive(Deserialize)]
+#[derive(Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct EventInput {
     event_id: String,
@@ -88,14 +89,14 @@ impl From<EventInput> for RawEvent {
     }
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct IngestRequest {
     events: Vec<EventInput>,
 }
 
 /// What one event did, by its position in the submitted array.
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 struct EventResult {
     index: usize,
     /// `accepted`, `duplicate` or `rejected`.
@@ -103,10 +104,11 @@ struct EventResult {
     /// A code from the closed set in [`crate::events::validate`].
     /// Absent unless the status is `rejected`.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
     reason: Option<&'static str>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 struct IngestResponse {
     accepted: usize,
     duplicate: usize,
@@ -115,6 +117,18 @@ struct IngestResponse {
     server_time: i64,
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/v1/events",
+    tag = "events",
+    operation_id = "ingest_events",
+    summary = "Report a batch of events (device)",
+    request_body = IngestRequest,
+    responses(
+        (status = 200, description = "Every event has its own verdict, by index.", body = IngestResponse),
+        (status = 413, description = "`batch_too_large` (more than 500 events) or `payload_too_large`.", body = crate::error::ErrorBody),
+    )
+)]
 pub async fn ingest(
     State(state): State<AppState>,
     device: DeviceContext,
@@ -186,7 +200,7 @@ pub async fn ingest(
 /// events dated too far into the future, and without a way to read the
 /// server's clock a client with a skewed one would see rejections it
 /// could not explain.
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 struct DeviceMeResponse {
     id: String,
     name: String,
@@ -194,6 +208,16 @@ struct DeviceMeResponse {
     server_time: i64,
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/v1/device/me",
+    tag = "events",
+    operation_id = "device_me",
+    summary = "Who this device is, and the server's clock (device)",
+    responses(
+        (status = 200, description = "This device.", body = DeviceMeResponse),
+    )
+)]
 pub async fn device_me(device: DeviceContext) -> Response {
     let device = device.device();
     (
@@ -219,10 +243,13 @@ const fn platform_str(platform: Platform) -> &'static str {
 /// `deny_unknown_fields`, same as every other input this server
 /// parses: a stray query parameter is a client bug to surface, not
 /// something to silently ignore.
-#[derive(Deserialize)]
+#[derive(Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
 #[serde(deny_unknown_fields)]
 pub struct EventsQueryParams {
+    /// Inclusive start of the window, Unix seconds.
     start_ts: i64,
+    /// Exclusive end of the window, Unix seconds.
     end_ts: i64,
 }
 
@@ -234,7 +261,7 @@ pub struct EventsQueryParams {
 /// stored on the row itself - it is resolved from the caller's own
 /// category rules at read time, here, and omitted when nothing
 /// matches.
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 struct EventView {
     device_id: String,
     event_id: String,
@@ -242,10 +269,13 @@ struct EventView {
     duration_secs: i64,
     app_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
     label: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
     domain: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
     category: Option<String>,
 }
 
@@ -270,7 +300,7 @@ impl EventView {
     }
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 struct EventsResponse {
     events: Vec<EventView>,
     /// `true` when more events matched the window than this response
@@ -290,6 +320,18 @@ struct EventsResponse {
 /// events and [`categories::list_own_rules`] for the caller's own
 /// rules, then hands both to [`Resolver`] - the matching logic itself
 /// lives entirely in `crate::categories::resolve`, not here.
+#[utoipa::path(
+    get,
+    path = "/api/v1/events",
+    tag = "events",
+    operation_id = "list_events",
+    summary = "Your own events inside [start_ts, end_ts), at most 31 days",
+    params(EventsQueryParams),
+    responses(
+        (status = 200, description = "Your events. `truncated` means narrow the window and ask again.", body = EventsResponse),
+        (status = 400, description = "`invalid_event_range`, or `bad_request` for a missing or unknown parameter.", body = crate::error::ErrorBody),
+    )
+)]
 pub async fn list_own(
     State(state): State<AppState>,
     session: SessionContext,

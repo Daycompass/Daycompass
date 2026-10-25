@@ -35,6 +35,7 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use serde::{Deserialize, Serialize};
+use utoipa::ToSchema;
 
 use crate::auth::time::UnixTime;
 use crate::devices::name::DeviceNameError;
@@ -44,27 +45,37 @@ use crate::error::{ApiError, ErrorKind};
 use crate::routes::{AdminContext, AdminDeviceView, DeviceView, SessionContext};
 use crate::state::AppState;
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 struct DeviceResponse {
     device: DeviceView,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 struct DeviceListResponse {
     devices: Vec<DeviceView>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 struct AdminDeviceListResponse {
     devices: Vec<AdminDeviceView>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct RenameRequest {
     name: String,
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/v1/devices",
+    tag = "devices",
+    operation_id = "list_devices",
+    summary = "Your own devices, revoked ones included",
+    responses(
+        (status = 200, description = "Your devices.", body = DeviceListResponse),
+    )
+)]
 pub async fn list_own(State(state): State<AppState>, session: SessionContext) -> Response {
     let user_id = &session.auth().user.id;
 
@@ -83,6 +94,20 @@ pub async fn list_own(State(state): State<AppState>, session: SessionContext) ->
     }
 }
 
+#[utoipa::path(
+    patch,
+    path = "/api/v1/devices/{id}",
+    tag = "devices",
+    operation_id = "rename_device",
+    summary = "Rename one of your devices",
+    params(("id" = String, Path, description = "The device id.")),
+    request_body = RenameRequest,
+    responses(
+        (status = 200, description = "Renamed.", body = DeviceResponse),
+        (status = 400, description = "`invalid_device_name`.", body = crate::error::ErrorBody),
+        (status = 404, description = "`not_found`: no such device, or not yours.", body = crate::error::ErrorBody),
+    )
+)]
 pub async fn rename_own(
     State(state): State<AppState>,
     session: SessionContext,
@@ -101,6 +126,18 @@ pub async fn rename_own(
     device_response(result)
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/v1/devices/{id}/revoke",
+    tag = "devices",
+    operation_id = "revoke_device",
+    summary = "Revoke one of your devices; its events are kept",
+    params(("id" = String, Path, description = "The device id.")),
+    responses(
+        (status = 200, description = "Revoked (or already was).", body = DeviceResponse),
+        (status = 404, description = "`not_found`: no such device, or not yours.", body = crate::error::ErrorBody),
+    )
+)]
 pub async fn revoke_own(
     State(state): State<AppState>,
     session: SessionContext,
@@ -118,6 +155,16 @@ pub async fn revoke_own(
     revoke_response(result)
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/v1/admin/devices",
+    tag = "admin",
+    operation_id = "admin_list_devices",
+    summary = "Every device on the instance, metadata only (admin)",
+    responses(
+        (status = 200, description = "All devices, with their owners. Never any event data.", body = AdminDeviceListResponse),
+    )
+)]
 pub async fn list_all(State(state): State<AppState>, _admin: AdminContext) -> Response {
     match service::list_all_devices(&state.pool).await {
         Ok(devices) => (
@@ -134,6 +181,18 @@ pub async fn list_all(State(state): State<AppState>, _admin: AdminContext) -> Re
     }
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/v1/admin/devices/{id}/revoke",
+    tag = "admin",
+    operation_id = "admin_revoke_device",
+    summary = "Revoke any device (admin)",
+    params(("id" = String, Path, description = "The device id.")),
+    responses(
+        (status = 200, description = "Revoked (or already was).", body = DeviceResponse),
+        (status = 404, description = "`not_found`.", body = crate::error::ErrorBody),
+    )
+)]
 pub async fn revoke_any(
     State(state): State<AppState>,
     admin: AdminContext,

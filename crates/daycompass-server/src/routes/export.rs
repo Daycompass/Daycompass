@@ -28,6 +28,17 @@ const CONTENT_DISPOSITION: &str = "attachment; filename=\"daycompass-export.json
 #[serde(deny_unknown_fields)]
 pub struct ExportParams {}
 
+#[utoipa::path(
+    get,
+    path = "/api/v1/export",
+    tag = "events",
+    operation_id = "export",
+    summary = "Download everything your account holds, as one JSON document",
+    responses(
+        (status = 200, description = "Streamed. Accept it only if it parses and ends with `\"complete\": true`.", body = crate::export::format::Document,
+            headers(("Content-Disposition" = String, description = "`attachment; filename=\"daycompass-export.json\"`"))),
+    )
+)]
 pub async fn export_own(
     State(state): State<AppState>,
     session: SessionContext,

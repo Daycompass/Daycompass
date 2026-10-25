@@ -18,6 +18,7 @@ use axum::http::{header, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use serde::{Deserialize, Serialize};
+use utoipa::ToSchema;
 
 use crate::auth::cookie;
 use crate::auth::login::{self, LoginError};
@@ -31,9 +32,10 @@ use crate::ratelimit::UsernameKey;
 use crate::routes::{rate_limited, SessionContext, UserView};
 use crate::state::AppState;
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ToSchema)]
 pub struct LoginRequest {
     username: String,
+    #[schema(value_type = String, format = Password)]
     password: SecretString,
 }
 
@@ -43,12 +45,25 @@ pub struct LoginRequest {
 /// cookie, so page JavaScript never has to hold it. The CSRF token is,
 /// because the client has to echo it back in a header, which is exactly
 /// what a hostile page cannot do.
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 struct SessionResponse {
     user: UserView,
     csrf_token: String,
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/v1/auth/login",
+    tag = "sessions",
+    operation_id = "login",
+    summary = "Log in; sets the session cookie",
+    request_body = LoginRequest,
+    responses(
+        (status = 200, description = "Logged in. The session cookie is in `Set-Cookie`; send `csrf_token` as `X-CSRF-Token` on writes.", body = SessionResponse),
+        (status = 401, description = "`invalid_credentials`, whatever was wrong.", body = crate::error::ErrorBody),
+        (status = 503, description = "`server_busy`. Honour `Retry-After`.", body = crate::error::ErrorBody),
+    )
+)]
 pub async fn log_in(State(state): State<AppState>, Json(request): Json<LoginRequest>) -> Response {
     let now = UnixTime::now();
 
@@ -128,6 +143,16 @@ fn invalid_credentials() -> ApiError {
 /// The session, the CSRF check and the `Origin` check all come from the
 /// route's inventory entry; [`SessionContext`] is how this handler reads
 /// the result, and it fails closed if no access layer ran.
+#[utoipa::path(
+    post,
+    path = "/api/v1/auth/logout",
+    tag = "sessions",
+    operation_id = "logout",
+    summary = "End this session; clears the cookie",
+    responses(
+        (status = 204, description = "Logged out."),
+    )
+)]
 pub async fn log_out(State(state): State<AppState>, session_context: SessionContext) -> Response {
     let auth = session_context.auth();
 
@@ -153,6 +178,16 @@ pub async fn log_out(State(state): State<AppState>, session_context: SessionCont
 /// reload or a new tab: the value is derived from the session cookie, so
 /// any tab holding the cookie can ask for it. Same-origin policy keeps
 /// another origin from reading this response.
+#[utoipa::path(
+    get,
+    path = "/api/v1/auth/me",
+    tag = "sessions",
+    operation_id = "me",
+    summary = "The account behind this session, and its CSRF token",
+    responses(
+        (status = 200, description = "The current account.", body = SessionResponse),
+    )
+)]
 pub async fn me(session_context: SessionContext) -> Response {
     let auth = session_context.auth();
     let body = SessionResponse {
@@ -164,15 +199,17 @@ pub async fn me(session_context: SessionContext) -> Response {
     (StatusCode::OK, Json(body)).into_response()
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ChangePasswordRequest {
+    #[schema(value_type = String, format = Password)]
     current_password: SecretString,
+    #[schema(value_type = String, format = Password)]
     new_password: SecretString,
 }
 
 /// What a successful password change reports.
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 struct PasswordChangeResponse {
     /// How many other sessions of this account were ended. The one that
     /// made the request is not counted, and still works.
@@ -190,6 +227,21 @@ struct PasswordChangeResponse {
 /// attached from the route's inventory entry, and the limit is counted
 /// before this handler runs - that is, before the Argon2 semaphore is
 /// reached.
+#[utoipa::path(
+    post,
+    path = "/api/v1/auth/password",
+    tag = "sessions",
+    operation_id = "change_password",
+    summary = "Change your own password; ends every other session",
+    request_body = ChangePasswordRequest,
+    responses(
+        (status = 200, description = "Changed.", body = PasswordChangeResponse),
+        (status = 400, description = "`invalid_password`.", body = crate::error::ErrorBody),
+        (status = 403, description = "`invalid_current_password`.", body = crate::error::ErrorBody),
+        (status = 409, description = "`password_change_conflict`: another change won the race.", body = crate::error::ErrorBody),
+        (status = 503, description = "`server_busy`. Honour `Retry-After`.", body = crate::error::ErrorBody),
+    )
+)]
 pub async fn change_password(
     State(state): State<AppState>,
     session_context: SessionContext,

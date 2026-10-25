@@ -23,6 +23,7 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use serde::{Deserialize, Serialize};
+use utoipa::ToSchema;
 
 use crate::auth::invite::{CreatePendingAccountError, IssuedInvite, ResetPasswordError};
 use crate::auth::role::Role;
@@ -33,7 +34,7 @@ use crate::error::{ApiError, ErrorKind};
 use crate::routes::{AdminContext, UserDetailView};
 use crate::state::AppState;
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct CreateUserRequest {
     username: String,
@@ -43,18 +44,18 @@ pub struct CreateUserRequest {
     role: String,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ChangeRoleRequest {
     role: String,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 struct UserResponse {
     user: UserDetailView,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 struct UserListResponse {
     users: Vec<UserDetailView>,
 }
@@ -66,7 +67,7 @@ struct UserListResponse {
 /// `Serialize` impl on purpose, and this is the one spot that is
 /// allowed to read the plaintext out of a [`crate::auth::token::Token`]
 /// and hand it to a client - the only time it ever will.
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 struct InviteView {
     token: String,
     expires_at: i64,
@@ -81,12 +82,25 @@ impl From<IssuedInvite> for InviteView {
     }
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 struct CreateUserResponse {
     user: UserDetailView,
     invite: InviteView,
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/v1/users",
+    tag = "accounts",
+    operation_id = "create_user",
+    summary = "Create a pending account and its invite (admin)",
+    request_body = CreateUserRequest,
+    responses(
+        (status = 201, description = "Created, pending until the invite is redeemed.", body = CreateUserResponse),
+        (status = 400, description = "`invalid_username` or `invalid_role`.", body = crate::error::ErrorBody),
+        (status = 409, description = "`username_taken`.", body = crate::error::ErrorBody),
+    )
+)]
 pub async fn create_user(
     State(state): State<AppState>,
     admin: AdminContext,
@@ -156,6 +170,19 @@ fn create_error(err: CreatePendingAccountError) -> ApiError {
 /// is revoked, in the same transaction as the reset - see
 /// `crate::auth::invite::reset_password`. The response reports how many
 /// of each, so the admin performing the reset is not surprised by it.
+#[utoipa::path(
+    post,
+    path = "/api/v1/users/{id}/password-reset",
+    tag = "accounts",
+    operation_id = "reset_password",
+    summary = "Reset an account to pending with a fresh invite (admin)",
+    params(("id" = String, Path, description = "The account id.")),
+    responses(
+        (status = 200, description = "Reset. Every session ended, every device revoked.", body = ResetPasswordResponse),
+        (status = 404, description = "`not_found`.", body = crate::error::ErrorBody),
+        (status = 409, description = "`last_admin_protected`.", body = crate::error::ErrorBody),
+    )
+)]
 pub async fn reset_password(
     State(state): State<AppState>,
     admin: AdminContext,
@@ -203,13 +230,23 @@ pub async fn reset_password(
     }
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 struct ResetPasswordResponse {
     invite: InviteView,
     sessions_ended: u64,
     devices_revoked: u64,
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/v1/users",
+    tag = "accounts",
+    operation_id = "list_users",
+    summary = "Every account on the instance (admin)",
+    responses(
+        (status = 200, description = "All accounts.", body = UserListResponse),
+    )
+)]
 pub async fn list_users(State(state): State<AppState>, _admin: AdminContext) -> Response {
     match users::list_users(&state.pool).await {
         Ok(users) => {
@@ -225,6 +262,21 @@ pub async fn list_users(State(state): State<AppState>, _admin: AdminContext) -> 
     }
 }
 
+#[utoipa::path(
+    patch,
+    path = "/api/v1/users/{id}",
+    tag = "accounts",
+    operation_id = "change_role",
+    summary = "Change an account's role (admin)",
+    params(("id" = String, Path, description = "The account id.")),
+    request_body = ChangeRoleRequest,
+    responses(
+        (status = 200, description = "Changed.", body = UserResponse),
+        (status = 400, description = "`invalid_role`.", body = crate::error::ErrorBody),
+        (status = 404, description = "`not_found`.", body = crate::error::ErrorBody),
+        (status = 409, description = "`last_admin_protected`.", body = crate::error::ErrorBody),
+    )
+)]
 pub async fn change_role(
     State(state): State<AppState>,
     admin: AdminContext,
@@ -264,6 +316,19 @@ pub async fn change_role(
     }
 }
 
+#[utoipa::path(
+    delete,
+    path = "/api/v1/users/{id}",
+    tag = "accounts",
+    operation_id = "delete_user",
+    summary = "Delete an account and everything it owns (admin)",
+    params(("id" = String, Path, description = "The account id.")),
+    responses(
+        (status = 204, description = "Deleted."),
+        (status = 404, description = "`not_found`.", body = crate::error::ErrorBody),
+        (status = 409, description = "`last_admin_protected`.", body = crate::error::ErrorBody),
+    )
+)]
 pub async fn delete_user(
     State(state): State<AppState>,
     admin: AdminContext,
