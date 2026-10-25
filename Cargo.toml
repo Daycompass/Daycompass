@@ -87,3 +87,7 @@ serde_json = { version = "~1.0" }
 # response body. Already in the graph via axum; no default features
 # needed for it.
 futures-util = { version = "~0.3", default-features = false }
+# OpenAPI description of the HTTP API, derived from the handlers at
+# compile time and committed as docs/openapi.json. Never served at
+# runtime - see crate::openapi.
+utoipa = { version = "~6.0" }
