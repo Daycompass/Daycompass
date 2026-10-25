@@ -4,12 +4,17 @@
 //! `events` table**, and `tests/no_event_reads.rs` fails the build if
 //! that stops being true.
 //!
-//! The insert ingest uses, and the owner's own reads: M3's windowed
-//! read and daily totals, and M4's export pages. Every read is joined
-//! against `devices` to prove ownership in the `WHERE` clause rather
-//! than trusting a caller-supplied id. There is still no statement here
-//! for anyone else: an admin manages accounts and devices and must
-//! never reach event data, full stop.
+//! The insert ingest uses, the owner's own reads - M3's windowed read
+//! and daily totals, and M4's export pages - and M4's retention delete.
+//! Every read is joined against `devices` to prove ownership in the
+//! `WHERE` clause rather than trusting a caller-supplied id. There is
+//! still no statement here for anyone else: an admin manages accounts
+//! and devices and must never reach event data, full stop.
+//!
+//! The retention delete is the one statement that is not scoped to an
+//! account, because it is not on anybody's behalf: it removes rows by
+//! age, across the instance, returns nothing but a count, and is only
+//! ever run by the background sweep - never from a request.
 //!
 //! # Why `ON CONFLICT ... DO NOTHING` and not `INSERT OR IGNORE`
 //!
@@ -233,6 +238,30 @@ pub async fn select_own_page_after(
         };
 
     rows.iter().map(queried_event_from_row).collect()
+}
+
+/// Deletes at most `limit` events whose `start_ts` is before `cutoff`,
+/// across every account, and returns how many it deleted.
+///
+/// Bounded so that one call holds SQLite's write lock only briefly; the
+/// caller loops until a call deletes fewer than `limit`. Which rows go
+/// first within one call does not matter - every one of them is past
+/// the cutoff - so the inner `SELECT` has no `ORDER BY` and walks
+/// `events_start_ts_idx` (migration `0006`) from the oldest.
+pub async fn delete_started_before(
+    pool: &SqlitePool,
+    cutoff: i64,
+    limit: i64,
+) -> Result<u64, StoreError> {
+    let result = sqlx::query(
+        "DELETE FROM events
+         WHERE id IN (SELECT id FROM events WHERE start_ts < ?1 LIMIT ?2)",
+    )
+    .bind(cutoff)
+    .bind(limit)
+    .execute(pool)
+    .await?;
+    Ok(result.rows_affected())
 }
 
 /// One (UTC calendar day, `app_id`, `domain`) group's summed
