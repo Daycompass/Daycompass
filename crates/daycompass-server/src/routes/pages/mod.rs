@@ -95,6 +95,29 @@ pub fn render<T: Template>(template: &T) -> Response {
     }
 }
 
+/// Renders `template` as the answer to a successful htmx write.
+///
+/// The same as [`render`], plus an out-of-band swap that empties the
+/// layout's `#dc-flash`: an error banner from an earlier attempt would
+/// otherwise stay on screen above a write that has since succeeded.
+/// Only for fragments - a full page has its own, empty flash area.
+pub fn render_fragment<T: Template>(template: &T) -> Response {
+    match template.render() {
+        Ok(mut html) => {
+            html.push_str(FLASH_CLEAR);
+            Html(html).into_response()
+        }
+        Err(err) => {
+            tracing::error!(error = %err, "rendering a template failed");
+            ApiError::of(ErrorKind::InternalError).into_response()
+        }
+    }
+}
+
+/// An empty `#dc-flash`, swapped in by id wherever htmx finds it.
+const FLASH_CLEAR: &str =
+    r#"<div id="dc-flash" class="dc-flash" aria-live="polite" hx-swap-oob="true"></div>"#;
+
 /// A redirect for after a successful form post: `HX-Redirect` for htmx,
 /// a 303 for a plain form.
 pub fn redirect_after_post(headers: &HeaderMap, to: &'static str) -> Response {

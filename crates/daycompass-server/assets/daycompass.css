@@ -247,6 +247,12 @@ h1, h2, h3 { margin: 0; }
 .dc-banner { display: flex; gap: var(--space-3); align-items: flex-start; padding: var(--space-4); border-radius: var(--radius-lg); font: 600 15px/22px var(--font-ui); color: var(--text); border: 2px solid transparent; }
 .dc-banner svg { width: var(--icon-md); height: var(--icon-md); flex: none; }
 .dc-banner b { display: block; font-weight: 800; }
+/* Error messages come from the API as sentence fragments ("a rule with
+   this kind and pattern already exists"). The design system writes
+   sentence case, so the first letter is raised here rather than by
+   changing the API's text, which clients may already display. */
+.dc-message { display: block; }
+.dc-message::first-letter { text-transform: uppercase; }
 .dc-banner--info { background: var(--info-soft); border-color: var(--info); } .dc-banner--info svg { color: var(--info); }
 .dc-banner--success { background: var(--success-soft); border-color: var(--success); } .dc-banner--success svg { color: var(--success); }
 .dc-banner--warning { background: var(--warning-soft); border-color: var(--warning); } .dc-banner--warning svg { color: var(--warning); }
@@ -268,7 +274,7 @@ h1, h2, h3 { margin: 0; }
 
 /* ---------- Sidebar (desktop) ---------- */
 .dc-side { width: var(--sidebar-width); background: var(--surface); border-right: 2px solid var(--border); padding: var(--space-4); display: flex; flex-direction: column; gap: var(--space-1); }
-.dc-side__brand { display: flex; align-items: center; gap: var(--space-2); padding: var(--space-2) var(--space-3) var(--space-5); font: 700 22px/1 var(--font-display); color: var(--text); }
+.dc-side__brand { text-decoration: none; display: flex; align-items: center; gap: var(--space-2); padding: var(--space-2) var(--space-3) var(--space-5); font: 700 22px/1 var(--font-display); color: var(--text); }
 .dc-side__item { display: flex; align-items: center; gap: var(--space-3); height: var(--control-md); padding: 0 var(--space-3); border-radius: var(--radius-md); font: 700 15px/20px var(--font-ui); color: var(--text-muted); text-decoration: none; background: none; border: 0; cursor: pointer; width: 100%; text-align: left; }
 .dc-side__item svg { width: var(--icon-sm); height: var(--icon-sm); }
 .dc-side__item:hover { background: var(--surface-sunken); color: var(--text); }

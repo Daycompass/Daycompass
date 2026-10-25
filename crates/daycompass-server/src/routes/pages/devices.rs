@@ -13,7 +13,7 @@ use axum::response::{IntoResponse, Response};
 use axum::Form;
 use serde::Deserialize;
 
-use super::{format_utc, render, Shell};
+use super::{format_utc, render, render_fragment, Shell};
 use crate::auth::time::UnixTime;
 use crate::devices::service;
 use crate::devices::store::{DeviceRecord, Scope};
@@ -92,7 +92,7 @@ pub async fn page(State(state): State<AppState>, session: SessionContext) -> Res
 /// The re-rendered list, after a write that succeeded.
 async fn list_fragment(state: &AppState, session: &SessionContext) -> Response {
     match own_list(state, session).await {
-        Ok(list) => render(&list),
+        Ok(list) => render_fragment(&list),
         Err(error) => error.into_response(),
     }
 }
@@ -145,7 +145,7 @@ pub async fn create_pairing_code(
         // The one place besides the JSON route that the plaintext leaves
         // the server: in this response, to the account that owns it,
         // which is `no-store` like every page.
-        Ok(created) => render(&PairingCodeView {
+        Ok(created) => render_fragment(&PairingCodeView {
             code: created.code.display().expose().to_owned(),
             expires: format_utc(created.expires_at.as_secs()),
         }),
