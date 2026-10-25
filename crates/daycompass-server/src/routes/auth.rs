@@ -280,6 +280,34 @@ pub async fn change_password(
     session_context: SessionContext,
     Json(request): Json<ChangePasswordRequest>,
 ) -> Response {
+    match attempt_password_change(
+        &state,
+        &session_context,
+        request.current_password,
+        request.new_password,
+    )
+    .await
+    {
+        Ok(other_sessions_ended) => (
+            StatusCode::OK,
+            Json(PasswordChangeResponse {
+                other_sessions_ended,
+            }),
+        )
+            .into_response(),
+        Err(error) => error.into_response(),
+    }
+}
+
+/// Changes the caller's own password and returns how many *other*
+/// sessions were ended. Shared with the dashboard's account page, which
+/// is limited by the same per-session bucket, so both refuse alike.
+pub(super) async fn attempt_password_change(
+    state: &AppState,
+    session_context: &SessionContext,
+    current_password: SecretString,
+    new_password: SecretString,
+) -> Result<u64, ApiError> {
     let auth = session_context.auth();
 
     let result = users::change_own_password(
@@ -287,52 +315,41 @@ pub async fn change_password(
         &state.hasher,
         &auth.user.id,
         &auth.session.id,
-        request.current_password,
-        request.new_password,
+        current_password,
+        new_password,
         UnixTime::now(),
     )
     .await;
 
     match result {
-        Ok(report) => (
-            StatusCode::OK,
-            Json(PasswordChangeResponse {
-                other_sessions_ended: report.other_sessions_ended,
-            }),
-        )
-            .into_response(),
+        Ok(report) => Ok(report.other_sessions_ended),
 
         Err(PasswordChangeError::CurrentPasswordInvalid) => {
             // No username, no password, no indication of which account
             // in the message - only the id, and only in the log.
             tracing::info!(user_id = %auth.user.id, "password change refused");
-            ApiError::of(ErrorKind::CurrentPasswordInvalid).into_response()
+            Err(ApiError::of(ErrorKind::CurrentPasswordInvalid))
         }
 
-        Err(PasswordChangeError::InvalidNewPassword(reason)) => ApiError::of(match reason {
+        Err(PasswordChangeError::InvalidNewPassword(reason)) => Err(ApiError::of(match reason {
             PasswordPolicyError::Blank => ErrorKind::PasswordBlank,
             PasswordPolicyError::Length => ErrorKind::PasswordLength,
-        })
-        .into_response(),
+        })),
 
-        Err(PasswordChangeError::Conflict) => {
-            ApiError::of(ErrorKind::PasswordChangeConflict).into_response()
-        }
+        Err(PasswordChangeError::Conflict) => Err(ApiError::of(ErrorKind::PasswordChangeConflict)),
 
         // The account was deleted between the session being resolved
         // and the change being applied. The caller is no longer
         // authenticated by anything.
-        Err(PasswordChangeError::AccountGone) => {
-            ApiError::of(ErrorKind::Unauthenticated).into_response()
-        }
+        Err(PasswordChangeError::AccountGone) => Err(ApiError::of(ErrorKind::Unauthenticated)),
 
-        Err(PasswordChangeError::Hash(HashError::Busy)) => ApiError::of(ErrorKind::ServerBusy)
-            .retry_after(state.hasher.wait_timeout())
-            .into_response(),
+        Err(PasswordChangeError::Hash(HashError::Busy)) => {
+            Err(ApiError::of(ErrorKind::ServerBusy).retry_after(state.hasher.wait_timeout()))
+        }
 
         Err(err) => {
             tracing::error!(error = %err, "changing a password failed");
-            ApiError::of(ErrorKind::InternalError).into_response()
+            Err(ApiError::of(ErrorKind::InternalError))
         }
     }
 }

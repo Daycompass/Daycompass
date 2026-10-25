@@ -64,7 +64,7 @@ pub async fn page(State(state): State<AppState>, session: SessionContext) -> Res
 
     let summary = Summary::of(&days, today_start);
     render(&OverviewPage {
-        shell: Shell::for_session(auth),
+        shell: Shell::for_session(auth, "overview"),
         today: format_duration(summary.today_secs),
         week: format_duration(summary.week_secs),
         categories: summary.rows(),

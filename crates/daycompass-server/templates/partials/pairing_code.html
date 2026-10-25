@@ -1,0 +1,2 @@
+{% import "macros.html" as icons -%}
+<div class="dc-banner dc-banner--success" role="status">{% call icons::icon("check") %}{% endcall %}<div><b>Your pairing code</b><span class="dc-code">{{ code }}</span>Enter it in the app before {{ expires }}. It works once.</div></div>

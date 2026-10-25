@@ -12,7 +12,7 @@
 <div class="dc-app">
   <nav class="dc-side dc-app__side" aria-label="Main">
     <a class="dc-side__brand" href="/">{% include "partials/mark.html" %}daycompass</a>
-    <a class="dc-side__item" href="/" aria-current="page">{% call icons::icon("today") %}{% endcall %}Overview</a>
+    {% let item_class = "dc-side__item" %}{% include "partials/nav_items.html" %}
     <div class="dc-side__foot">
       <span class="dc-side__who">Logged in as {{ shell.username }}</span>
       <button class="dc-side__item" type="button" hx-post="/logout">{% call icons::icon("close") %}{% endcall %}Log out</button>
@@ -23,8 +23,9 @@
     {% block content %}{% endblock %}
   </main>
   <nav class="dc-nav dc-app__nav" aria-label="Main">
-    <a class="dc-nav__item" href="/" aria-current="page">{% call icons::icon("today") %}{% endcall %}Overview</a>
-    <button class="dc-nav__item" type="button" hx-post="/logout">{% call icons::icon("close") %}{% endcall %}Log out</button>
+    {#- Four destinations at most, so on a phone logging out lives on the
+        account page instead of in this bar. #}
+    {% let item_class = "dc-nav__item" %}{% include "partials/nav_items.html" %}
   </nav>
 </div>
 </body>

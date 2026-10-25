@@ -172,7 +172,8 @@ pub async fn delete_own(
     }
 }
 
-fn create_error(err: CreateRuleError) -> ApiError {
+/// Shared with the dashboard's category page, so both answer alike.
+pub(super) fn create_error(err: CreateRuleError) -> ApiError {
     match err {
         CreateRuleError::UnknownKind => ApiError::of(ErrorKind::CategoryRuleKindUnknown),
         CreateRuleError::InvalidPattern(reason) => ApiError::of(match reason {

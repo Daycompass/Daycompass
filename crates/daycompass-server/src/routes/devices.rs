@@ -243,7 +243,8 @@ fn revoke_response(result: Result<service::RevokeReport, DeviceActionError>) -> 
     }
 }
 
-fn action_error(err: DeviceActionError) -> ApiError {
+/// Shared with the dashboard's device page, so both answer alike.
+pub(super) fn action_error(err: DeviceActionError) -> ApiError {
     match err {
         // One answer for "no such device" and "not yours". An owner
         // must not be able to probe which device ids exist on other

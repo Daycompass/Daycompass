@@ -313,3 +313,18 @@ h1, h2, h3 { margin: 0; }
 .dc-solo { min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: var(--space-8) var(--space-4); }
 .dc-solo__card { width: 100%; max-width: 400px; }
 .dc-solo__brand { display: flex; align-items: center; justify-content: center; gap: var(--space-2); margin-bottom: var(--space-6); font: 700 28px/1 var(--font-display); }
+
+/* ---------- Lists (devices, rules, account log) ---------- */
+.dc-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.dc-list__row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--space-3); padding: var(--space-3) 0; border-top: 2px solid var(--border); }
+.dc-list__row:first-child { border-top: 0; padding-top: 0; }
+.dc-list__main { display: flex; flex-direction: column; gap: var(--space-1); min-width: 0; }
+.dc-list__title { font: 800 16px/24px var(--font-ui); overflow-wrap: anywhere; }
+.dc-list__actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
+.dc-list__actions .dc-btn { margin-bottom: var(--edge-depth); }
+.dc-inline-form { display: flex; flex-wrap: wrap; gap: var(--space-2); align-items: center; }
+.dc-field__input--sm { height: var(--control-sm); width: 14rem; max-width: 100%; }
+select.dc-field__input { -webkit-appearance: none; appearance: none; cursor: pointer; }
+.dc-tag { align-self: flex-start; font: 700 13px/18px var(--font-ui); padding: 2px var(--space-2); border-radius: var(--radius-sm); }
+.dc-tag--muted { background: var(--surface-sunken); color: var(--text-muted); }
+.dc-code { display: block; margin: var(--space-2) 0; font: 600 28px/32px var(--font-display); font-variant-numeric: tabular-nums; letter-spacing: 0.08em; overflow-wrap: anywhere; }
