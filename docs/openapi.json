@@ -484,6 +484,7 @@
                   "invalid_role",
                   "invalid_setup_token",
                   "invalid_stats_range",
+                  "invalid_timezone",
                   "invalid_username",
                   "last_admin_protected",
                   "method_not_allowed",
@@ -967,6 +968,19 @@
         ],
         "type": "object"
       },
+      "SetTimeZoneRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "timezone": {
+            "description": "An IANA name such as `Europe/Berlin`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "timezone"
+        ],
+        "type": "object"
+      },
       "SetupRequest": {
         "properties": {
           "password": {
@@ -1011,6 +1025,18 @@
         },
         "required": [
           "days"
+        ],
+        "type": "object"
+      },
+      "TimeZoneResponse": {
+        "properties": {
+          "timezone": {
+            "description": "An IANA name such as `Europe/Berlin`; `UTC` until one is set.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "timezone"
         ],
         "type": "object"
       },
@@ -1160,6 +1186,127 @@
           }
         ],
         "summary": "Your own account log, newest 200 first",
+        "tags": [
+          "accounts"
+        ]
+      }
+    },
+    "/api/v1/account/timezone": {
+      "get": {
+        "operationId": "account_timezone",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TimeZoneResponse"
+                }
+              }
+            },
+            "description": "The time zone."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "`unauthenticated`: no valid session."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Any other error, in the uniform shape. See the conventions in docs/wire-format.md."
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ],
+        "summary": "Your account's time zone",
+        "tags": [
+          "accounts"
+        ]
+      },
+      "patch": {
+        "operationId": "set_account_timezone",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetTimeZoneRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TimeZoneResponse"
+                }
+              }
+            },
+            "description": "The time zone, as stored."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "`invalid_timezone`."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "`unauthenticated`: no valid session."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "`csrf_token_missing` / `csrf_token_invalid`, or `origin_mismatch` (a present `Origin` names another site)"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Any other error, in the uniform shape. See the conventions in docs/wire-format.md."
+          }
+        },
+        "security": [
+          {
+            "csrf_token": [],
+            "session_cookie": []
+          }
+        ],
+        "summary": "Set your account's time zone",
         "tags": [
           "accounts"
         ]
@@ -2693,6 +2840,15 @@
               "format": "int64",
               "type": "integer"
             }
+          },
+          {
+            "description": "Where a day starts: `utc` (the default) or `account`, the time\nzone set with `PATCH /api/v1/account/timezone`.",
+            "in": "query",
+            "name": "day_boundary",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/DayBoundary"
+            }
           }
         ],
         "responses": {
@@ -2742,7 +2898,7 @@
             "session_cookie": []
           }
         ],
-        "summary": "Your screen time per UTC day and category, at most 366 days",
+        "summary": "Your screen time per day and category, at most 366 days",
         "tags": [
           "events"
         ]

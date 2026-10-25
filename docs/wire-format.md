@@ -522,6 +522,50 @@ either. An `invite_redeemed` entry never says who redeemed it.
 
 Newest first, capped at the 200 most recent entries.
 
+<!-- route: GET /api/v1/account/timezone -->
+### `GET /api/v1/account/timezone`
+
+Session auth, no CSRF (a `GET`). The caller's own time zone. No id
+parameter and no admin variant.
+
+**`200 OK`:**
+
+```json
+{ "timezone": "Europe/Berlin" }
+```
+
+An IANA name. `UTC` until one is set, which is also what every account
+had before this endpoint existed.
+
+<!-- route: PATCH /api/v1/account/timezone -->
+### `PATCH /api/v1/account/timezone`
+
+Session auth, CSRF required. Sets the caller's own time zone.
+
+```json
+{ "timezone": "Europe/Berlin" }
+```
+
+The name must be one the server's built-in time zone database knows,
+an IANA name such as `Europe/Berlin` or `America/New_York`; matching
+ignores case and the answer carries the database's own spelling.
+POSIX strings such as `EST5EDT,M3.2.0,M11.1.0` and fixed offsets are
+not accepted.
+
+The zone only decides where a day starts and ends when stats are read
+with [`day_boundary=account`](#get-apiv1stats) and on the dashboard.
+Events keep their UTC timestamps, so changing it loses nothing and
+re-draws the day boundaries of the whole history.
+
+**`200 OK`:** the stored zone, same shape as `GET` above.
+
+**Failures:**
+
+| Status | Code | Meaning |
+| --- | --- | --- |
+| 400 | `invalid_timezone` | Not a name in the time zone database. |
+| 400 | `bad_request` | The body is not JSON, `timezone` is missing, or another field was sent. |
+
 ---
 
 ## Pairing
@@ -972,7 +1016,7 @@ page token.
 
 | Status | Code | Meaning |
 | --- | --- | --- |
-| 400 | `bad_request` | `start_ts` or `end_ts` missing, not a number, or an unknown query parameter was sent. |
+| 400 | `bad_request` | `start_ts` or `end_ts` missing, not a number, `day_boundary` not one of its two values, or an unknown query parameter was sent. |
 | 400 | `invalid_event_range` | `end_ts` is not strictly after `start_ts`, **or** the span between them is wider than this server allows in one request. |
 | 401 | `unauthenticated` | No session. A device's bearer token does not substitute for one — this route does not accept it. |
 
@@ -1085,16 +1129,19 @@ No request body.
 ### `GET /api/v1/stats`
 
 Session auth, no CSRF (a `GET`). The caller's own screen time, across
-every device it owns, summed per UTC calendar day and
-[category](#category-rules-session-auth). There is no admin variant
+every device it owns, summed per calendar day and
+[category](#category-rules-session-auth). Days are UTC days unless
+`day_boundary=account` asks for the account's own
+[time zone](#patch-apiv1accounttimezone). There is no admin variant
 and no id parameter — same reasoning as `GET /api/v1/events`.
 
-**Query parameters, both required:**
+**Query parameters:**
 
 | Parameter | Meaning |
 | --- | --- |
-| `start_ts` | Inclusive start of the window, Unix seconds. |
-| `end_ts` | Exclusive end of the window, Unix seconds. |
+| `start_ts` | Required. Inclusive start of the window, Unix seconds. |
+| `end_ts` | Required. Exclusive end of the window, Unix seconds. |
+| `day_boundary` | Optional, `utc` (the default) or `account`. With `account` a day runs from local midnight to local midnight in the account's time zone, so `day_start_ts` is that midnight, and a day on which the clocks change is 23 or 25 hours long. |
 
 The window is `[start_ts, end_ts)`, same convention as
 [`GET /api/v1/events`](#get-apiv1events), but wider: up to 366 days in
@@ -1131,8 +1178,8 @@ at all, there is no zero-filled row. Ordered `day_start_ts` ascending,
 then `category` ascending with the no-category entry last within its
 day.
 
-An event's whole duration counts toward the UTC calendar day its own
-`start_ts` falls in, even one that runs past midnight — it is not
+An event's whole duration counts toward the calendar day (UTC, or the
+account's zone) its own `start_ts` falls in, even one that runs past midnight — it is not
 split across the boundary. Overlapping events — two devices covering
 the same span, or one device reporting an app and a domain for the
 same span — are summed exactly as reported, the same as

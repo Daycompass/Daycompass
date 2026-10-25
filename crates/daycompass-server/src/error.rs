@@ -196,6 +196,8 @@ pub enum ErrorKind {
     RoleUnknown,
     DeviceNameLength,
     DeviceNameCharset,
+    /// The time zone was not an IANA name the server knows.
+    TimeZoneUnknown,
 }
 
 impl ErrorKind {
@@ -220,7 +222,8 @@ impl ErrorKind {
             | Self::CategoryLabelLength
             | Self::CategoryLabelCharset
             | Self::StatsRangeInverted
-            | Self::StatsRangeTooWide => StatusCode::BAD_REQUEST,
+            | Self::StatsRangeTooWide
+            | Self::TimeZoneUnknown => StatusCode::BAD_REQUEST,
             Self::Unauthorized
             | Self::Unauthenticated
             | Self::InvalidCredentials
@@ -299,6 +302,7 @@ impl ErrorKind {
             Self::CategoryRuleDuplicate => "category_rule_duplicate",
             Self::CategoryRuleLimitReached => "category_rule_limit_reached",
             Self::StatsRangeInverted | Self::StatsRangeTooWide => "invalid_stats_range",
+            Self::TimeZoneUnknown => "invalid_timezone",
         }
     }
 
@@ -387,6 +391,7 @@ impl ErrorKind {
             Self::StatsRangeTooWide => {
                 "the time range between start_ts and end_ts is wider than this server allows in one request"
             }
+            Self::TimeZoneUnknown => "the time zone must be an IANA name such as Europe/Berlin",
         }
     }
 }
@@ -444,6 +449,7 @@ pub(crate) const ALL_ERROR_KINDS: &[ErrorKind] = &[
     ErrorKind::CategoryRuleLimitReached,
     ErrorKind::StatsRangeInverted,
     ErrorKind::StatsRangeTooWide,
+    ErrorKind::TimeZoneUnknown,
 ];
 
 /// Compile-time proof that every code and message is a constant.

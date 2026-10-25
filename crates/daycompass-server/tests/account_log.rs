@@ -26,8 +26,14 @@ const ACCOUNT_LOG_READS: &[(&str, &str)] = &[("GET", "/api/v1/account/log"), ("G
 /// Routes whose path says "account" but which do not read the log. The
 /// dashboard's password change writes a `password_changed` entry the
 /// same way `POST /api/v1/auth/password` does, through the same service
-/// function, and reads nothing back.
-const OTHER_ACCOUNT_ROUTES: &[(&str, &str)] = &[("POST", "/account/password")];
+/// function, and reads nothing back. The time zone routes read and write
+/// one column of `users`, never the log.
+const OTHER_ACCOUNT_ROUTES: &[(&str, &str)] = &[
+    ("POST", "/account/password"),
+    ("GET", "/api/v1/account/timezone"),
+    ("PATCH", "/api/v1/account/timezone"),
+    ("POST", "/account/timezone"),
+];
 
 /// Files permitted to write to `account_log` in SQL. Extend
 /// deliberately, with a reviewer, if a later milestone adds a

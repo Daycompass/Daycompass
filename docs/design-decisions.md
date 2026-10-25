@@ -315,6 +315,11 @@ route.
 - **Not in the wire format.** Dashboard routes answer browsers, not
   clients, so they are neither in `docs/wire-format.md` nor in the
   OpenAPI spec; both tests filter on `Surface::Api`.
-- **Days are UTC.** The overview shows what `GET /api/v1/stats`
-  computes, and that is UTC calendar days. The page says so. A
-  per-account time zone is a separate decision.
+- **Days follow the account's time zone.** The overview counts
+  calendar days of the account's IANA time zone (`users.timezone`,
+  `UTC` by default) and names the zone it used. `GET /api/v1/stats`
+  stays on UTC days unless asked for `day_boundary=account`, so
+  existing clients see no change. Events stay UTC; the zone is applied
+  at query time only. The time zone database is compiled into the
+  binary (jiff), not read from the host. Account log timestamps stay
+  UTC.

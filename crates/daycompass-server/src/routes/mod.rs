@@ -665,6 +665,30 @@ pub const INVENTORY: &[RouteSpec] = &[
         max_body_bytes: None,
         rate_limits: &[],
     },
+    // The account's time zone, read and set by the account alone: no id
+    // parameter and no admin variant. Not a read into events.
+    RouteSpec {
+        method: "GET",
+        path: "/api/v1/account/timezone",
+        surface: Surface::Api,
+        access: Access::Session,
+        origin: OriginRule::Checked,
+        csrf: false,
+        sets_session_cookie: false,
+        max_body_bytes: None,
+        rate_limits: &[],
+    },
+    RouteSpec {
+        method: "PATCH",
+        path: "/api/v1/account/timezone",
+        surface: Surface::Api,
+        access: Access::Session,
+        origin: OriginRule::Checked,
+        csrf: true,
+        sets_session_cookie: false,
+        max_body_bytes: None,
+        rate_limits: &[],
+    },
     // --- devices and pairing ------------------------------------------
     //
     // An owner mints a pairing code from the dashboard, so this is an
@@ -1092,6 +1116,17 @@ pub const INVENTORY: &[RouteSpec] = &[
         max_body_bytes: None,
         rate_limits: &[RateLimit::new(Bucket::PwChange, LimitKey::Session)],
     },
+    RouteSpec {
+        method: "POST",
+        path: "/account/timezone",
+        surface: Surface::Page,
+        access: Access::Session,
+        origin: OriginRule::Required,
+        csrf: true,
+        sets_session_cookie: false,
+        max_body_bytes: None,
+        rate_limits: &[],
+    },
     // First-start setup. 404 once an admin exists, exactly like
     // `POST /api/v1/setup`. The POST authenticates by the setup token in
     // its body, mints no session, and shares the API's per-address
@@ -1261,6 +1296,8 @@ pub fn router(state: AppState) -> Router {
     );
     table.add("POST", "/api/v1/invites/redeem", invites::redeem);
     table.add("GET", "/api/v1/account/log", account::log);
+    table.add("GET", "/api/v1/account/timezone", account::get_timezone);
+    table.add("PATCH", "/api/v1/account/timezone", account::set_timezone);
     table.add("POST", "/api/v1/pairing-codes", pairing::create_code);
     table.add("POST", "/api/v1/pair", pairing::pair_device);
     table.add("POST", "/api/v1/events", events::ingest);
@@ -1301,6 +1338,7 @@ pub fn router(state: AppState) -> Router {
     );
     table.add("GET", "/account", pages::account::page);
     table.add("POST", "/account/password", pages::account::change_password);
+    table.add("POST", "/account/timezone", pages::account::change_timezone);
     table.add("GET", "/setup", pages::onboarding::setup_page);
     table.add("POST", "/setup", pages::onboarding::submit_setup);
     table.add("GET", "/invite", pages::onboarding::invite_page);

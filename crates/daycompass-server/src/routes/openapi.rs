@@ -69,6 +69,8 @@ const DEVICE: &str = "device_token";
         super::users::reset_password,
         super::invites::redeem,
         super::account::log,
+        super::account::get_timezone,
+        super::account::set_timezone,
         super::pairing::create_code,
         super::pairing::pair_device,
         super::events::ingest,
