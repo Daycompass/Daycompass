@@ -1,0 +1,7 @@
+{#- The four destinations, shared by the sidebar and the bottom bar.
+    `item_class` is the component's item class (dc-side__item or
+    dc-nav__item). #}
+<a class="{{ item_class }}" href="/"{% if shell.current == "overview" %} aria-current="page"{% endif %}>{% call icons::icon("today") %}{% endcall %}Overview</a>
+<a class="{{ item_class }}" href="/devices"{% if shell.current == "devices" %} aria-current="page"{% endif %}>{% call icons::icon("devices") %}{% endcall %}Devices</a>
+<a class="{{ item_class }}" href="/category-rules"{% if shell.current == "categories" %} aria-current="page"{% endif %}>{% call icons::icon("goals") %}{% endcall %}Categories</a>
+<a class="{{ item_class }}" href="/account"{% if shell.current == "account" %} aria-current="page"{% endif %}>{% call icons::icon("settings") %}{% endcall %}Account</a>

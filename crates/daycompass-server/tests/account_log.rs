@@ -15,11 +15,19 @@ use axum::http::StatusCode;
 use serde_json::json;
 
 use common::{Credentials, TestApp, TestRequest, GOOD_ORIGIN};
-use daycompass_server::routes::INVENTORY;
+use daycompass_server::routes::{Access, INVENTORY};
 
-/// The only route this server has for reading the account log, and it
-/// is a `GET`.
-const THE_ONLY_ACCOUNT_LOG_ROUTE: (&str, &str) = ("GET", "/api/v1/account/log");
+/// The routes that read the account log: the API's, and - since M5 -
+/// the dashboard's account page, which renders the same
+/// `account_log::list_for_user` for the caller alone. Both are `GET`s.
+/// Extend deliberately, with a reviewer.
+const ACCOUNT_LOG_READS: &[(&str, &str)] = &[("GET", "/api/v1/account/log"), ("GET", "/account")];
+
+/// Routes whose path says "account" but which do not read the log. The
+/// dashboard's password change writes a `password_changed` entry the
+/// same way `POST /api/v1/auth/password` does, through the same service
+/// function, and reads nothing back.
+const OTHER_ACCOUNT_ROUTES: &[(&str, &str)] = &[("POST", "/account/password")];
 
 /// Files permitted to write to `account_log` in SQL. Extend
 /// deliberately, with a reviewer, if a later milestone adds a
@@ -33,14 +41,28 @@ const FILES_ALLOWED_TO_WRITE_ACCOUNT_LOG: &[&str] = &["auth/account_log.rs"];
 const FORBIDDEN_VERBS: &[&str] = &["update account_log", "delete from account_log"];
 
 #[test]
-fn the_inventory_has_exactly_one_account_log_route_and_it_is_a_read() {
-    let touching: Vec<(&str, &str)> = INVENTORY
+fn the_inventory_has_exactly_the_account_log_reads_and_they_are_reads() {
+    let mut touching: Vec<(&str, &str)> = INVENTORY
         .iter()
         .filter(|spec| spec.path.contains("account"))
         .map(|spec| (spec.method, spec.path))
         .collect();
+    touching.sort_unstable();
 
-    assert_eq!(touching, vec![THE_ONLY_ACCOUNT_LOG_ROUTE]);
+    let mut expected: Vec<(&str, &str)> = ACCOUNT_LOG_READS
+        .iter()
+        .chain(OTHER_ACCOUNT_ROUTES)
+        .copied()
+        .collect();
+    expected.sort_unstable();
+    assert_eq!(touching, expected);
+
+    // Every read is a session-scoped GET: no admin variant, no device.
+    for (method, path) in ACCOUNT_LOG_READS {
+        let spec = daycompass_server::routes::spec_for(method, path).expect("in the table");
+        assert_eq!(*method, "GET", "{path}");
+        assert_eq!(spec.access, Access::Session, "{method} {path}");
+    }
 }
 
 /// No source file anywhere may update or delete an `account_log` row.

@@ -1,0 +1,20 @@
+{% extends "layout_app.html" %}
+{% import "macros.html" as icons %}
+{% block title %}Devices{% endblock %}
+{% block content %}
+<header class="dc-page-head">
+  <span class="dc-overline">Devices</span>
+  <h1 class="dc-heading-1">Your devices</h1>
+</header>
+<div class="dc-stack dc-stack--lg">
+  <section class="dc-card dc-stack">
+    <h2 class="dc-heading-3">Pair a new device</h2>
+    <p class="dc-muted">Create a code, then enter it in the Daycompass app on the device. Each code works once and expires after a few minutes.</p>
+    <div id="pairing" class="dc-stack" aria-live="polite"></div>
+    <div>
+      <button class="dc-btn dc-btn--primary" type="button" hx-post="/devices/pairing-code" hx-target="#pairing" hx-disabled-elt="this">{% call icons::icon("plus") %}{% endcall %}<span class="dc-spin" aria-hidden="true"></span>Create code</button>
+    </div>
+  </section>
+  {{ list|safe }}
+</div>
+{% endblock %}

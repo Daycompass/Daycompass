@@ -348,6 +348,19 @@ impl RouteSpec {
             self.path
         );
 
+        // And the converse: every state-changing page route demands it.
+        // Only browsers post to the dashboard, so the absent-Origin
+        // exemption has no caller there - a new page write cannot opt
+        // back into it by being written with `Checked`.
+        assert!(
+            self.surface != Surface::Page
+                || crate::auth::origin::is_safe_method(self.method)
+                || self.origin == OriginRule::Required,
+            "{} {}: a state-changing page route must require an Origin header",
+            self.method,
+            self.path
+        );
+
         // Requiring a CSRF token implies requiring a session: the token
         // is checked against one, so there has to be one. This also
         // refuses it on a device route, which has no session to check
@@ -967,6 +980,118 @@ pub const INVENTORY: &[RouteSpec] = &[
         max_body_bytes: None,
         rate_limits: &[],
     },
+    // The caller's own devices and pairing codes. The same service
+    // functions as `/api/v1/devices*` and `/api/v1/pairing-codes`, always
+    // scoped to the caller, so the device listing carries the same
+    // metadata and no event data - `tests/no_event_reads.rs` sweeps it
+    // with every other GET.
+    RouteSpec {
+        method: "GET",
+        path: "/devices",
+        surface: Surface::Page,
+        access: Access::Session,
+        origin: OriginRule::Checked,
+        csrf: false,
+        sets_session_cookie: false,
+        max_body_bytes: None,
+        rate_limits: &[],
+    },
+    RouteSpec {
+        method: "POST",
+        path: "/devices/pairing-code",
+        surface: Surface::Page,
+        access: Access::Session,
+        origin: OriginRule::Required,
+        csrf: true,
+        sets_session_cookie: false,
+        max_body_bytes: None,
+        rate_limits: &[],
+    },
+    RouteSpec {
+        method: "POST",
+        path: "/devices/{id}/rename",
+        surface: Surface::Page,
+        access: Access::Session,
+        origin: OriginRule::Required,
+        csrf: true,
+        sets_session_cookie: false,
+        max_body_bytes: None,
+        rate_limits: &[],
+    },
+    RouteSpec {
+        method: "POST",
+        path: "/devices/{id}/revoke",
+        surface: Surface::Page,
+        access: Access::Session,
+        origin: OriginRule::Required,
+        csrf: true,
+        sets_session_cookie: false,
+        max_body_bytes: None,
+        rate_limits: &[],
+    },
+    // The caller's own category rules. Same shape as
+    // `/api/v1/category-rules`: no admin variant, no way to name another
+    // account. Deleting is a POST so htmx and a form agree on the method.
+    RouteSpec {
+        method: "GET",
+        path: "/category-rules",
+        surface: Surface::Page,
+        access: Access::Session,
+        origin: OriginRule::Checked,
+        csrf: false,
+        sets_session_cookie: false,
+        max_body_bytes: None,
+        rate_limits: &[],
+    },
+    RouteSpec {
+        method: "POST",
+        path: "/category-rules",
+        surface: Surface::Page,
+        access: Access::Session,
+        origin: OriginRule::Required,
+        csrf: true,
+        sets_session_cookie: false,
+        max_body_bytes: None,
+        rate_limits: &[],
+    },
+    RouteSpec {
+        method: "POST",
+        path: "/category-rules/{id}/delete",
+        surface: Surface::Page,
+        access: Access::Session,
+        origin: OriginRule::Required,
+        csrf: true,
+        sets_session_cookie: false,
+        max_body_bytes: None,
+        rate_limits: &[],
+    },
+    // The caller's own account: password change, account log, and a
+    // link to `GET /api/v1/export` (not a page route of its own).
+    RouteSpec {
+        method: "GET",
+        path: "/account",
+        surface: Surface::Page,
+        access: Access::Session,
+        origin: OriginRule::Checked,
+        csrf: false,
+        sets_session_cookie: false,
+        max_body_bytes: None,
+        rate_limits: &[],
+    },
+    // The same per-session bucket as `POST /api/v1/auth/password`, not a
+    // copy: both go through `auth::attempt_password_change`, and the
+    // limit is counted before the Argon2 semaphore is reached.
+    RouteSpec {
+        method: "POST",
+        path: "/account/password",
+        surface: Surface::Page,
+        access: Access::Session,
+        origin: OriginRule::Required,
+        csrf: true,
+        sets_session_cookie: false,
+        max_body_bytes: None,
+        rate_limits: &[RateLimit::new(Bucket::PwChange, LimitKey::Session)],
+    },
 ];
 
 /// The entry for one method and path, if the inventory has one.
@@ -1023,6 +1148,23 @@ pub fn router(state: AppState) -> Router {
     table.add("POST", "/login", pages::login::submit);
     table.add("POST", "/logout", pages::login::log_out);
     table.add("GET", "/", pages::overview::page);
+    table.add("GET", "/devices", pages::devices::page);
+    table.add(
+        "POST",
+        "/devices/pairing-code",
+        pages::devices::create_pairing_code,
+    );
+    table.add("POST", "/devices/{id}/rename", pages::devices::rename);
+    table.add("POST", "/devices/{id}/revoke", pages::devices::revoke);
+    table.add("GET", "/category-rules", pages::categories::page);
+    table.add("POST", "/category-rules", pages::categories::create);
+    table.add(
+        "POST",
+        "/category-rules/{id}/delete",
+        pages::categories::delete,
+    );
+    table.add("GET", "/account", pages::account::page);
+    table.add("POST", "/account/password", pages::account::change_password);
     table.add(
         "POST",
         "/api/v1/admin/devices/{id}/revoke",
@@ -1393,14 +1535,15 @@ mod tests {
         spec.validate();
     }
 
-    /// Both dashboard writes demand the header; neither may fall back to
-    /// the absent-is-fine rule the API needs for native clients.
+    /// No dashboard write may fall back to the absent-is-fine rule the
+    /// API needs for native clients.
     #[test]
-    fn the_dashboard_writes_require_an_origin() {
-        for (method, path) in [("POST", "/login"), ("POST", "/logout")] {
-            let spec = spec_for(method, path).expect("in the table");
-            assert_eq!(spec.origin, OriginRule::Required, "{method} {path}");
-        }
+    #[should_panic(expected = "a state-changing page route must require an Origin header")]
+    fn a_page_write_may_not_settle_for_checked() {
+        let mut spec = spec_with(Access::Session, true, &[]);
+        spec.surface = Surface::Page;
+        spec.path = "/probe";
+        spec.validate();
     }
 
     #[test]

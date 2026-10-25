@@ -72,14 +72,19 @@ pub async fn create_code(State(state): State<AppState>, session: SessionContext)
             )
                 .into_response()
         }
+        Err(err) => create_code_error(err).into_response(),
+    }
+}
+
+/// Shared with the dashboard's device page, so both answer alike.
+pub(super) fn create_code_error(err: CreateCodeError) -> ApiError {
+    match err {
         // The caller owns these codes and can see their own, so being
         // told the cap is reached is useful rather than leaky.
-        Err(CreateCodeError::TooManyActive) => {
-            ApiError::of(ErrorKind::PairingCodeLimitReached).into_response()
-        }
-        Err(err @ (CreateCodeError::Rng(_) | CreateCodeError::Store(_))) => {
+        CreateCodeError::TooManyActive => ApiError::of(ErrorKind::PairingCodeLimitReached),
+        err @ (CreateCodeError::Rng(_) | CreateCodeError::Store(_)) => {
             tracing::error!(error = %err, "creating a pairing code failed");
-            ApiError::of(ErrorKind::InternalError).into_response()
+            ApiError::of(ErrorKind::InternalError)
         }
     }
 }

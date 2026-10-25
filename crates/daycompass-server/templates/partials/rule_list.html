@@ -1,0 +1,21 @@
+{#- Swapped in whole after every add or delete. #}
+<section id="rules" class="dc-card dc-stack">
+  <h2 class="dc-heading-3">Your rules</h2>
+  {% if rules.is_empty() %}
+  <p class="dc-muted">No rules yet. Everything shows up as Uncategorized until you add one.</p>
+  {% else %}
+  <ul class="dc-list">
+    {% for rule in rules %}
+    <li class="dc-list__row">
+      <div class="dc-list__main">
+        <span class="dc-list__title">{{ rule.category }}</span>
+        <span class="dc-caption">{{ rule.kind }}: {{ rule.pattern }}</span>
+      </div>
+      <div class="dc-list__actions">
+        <button class="dc-btn dc-btn--ghost dc-btn--sm" type="button" hx-post="/category-rules/{{ rule.id }}/delete" hx-target="#rules" hx-swap="outerHTML" hx-confirm="Delete the rule for {{ rule.pattern }}?">Delete</button>
+      </div>
+    </li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+</section>

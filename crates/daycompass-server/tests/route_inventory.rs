@@ -177,7 +177,7 @@ impl Fixture {
         if let Some(body) = self.body_for(spec, caller, target_id).await {
             request = request.json(body);
         }
-        if let Some(fields) = self.form_for(spec) {
+        if let Some(fields) = self.form_for(spec, caller) {
             request = request.form(&borrowed(&fields));
         }
 
@@ -186,11 +186,29 @@ impl Fixture {
 
     /// A form body for the dashboard routes that take one, valid in the
     /// same sense as [`Self::body_for`]'s JSON bodies.
-    fn form_for(&self, spec: &RouteSpec) -> Option<Vec<(&'static str, String)>> {
+    fn form_for(&self, spec: &RouteSpec, caller: Caller) -> Option<Vec<(&'static str, String)>> {
         match (spec.method, spec.path) {
             ("POST", "/login") => Some(vec![
                 ("username", self.admin_credentials.username.clone()),
                 ("password", self.admin_credentials.password.clone()),
+            ]),
+            ("POST", "/devices/{id}/rename") => Some(vec![("name", "renamed".to_owned())]),
+            // A fresh pattern every call, so a second caller is not
+            // refused as a duplicate.
+            ("POST", "/category-rules") => Some(vec![
+                ("kind", "app_id".to_owned()),
+                (
+                    "pattern",
+                    format!(
+                        "org.example.form-{}",
+                        common::random_secret()[..8].to_ascii_lowercase()
+                    ),
+                ),
+                ("category", "Probe".to_owned()),
+            ]),
+            ("POST", "/account/password") => Some(vec![
+                ("current_password", self.password_of(caller)),
+                ("new_password", common::random_secret()),
             ]),
             _ => None,
         }
@@ -671,7 +689,7 @@ async fn the_origin_check_follows_the_inventory() {
         if let Some(body) = fixture.body_for(spec, caller, &target).await {
             request = request.json(body);
         }
-        if let Some(fields) = fixture.form_for(spec) {
+        if let Some(fields) = fixture.form_for(spec, caller) {
             request = request.form(&borrowed(&fields));
         }
         let response = fixture.app.send(request).await;
@@ -716,7 +734,7 @@ async fn a_required_origin_refuses_an_absent_header() {
         if let Some(body) = fixture.body_for(spec, caller, &target).await {
             request = request.json(body);
         }
-        if let Some(fields) = fixture.form_for(spec) {
+        if let Some(fields) = fixture.form_for(spec, caller) {
             request = request.form(&borrowed(&fields));
         }
         let response = fixture.app.send(request).await;

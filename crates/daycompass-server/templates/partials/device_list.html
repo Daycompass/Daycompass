@@ -1,0 +1,32 @@
+{% import "macros.html" as icons -%}
+{#- Swapped in whole after every rename or revoke. #}
+<section id="devices" class="dc-card dc-stack">
+  <h2 class="dc-heading-3">Paired devices</h2>
+  {% if devices.is_empty() %}
+  <p class="dc-muted">No devices yet. Pair one above.</p>
+  {% else %}
+  <ul class="dc-list">
+    {% for device in devices %}
+    <li class="dc-list__row">
+      <div class="dc-list__main">
+        <span class="dc-list__title">{{ device.name }}</span>
+        <span class="dc-caption">{{ device.platform }} · paired {{ device.paired }} · last seen {{ device.last_seen }}</span>
+        {% if let Some(revoked) = device.revoked %}
+        <span class="dc-tag dc-tag--muted">Revoked {{ revoked }}</span>
+        {% endif %}
+      </div>
+      {% if device.revoked.is_none() %}
+      <div class="dc-list__actions">
+        <form class="dc-inline-form" method="post" action="/devices/{{ device.id }}/rename" hx-post="/devices/{{ device.id }}/rename" hx-target="#devices" hx-swap="outerHTML">
+          <label class="dc-visually-hidden" for="name-{{ device.id }}">New name for {{ device.name }}</label>
+          <input class="dc-field__input dc-field__input--sm" id="name-{{ device.id }}" name="name" type="text" value="{{ device.name }}" required>
+          <button class="dc-btn dc-btn--neutral dc-btn--sm" type="submit">Rename</button>
+        </form>
+        <button class="dc-btn dc-btn--danger dc-btn--sm" type="button" hx-post="/devices/{{ device.id }}/revoke" hx-target="#devices" hx-swap="outerHTML" hx-confirm="Revoke {{ device.name }}? It stops syncing right away. Its screen time is kept.">Revoke</button>
+      </div>
+      {% endif %}
+    </li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+</section>
