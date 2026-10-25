@@ -97,18 +97,24 @@ const CLEANUP_INTERVAL: std::time::Duration = std::time::Duration::from_secs(60 
 /// since a transient database error must not silently stop cleanup for
 /// the lifetime of the process.
 ///
-/// Two sweeps, not one: [`auth::session::sweep_expired`] owns the auth
-/// tables and [`devices::service::sweep_expired_codes`] owns the
-/// pairing codes. Each is reported separately and a failure in one
-/// does not skip the other, so a problem with one table cannot quietly
-/// stop the other from being collected.
+/// Up to three sweeps, not one: [`auth::session::sweep_expired`] owns
+/// the auth tables, [`devices::service::sweep_expired_codes`] owns the
+/// pairing codes, and - only when `retention` is set -
+/// [`events::retention::sweep`] deletes events past it. Each is
+/// reported separately and a failure in one does not skip the others,
+/// so a problem with one table cannot quietly stop the rest from being
+/// collected.
 ///
 /// Expiry does not depend on this task. A session is checked and
 /// deleted on every request that presents it, and a pairing code's
 /// `expires_at` is compared inside the redemption transaction, so a
 /// code that outlives the sweep is still unusable. This only reclaims
 /// the rows nobody comes back for.
-pub fn spawn_cleanup_task(pool: SqlitePool, policy: auth::session::SessionPolicy) {
+pub fn spawn_cleanup_task(
+    pool: SqlitePool,
+    policy: auth::session::SessionPolicy,
+    retention: Option<events::retention::RetentionPolicy>,
+) {
     tokio::spawn(async move {
         let mut ticker = tokio::time::interval(CLEANUP_INTERVAL);
         loop {
@@ -126,6 +132,14 @@ pub fn spawn_cleanup_task(pool: SqlitePool, policy: auth::session::SessionPolicy
                 Ok(removed) => tracing::info!(removed, "cleaned up dead pairing codes"),
                 Err(err) => {
                     tracing::error!(error = %err, "the pairing code cleanup sweep failed");
+                }
+            }
+
+            if let Some(retention) = retention {
+                match events::retention::sweep(&pool, retention, now).await {
+                    Ok(0) => {}
+                    Ok(removed) => tracing::info!(removed, "deleted events past retention"),
+                    Err(err) => tracing::error!(error = %err, "the event retention sweep failed"),
                 }
             }
         }

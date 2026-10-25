@@ -54,6 +54,7 @@ const VAR_INVITE_TTL: &str = "DAYCOMPASS_INVITE_TTL_SECS";
 const VAR_RATE_LIMIT_INVITE_IP: &str = "DAYCOMPASS_RATE_LIMIT_INVITE_IP";
 const VAR_RATE_LIMIT_INVITE_GLOBAL: &str = "DAYCOMPASS_RATE_LIMIT_INVITE_GLOBAL";
 const VAR_RATE_LIMIT_EXPORT: &str = "DAYCOMPASS_RATE_LIMIT_EXPORT";
+const VAR_RETENTION_DAYS: &str = "DAYCOMPASS_RETENTION_DAYS";
 
 const DEFAULT_BIND_ADDR: &str = "127.0.0.1:8080";
 const DEFAULT_DATA_DIR: &str = "./data";
@@ -221,12 +222,15 @@ const DEFAULT_RATE_LIMIT_INGEST_DEVICE: &str = "30/60";
 /// Three account exports per hour for one session.
 ///
 /// An export reads every event an account has ever reported, which -
-/// until retention exists - is the single most expensive read an
-/// authenticated caller can ask for. A person downloads their data
+/// unbounded unless retention is configured - is the single most
+/// expensive read an authenticated caller can ask for. A person downloads their data
 /// once; a retry after a dropped connection is the second request, and
 /// the third is headroom. The session and not the account, for the
 /// same reason as [`DEFAULT_RATE_LIMIT_PW_CHANGE`].
 const DEFAULT_RATE_LIMIT_EXPORT: &str = "3/3600";
+
+/// Seconds in one day of `DAYCOMPASS_RETENTION_DAYS`.
+const SECS_PER_DAY: u64 = 24 * 60 * 60;
 
 const VALID_LOG_LEVELS: &[&str] = &["error", "warn", "info", "debug", "trace"];
 
@@ -271,6 +275,10 @@ pub struct Config {
     pub rate_limit_invite_global: RateLimitRule,
     /// Account exports per session, per window.
     pub rate_limit_export: RateLimitRule,
+    /// How long events are kept, or `None` to keep them forever - the
+    /// default. Never shorter than [`Self::event_max_age`]. See
+    /// [`crate::events::retention`].
+    pub event_retention: Option<Duration>,
 }
 
 /// Failed to load configuration. Messages name the offending variable but
@@ -618,6 +626,37 @@ impl Config {
         )?;
         let rate_limit_export = rule(source, VAR_RATE_LIMIT_EXPORT, DEFAULT_RATE_LIMIT_EXPORT)?;
 
+        // Off unless set: deleting data is something an operator opts
+        // into, never a default they discover afterwards.
+        let event_retention = match resolve(source, VAR_RETENTION_DAYS)? {
+            None => None,
+            Some(value) => {
+                let days: u64 = value.trim().parse().map_err(|_| ConfigError::Invalid {
+                    var: VAR_RETENTION_DAYS,
+                })?;
+                if days == 0 {
+                    return Err(ConfigError::Invalid {
+                        var: VAR_RETENTION_DAYS,
+                    });
+                }
+                let secs = days.checked_mul(SECS_PER_DAY).ok_or(ConfigError::Invalid {
+                    var: VAR_RETENTION_DAYS,
+                })?;
+                Some(Duration::from_secs(secs))
+            }
+        };
+        if let Some(retention) = event_retention {
+            // A device may upload events up to `event_max_age` old. A
+            // shorter retention would accept an event and delete it at
+            // the next sweep - a sign the operator meant something else.
+            if event_max_age > retention {
+                return Err(ConfigError::OutOfOrder {
+                    var: VAR_EVENT_MAX_AGE,
+                    other: VAR_RETENTION_DAYS,
+                });
+            }
+        }
+
         Ok(Config {
             bind_addr,
             data_dir,
@@ -644,6 +683,7 @@ impl Config {
             rate_limit_invite_ip,
             rate_limit_invite_global,
             rate_limit_export,
+            event_retention,
         })
     }
 }
@@ -682,6 +722,7 @@ impl fmt::Debug for Config {
             .field("rate_limit_invite_ip", &self.rate_limit_invite_ip)
             .field("rate_limit_invite_global", &self.rate_limit_invite_global)
             .field("rate_limit_export", &self.rate_limit_export)
+            .field("event_retention", &self.event_retention)
             .finish()
     }
 }
@@ -1136,6 +1177,10 @@ mod tests {
         assert_eq!(config.rate_limit_export.max, 3);
         assert_eq!(config.rate_limit_export.window, Duration::from_secs(3_600));
         assert_eq!(
+            config.event_retention, None,
+            "nothing is deleted by default"
+        );
+        assert_eq!(
             config.rate_limit_invite_global.window,
             Duration::from_secs(60)
         );
@@ -1307,6 +1352,58 @@ mod tests {
                 "{raw:?} produced {err:?}"
             );
         }
+    }
+
+    // --- retention ----------------------------------------------------
+
+    #[test]
+    fn retention_is_read_in_days() {
+        let env = FakeEnv::default().with(VAR_RETENTION_DAYS, " 365 ");
+        let config = Config::load(&env).expect("a year must be accepted");
+        assert_eq!(
+            config.event_retention,
+            Some(Duration::from_secs(365 * 86_400))
+        );
+    }
+
+    #[test]
+    fn an_invalid_retention_is_rejected() {
+        for raw in ["", "0", "-1", "1.5", "a year", "18446744073709551615"] {
+            let env = FakeEnv::default().with(VAR_RETENTION_DAYS, raw);
+            let err = Config::load(&env).expect_err("an invalid retention must fail");
+            assert!(
+                matches!(err, ConfigError::Invalid { var } if var == VAR_RETENTION_DAYS),
+                "{raw:?} produced {err:?}"
+            );
+        }
+    }
+
+    /// The default ingest window is 90 days, so 89 would delete what a
+    /// device is still allowed to upload.
+    #[test]
+    fn retention_shorter_than_the_ingest_window_is_rejected() {
+        let env = FakeEnv::default().with(VAR_RETENTION_DAYS, "89");
+        let err = Config::load(&env).expect_err("a retention under 90 days must fail");
+        assert!(
+            matches!(
+                err,
+                ConfigError::OutOfOrder { var, other }
+                    if var == VAR_EVENT_MAX_AGE && other == VAR_RETENTION_DAYS
+            ),
+            "{err:?}"
+        );
+
+        let exactly = FakeEnv::default().with(VAR_RETENTION_DAYS, "90");
+        assert!(Config::load(&exactly).is_ok());
+
+        let shorter_window = FakeEnv::default()
+            .with(VAR_RETENTION_DAYS, "30")
+            .with(VAR_EVENT_MAX_AGE, "86400");
+        let config = Config::load(&shorter_window).expect("a shorter window allows less");
+        assert_eq!(
+            config.event_retention,
+            Some(Duration::from_secs(30 * 86_400))
+        );
     }
 
     // --- rate limits --------------------------------------------------
@@ -1548,7 +1645,8 @@ mod tests {
                 "invite_ttl: 259200s, ",
                 "rate_limit_invite_ip: RateLimitRule { max: 100, window: 300s }, ",
                 "rate_limit_invite_global: RateLimitRule { max: 600, window: 60s }, ",
-                "rate_limit_export: RateLimitRule { max: 3, window: 3600s }",
+                "rate_limit_export: RateLimitRule { max: 3, window: 3600s }, ",
+                "event_retention: None",
                 " }",
             )
         );

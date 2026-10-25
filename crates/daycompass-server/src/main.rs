@@ -8,6 +8,7 @@ use std::io::Write;
 use daycompass_server::auth::setup;
 use daycompass_server::auth::time::UnixTime;
 use daycompass_server::config::{self, Config};
+use daycompass_server::events::retention::RetentionPolicy;
 use daycompass_server::state::AppState;
 
 #[tokio::main]
@@ -72,7 +73,10 @@ async fn main() {
         }
     };
 
-    daycompass_server::spawn_cleanup_task(pool, state.session_policy);
+    let retention = config
+        .event_retention
+        .map(|max_age| RetentionPolicy { max_age });
+    daycompass_server::spawn_cleanup_task(pool, state.session_policy, retention);
 
     let app = daycompass_server::build_app(state);
 
