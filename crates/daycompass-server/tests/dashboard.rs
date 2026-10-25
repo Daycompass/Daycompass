@@ -430,3 +430,33 @@ async fn api_errors_stay_json() {
     assert_eq!(response.body["error"]["code"], "unauthenticated");
     assert_eq!(response.header("cache-control"), Some("no-store"));
 }
+
+/// A mistyped link gets the error page; the API's namespace and
+/// `/healthz` keep the JSON 404.
+#[tokio::test]
+async fn an_unknown_path_is_an_html_404_except_under_the_api() {
+    let app = TestApp::new().await;
+
+    for path in [
+        "/no-such-page",
+        "/devices/extra/segments",
+        "/api-docs",
+        "/healthz/extra",
+    ] {
+        let response = app.send(TestRequest::get(path)).await;
+        assert_eq!(response.status, StatusCode::NOT_FOUND, "{path}");
+        assert_eq!(response.error_code(), Some("not_found"), "{path}");
+        assert!(response.text.contains("Back to the overview"), "{path}");
+        assert!(response.body.is_null(), "{path}: HTML, not JSON");
+        assert!(
+            !response.text.contains(path.trim_start_matches('/')),
+            "{path}: the path must not be echoed"
+        );
+    }
+
+    for path in ["/api/v1/no-such-route", "/api"] {
+        let response = app.send(TestRequest::get(path)).await;
+        assert_eq!(response.status, StatusCode::NOT_FOUND, "{path}");
+        assert_eq!(response.body["error"]["code"], "not_found", "{path}");
+    }
+}

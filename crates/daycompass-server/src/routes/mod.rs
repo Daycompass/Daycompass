@@ -1484,7 +1484,11 @@ impl RouteTable {
             );
         }
 
-        self.router.fallback(not_found).with_state(self.state)
+        // A path no route matched: HTML for a browser's mistyped link,
+        // JSON under the API's namespace. The layer sits on the fallback
+        // alone, so it never sees a matched route's responses.
+        let fallback = not_found.layer(axum::middleware::from_fn(pages::render_unknown_path));
+        self.router.fallback(fallback).with_state(self.state)
     }
 }
 
