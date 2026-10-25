@@ -9,6 +9,7 @@
 //! | Every per-event rule, and the closed set of refusal reasons | [`validate`] |
 //! | Batching, idempotency, why one bad event never fails a batch | [`ingest`] |
 //! | The account's own events, bounded by a time window | [`query`] |
+//! | Deleting events past the configured age | [`retention`] |
 //! | Every SQL statement that may name `events`, insert and select alike | [`store`] |
 //!
 //! [`crate::stats`] is a third consumer of this module: it calls
@@ -39,5 +40,6 @@
 
 pub mod ingest;
 pub mod query;
+pub mod retention;
 pub mod store;
 pub mod validate;

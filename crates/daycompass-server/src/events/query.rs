@@ -8,9 +8,9 @@
 //!
 //! # Why a bounded window and a truncation flag, not a cursor
 //!
-//! The account's own history has no retention limit yet (that is M4),
-//! so a window with no cap at all would let one request ask for an
-//! unbounded amount of work. [`MAX_RANGE_SECS`] bounds how wide a
+//! The account's own history has no upper bound unless the operator
+//! configures retention (M4, off by default), so a window with no cap
+//! at all would let one request ask for an unbounded amount of work. [`MAX_RANGE_SECS`] bounds how wide a
 //! single request's time span may be; [`MAX_ROWS`] bounds how many
 //! rows one response carries regardless of how many exist inside that
 //! span, which matters because a wide span across many devices can

@@ -23,6 +23,12 @@ no longer exists.
 ## Conventions
 
 - All timestamps are **integer Unix seconds, UTC**.
+- An instance may be configured to **delete events** whose `start_ts`
+  is older than a number of days (`DAYCOMPASS_RETENTION_DAYS`, off by
+  default, never shorter than the window a device may upload into).
+  Deleted events disappear from every read — `GET /api/v1/events`,
+  `GET /api/v1/stats` and `GET /api/v1/export` — without notice. A
+  client that wants to keep its history exports it.
 - All request and response bodies are `application/json`.
 - Request bodies reject unknown fields, with two exceptions:
   `POST /api/v1/auth/login` and `POST /api/v1/setup` ignore a field

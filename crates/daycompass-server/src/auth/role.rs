@@ -11,8 +11,9 @@ use std::fmt;
 /// What an account is allowed to do.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Role {
-    /// Manages accounts and retention. Cannot read another user's usage
-    /// events or stats.
+    /// Manages accounts and devices. Cannot read another user's usage
+    /// events or stats. Retention is not an admin setting: it is
+    /// env-only, like every other operational limit.
     Admin,
     /// An ordinary account: its own devices, its own data.
     User,

@@ -34,10 +34,14 @@
 //!
 //! # A note for M4
 //!
-//! The source scan in check 2 **is expected to be edited again** when
-//! M4 adds retention deletes. That is the point of it: extending the
-//! allowed list or the allowed verbs is a line in a diff that a
-//! reviewer sees and has to agree with. Deleting the test, or widening
+//! The source scan in check 2 was expected to be edited again when M4
+//! added retention deletes, and was: `delete from events` is now
+//! allowed in `events/store.rs` - exactly one such statement, called
+//! from exactly one place, the background sweep, and never from a
+//! request ([`the_retention_delete_is_reachable_only_from_the_sweep`]).
+//! That is the point of the scan: extending the allowed list or the
+//! allowed verbs is a line in a diff that a reviewer sees and has to
+//! agree with. Deleting the test, or widening
 //! it to "anything under src/", is not the same thing and is not what
 //! it is for. Adding `GET /api/v1/stats` to [`STATS_ROUTES`] below, when
 //! that route shipped, is exactly the kind of deliberate, reviewed
@@ -73,8 +77,8 @@ const EXPORT_ROUTES: &[(&str, &str)] = &[("GET", "/api/v1/export")];
 /// Files permitted to name the `events` table in SQL.
 ///
 /// Extend this deliberately, with a reviewer, when a milestone adds a
-/// legitimate reason - M4's retention deletes. Do not widen the scan
-/// instead.
+/// legitimate reason. M4's retention delete did not need to: it lives
+/// in the same file. Do not widen the scan instead.
 const FILES_ALLOWED_TO_QUERY_EVENTS: &[&str] = &["events/store.rs"];
 
 /// SQL shapes that read, write or delete a named table.
@@ -219,12 +223,63 @@ fn the_scan_finds_the_write_and_the_owner_scoped_read() {
          not merely by an id a caller could supply"
     );
 
-    // Still nothing may update or delete an event. M4 adds retention
-    // deletes, deliberately, with its own review of this test.
-    for verb in ["update events", "delete from events"] {
-        assert!(
-            !normalized.contains(verb),
-            "even the owner's read may not {verb}"
+    // Still nothing may update an event - a stored event is what a
+    // device reported, and stays exactly that.
+    assert!(
+        !normalized.contains("update events"),
+        "nothing may rewrite a stored event"
+    );
+
+    // And exactly one delete, M4's retention sweep, by age alone. It is
+    // deliberately not scoped to an account - it is not on anyone's
+    // behalf - which is why the next test pins where it may be called.
+    assert_eq!(
+        normalized.matches("delete from events").count(),
+        1,
+        "the retention delete must be the only delete of events"
+    );
+    assert!(
+        normalized.contains(
+            "delete from events where id in (select id from events where start_ts < ?1 limit ?2)"
+        ),
+        "the retention delete must select by start_ts alone, nothing a caller could supply"
+    );
+}
+
+/// The one unscoped statement over `events`, the retention delete, is
+/// reachable only from the background sweep - never from a route, and
+/// never with anything but the configured cutoff.
+///
+/// Same textual approach and the same limits as the scan above: it
+/// catches the ordinary mistake of calling either function from a
+/// handler, not a determined attempt to hide the call.
+#[test]
+fn the_retention_delete_is_reachable_only_from_the_sweep() {
+    let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+
+    for (needle, allowed) in [
+        (
+            "delete_started_before",
+            &["events/store.rs", "events/retention.rs"][..],
+        ),
+        // `sweep(` rather than `sweep`: the module and its doc links
+        // mention the word; only a call has the parenthesis.
+        ("retention::sweep(", &["lib.rs"][..]),
+    ] {
+        let mut callers: Vec<String> = Vec::new();
+        for path in rust_sources(&src) {
+            let relative = relative_to(&src, &path);
+            let text = std::fs::read_to_string(&path).expect("a source file must be readable");
+            if normalize(production_part(&text, &relative)).contains(needle) {
+                callers.push(relative);
+            }
+        }
+        callers.sort();
+        let mut expected: Vec<String> = allowed.iter().map(|s| (*s).to_owned()).collect();
+        expected.sort();
+        assert_eq!(
+            callers, expected,
+            "{needle} is referenced outside the background sweep"
         );
     }
 }
