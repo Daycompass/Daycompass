@@ -408,3 +408,60 @@ async fn the_account_page_saves_a_time_zone_and_the_overview_names_it() {
     assert_eq!(bad.status, StatusCode::BAD_REQUEST);
     assert_eq!(bad.error_code(), Some("invalid_timezone"));
 }
+
+/// A category keeps one colour slot on every page, and the stylesheet
+/// defines every slot the server can pick.
+#[tokio::test]
+async fn a_category_has_the_same_colour_in_the_rule_list_and_on_the_overview() {
+    use daycompass_server::categories::palette::{slot_for, SLOTS};
+
+    let app = TestApp::new().await;
+    let (_credentials, admin) = app.provisioned_admin().await;
+    let device = app.pair_device(&admin, "laptop", "linux").await;
+    app.send(
+        TestRequest::post("/api/v1/category-rules")
+            .origin(GOOD_ORIGIN)
+            .authenticated(&admin)
+            .json(json!({ "kind": "app_id", "pattern": "org.example.app", "category": "Study" })),
+    )
+    .await;
+    let me = app
+        .send(TestRequest::get("/api/v1/device/me").authenticated_as_device(&device))
+        .await;
+    let now = me.body["server_time"].as_i64().unwrap();
+    app.send(
+        TestRequest::post("/api/v1/events")
+            .authenticated_as_device(&device)
+            .json(json!({ "events": [{
+                "event_id": format!("{:032x}", 1),
+                "start_ts": now - 60,
+                "duration_secs": 30,
+                "app_id": "org.example.app",
+            }]})),
+    )
+    .await;
+
+    let slot = slot_for("Study");
+    let swatch = format!("dc-swatch--c{slot}");
+    let bar = format!("dc-bar--c{slot}");
+    assert!(page(&app, "/category-rules", &admin)
+        .await
+        .text
+        .contains(&swatch));
+    assert!(page(&app, "/", &admin).await.text.contains(&bar));
+
+    let css = app
+        .send(TestRequest::get("/static/daycompass.css"))
+        .await
+        .text;
+    for i in 0..SLOTS {
+        for needle in [
+            format!("--cat-{i}:"),
+            format!(".dc-bar--c{i} "),
+            format!(".dc-swatch--c{i} "),
+        ] {
+            assert!(css.contains(&needle), "{needle}");
+        }
+    }
+    assert!(!css.contains(&format!("--cat-{SLOTS}:")));
+}

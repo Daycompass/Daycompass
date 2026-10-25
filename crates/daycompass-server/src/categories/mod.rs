@@ -48,6 +48,7 @@
 
 pub mod kind;
 pub mod label;
+pub mod palette;
 pub mod resolve;
 pub mod service;
 pub mod store;

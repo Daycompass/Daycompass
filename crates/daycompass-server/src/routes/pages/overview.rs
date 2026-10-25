@@ -15,6 +15,7 @@ use axum::response::{IntoResponse, Response};
 
 use super::{render, Shell};
 use crate::auth::time::UnixTime;
+use crate::categories::palette;
 use crate::error::{ApiError, ErrorKind};
 use crate::routes::SessionContext;
 use crate::state::AppState;
@@ -47,6 +48,8 @@ struct CategoryRow {
     value: i64,
     max: i64,
     uncategorized: bool,
+    /// The category's colour slot, see `categories::palette`.
+    color: u32,
 }
 
 pub async fn page(State(state): State<AppState>, session: SessionContext) -> Response {
@@ -145,6 +148,7 @@ impl Summary {
                 value: *total,
                 max,
                 uncategorized: name.is_none(),
+                color: name.as_deref().map_or(0, palette::slot_for),
             })
             .collect()
     }
