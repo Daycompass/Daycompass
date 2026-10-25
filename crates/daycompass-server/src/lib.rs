@@ -18,6 +18,7 @@ pub mod middleware;
 pub mod ratelimit;
 pub mod routes;
 pub mod state;
+pub mod stats;
 
 use axum::Router;
 use sqlx::SqlitePool;

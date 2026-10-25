@@ -38,6 +38,7 @@ mod health;
 mod invites;
 mod pairing;
 mod setup;
+mod stats;
 mod users;
 
 use axum::handler::Handler;
@@ -684,6 +685,22 @@ pub const INVENTORY: &[RouteSpec] = &[
         max_body_bytes: None,
         rate_limits: &[],
     },
+    // The owner's own screen time, summed per day and category - M3's
+    // second read into events, built on top of the first and on the
+    // category rules just above. Same shape as `GET /api/v1/events`
+    // for the same reason: session auth, `Origin`-checked, no CSRF, no
+    // admin variant and no id parameter. `tests/no_event_reads.rs` was
+    // deliberately extended to allow this second read.
+    RouteSpec {
+        method: "GET",
+        path: "/api/v1/stats",
+        access: Access::Session,
+        origin: OriginRule::Checked,
+        csrf: false,
+        sets_session_cookie: false,
+        max_body_bytes: None,
+        rate_limits: &[],
+    },
     // Lets a client detect clock skew, which is what makes the
     // validator's future-dating rules diagnosable from the outside.
     RouteSpec {
@@ -802,6 +819,7 @@ pub fn router(state: AppState) -> Router {
         "/api/v1/category-rules/{id}",
         categories::delete_own,
     );
+    table.add("GET", "/api/v1/stats", stats::daily_totals);
     table.add("GET", "/api/v1/device/me", events::device_me);
     table.add("GET", "/api/v1/devices", devices::list_own);
     table.add("PATCH", "/api/v1/devices/{id}", devices::rename_own);
