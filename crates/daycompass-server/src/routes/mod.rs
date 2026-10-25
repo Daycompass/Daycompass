@@ -713,8 +713,8 @@ pub const INVENTORY: &[RouteSpec] = &[
     // deliberately extended to allow it.
     //
     // The only session read with a rate limit of its own: it reads the
-    // account's whole history, which until retention exists is the most
-    // expensive read there is.
+    // account's whole history, which - unbounded unless retention is
+    // configured - is the most expensive read there is.
     RouteSpec {
         method: "GET",
         path: "/api/v1/export",

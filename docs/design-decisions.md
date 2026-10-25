@@ -110,8 +110,8 @@ can still hold more rows than is reasonable to return at once. A
 response that hit the row cap says so with `truncated: true` rather
 than handing back a cursor to resume with.
 
-Retention does not exist yet — that is M4 — so an account's history has
-no upper bound in rows or in age. Without *some* cap, one request could
+Retention is off unless an operator configures it (M4), so an
+account's history has no upper bound in rows or in age by default. Without *some* cap, one request could
 ask the database to do an unbounded amount of work on a single SQLite
 connection shared by the whole instance, which is a cost to everyone
 else's requests, not just the caller's own. A cursor would let a client
@@ -150,8 +150,8 @@ has, every event included, with no window and no row cap — unlike
 `GET /api/v1/events` above, whose bounded window exists precisely so
 one request cannot ask for unbounded work. The export cannot take that
 way out: a download that a client has to stitch together from many
-windowed requests is not an export, and until retention exists (the
-next piece of M4) the history it has to cover is unbounded.
+windowed requests is not an export, and unless an operator configures
+retention (off by default) the history it has to cover is unbounded.
 
 So the bound moves from *what* is read to *how*. The account, devices,
 rules and log are small and read up front. Events follow in keyset
@@ -187,3 +187,40 @@ deliberately extended to allow it as the third owner read, not
 widened. Events are exported without a category — categories are
 assigned at query time, not stored — and the rules are exported
 alongside so the file alone is enough to derive them again.
+
+## Why retention is env-only, off by default, and never shorter than the ingest window
+
+`DAYCOMPASS_RETENTION_DAYS` (`crate::events::retention`) deletes
+events whose own `start_ts` is older than that many days, in the
+existing hourly cleanup sweep. Four choices in it:
+
+- **Env-only, not an admin setting.** Every other operational limit is
+  env-only (`CLAUDE.md`), and a retention an admin could shorten
+  through the API would be a way to destroy every account's history
+  from a dashboard — a much bigger lever than anything else the admin
+  role holds. An operator who can set environment variables can
+  already do anything to the database.
+- **Off by default.** Deleting a person's data is something an operator
+  opts into, not a default they discover afterwards. The export
+  (above) exists so an account can save its history whether or not
+  retention is on.
+- **Never shorter than `DAYCOMPASS_EVENT_MAX_AGE_SECS`.** A device may
+  upload events up to that age; a shorter retention would accept an
+  event and delete it at the next sweep. That combination is refused at
+  startup rather than quietly honoured, the same way a session idle
+  timeout longer than its absolute lifetime is.
+- **Events only, by `start_ts`.** Retention is about how long a record
+  of what somebody did is kept, so a backfilled event is as old as the
+  moment it describes, not as the upload. Accounts, devices, category
+  rules and the account log are not usage data and go only when the
+  account does.
+
+The delete is the one statement over `events` that is not scoped to an
+account, because it is on nobody's behalf. That is why
+`tests/no_event_reads.rs` allows exactly one such statement, selecting
+by `start_ts` alone, and pins that it is reachable only from the
+background sweep, never from a request. It runs in batches of 5,000 so
+one sweep never holds SQLite's write lock long enough for ingest or a
+login to notice, and migration `0006` adds an index on `start_ts` so a
+sweep with nothing to delete costs an index probe, not a table scan.
+

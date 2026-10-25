@@ -8,7 +8,8 @@
 //!
 //! # Why the document is streamed, a page at a time
 //!
-//! Until retention exists an account's history has no upper bound, so
+//! Unless the operator configures retention (off by default), an
+//! account's history has no upper bound, so
 //! building the whole document before sending it would put an unbounded
 //! amount of it in memory at once - on a server whose whole point is to
 //! run in very little. Reading it in one query would instead hold one

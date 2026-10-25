@@ -92,6 +92,14 @@ Both fail loud (process exit 1 / `DbError`), never silently. Each past
 name is one entry in `src/legacy.rs`'s `GENERATIONS`, so the next
 rename adds an entry there rather than touching either check's logic.
 
+## Retention
+
+`DAYCOMPASS_RETENTION_DAYS` (`src/events/retention.rs`): unset by
+default, meaning events are kept forever. When set, the hourly cleanup
+sweep deletes events whose `start_ts` is older than that many days -
+events only, nothing else. Refused at startup if shorter than
+`DAYCOMPASS_EVENT_MAX_AGE_SECS`. Env-only, never an admin setting.
+
 ## Rate-limit defaults
 
 All from `src/config.rs`, `max/window_secs`, each overridable by its
