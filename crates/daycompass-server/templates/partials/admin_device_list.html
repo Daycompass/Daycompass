@@ -1,0 +1,23 @@
+{#- Swapped in whole after a revoke. Metadata only. #}
+<section id="admin-devices" class="dc-card dc-stack">
+  {% if devices.is_empty() %}
+  <p class="dc-muted">No device has been paired on this server yet.</p>
+  {% else %}
+  <ul class="dc-list">
+    {% for device in devices %}
+    <li class="dc-list__row">
+      <div class="dc-list__main">
+        <span class="dc-list__title">{{ device.name }}</span>
+        <span class="dc-caption">{{ device.owner }} · {{ device.platform }} · last seen {{ device.last_seen }}</span>
+        {% if let Some(revoked) = device.revoked %}<span class="dc-tag dc-tag--muted">Revoked {{ revoked }}</span>{% endif %}
+      </div>
+      {% if device.revoked.is_none() %}
+      <div class="dc-list__actions">
+        <button class="dc-btn dc-btn--danger dc-btn--sm" type="button" hx-post="/admin/devices/{{ device.id }}/revoke" hx-target="#admin-devices" hx-swap="outerHTML" hx-confirm="Revoke {{ device.name }} of {{ device.owner }}? It stops syncing right away.">Revoke</button>
+      </div>
+      {% endif %}
+    </li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+</section>

@@ -1,0 +1,37 @@
+{% import "macros.html" as icons -%}
+{#- Swapped in whole after every action. A new invite is shown here
+    once and never again. #}
+<section id="accounts" class="dc-card dc-stack">
+  {% if let Some(invite) = invite %}
+  <div class="dc-banner dc-banner--success" role="status">{% call icons::icon("check") %}{% endcall %}<div>
+    <b>Invite for {{ invite.username }}</b>
+    {% if let Some((sessions, devices)) = invite.reset %}Password reset: {{ sessions }} session(s) ended, {{ devices }} device(s) revoked. {% endif %}Give them this code. They enter it at /invite before {{ invite.expires }}. It is shown only now.
+    <span class="dc-code">{{ invite.token }}</span>
+  </div></div>
+  {% endif %}
+  <h2 class="dc-heading-3">All accounts</h2>
+  <ul class="dc-list">
+    {% for account in accounts %}
+    <li class="dc-list__row">
+      <div class="dc-list__main">
+        <span class="dc-list__title">{{ account.username }}{% if account.id == own_id %} (you){% endif %}</span>
+        <span class="dc-caption">{% if account.is_admin %}Admin{% else %}User{% endif %} · {% if account.pending %}invite not redeemed yet{% else %}active{% endif %} · created {{ account.created }}</span>
+      </div>
+      <div class="dc-list__actions">
+        <form class="dc-inline-form" method="post" action="/admin/users/{{ account.id }}/role" hx-post="/admin/users/{{ account.id }}/role" hx-target="#accounts" hx-swap="outerHTML">
+          <label class="dc-visually-hidden" for="role-{{ account.id }}">Role for {{ account.username }}</label>
+          <select class="dc-field__input dc-field__input--sm" id="role-{{ account.id }}" name="role">
+            <option value="user"{% if !account.is_admin %} selected{% endif %}>User</option>
+            <option value="admin"{% if account.is_admin %} selected{% endif %}>Admin</option>
+          </select>
+          <button class="dc-btn dc-btn--neutral dc-btn--sm" type="submit">Set role</button>
+        </form>
+        {% if account.id != own_id %}
+        <button class="dc-btn dc-btn--neutral dc-btn--sm" type="button" hx-post="/admin/users/{{ account.id }}/password-reset" hx-target="#accounts" hx-swap="outerHTML" hx-confirm="Reset the password of {{ account.username }}? They are logged out everywhere, all their devices are revoked, and they need the new invite code to get back in.">Reset password</button>
+        <button class="dc-btn dc-btn--danger dc-btn--sm" type="button" hx-post="/admin/users/{{ account.id }}/delete" hx-target="#accounts" hx-swap="outerHTML" hx-confirm="Delete {{ account.username }} and everything they tracked? This cannot be undone.">Delete</button>
+        {% endif %}
+      </div>
+    </li>
+    {% endfor %}
+  </ul>
+</section>

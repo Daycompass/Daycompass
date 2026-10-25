@@ -198,8 +198,18 @@ pub async fn revoke_any(
     admin: AdminContext,
     Path(device_id): Path<String>,
 ) -> Response {
+    revoke_response(revoke_any_for_admin(&state, &admin, &device_id).await)
+}
+
+/// Revokes any device on an admin's behalf, logging who did it. Shared
+/// with the dashboard's admin device page.
+pub(super) async fn revoke_any_for_admin(
+    state: &AppState,
+    admin: &AdminContext,
+    device_id: &str,
+) -> Result<service::RevokeReport, DeviceActionError> {
     let result =
-        service::revoke_device(&state.pool, Scope::AnyDevice, &device_id, UnixTime::now()).await;
+        service::revoke_device(&state.pool, Scope::AnyDevice, device_id, UnixTime::now()).await;
 
     if let Ok(report) = &result {
         tracing::info!(
@@ -209,7 +219,7 @@ pub async fn revoke_any(
             "admin revoked a device"
         );
     }
-    revoke_response(result)
+    result
 }
 
 fn device_response(

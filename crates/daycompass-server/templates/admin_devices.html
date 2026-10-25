@@ -1,0 +1,10 @@
+{% extends "layout_app.html" %}
+{% block title %}All devices{% endblock %}
+{% block content %}
+<header class="dc-page-head">
+  <span class="dc-overline">Admin</span>
+  <h1 class="dc-heading-1">All devices</h1>
+  <span class="dc-caption">Which devices exist and when they last synced. Never what they reported.</span>
+</header>
+{{ list|safe }}
+{% endblock %}

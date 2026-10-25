@@ -193,6 +193,26 @@ impl Fixture {
                 ("password", self.admin_credentials.password.clone()),
             ]),
             ("POST", "/devices/{id}/rename") => Some(vec![("name", "renamed".to_owned())]),
+            // Syntactically valid and worthless, like their JSON
+            // counterparts in `body_for`: setup is complete, and the
+            // invite was never issued.
+            ("POST", "/setup") => Some(vec![
+                ("setup_token", unissued_setup_token()),
+                ("username", "carol".to_owned()),
+                ("password", common::random_secret()),
+            ]),
+            ("POST", "/invite") => Some(vec![
+                ("invite_token", unissued_invite_token()),
+                ("new_password", common::random_secret()),
+            ]),
+            ("POST", "/admin/users") => Some(vec![
+                (
+                    "username",
+                    format!("form-{}", common::random_secret()[..8].to_ascii_lowercase()),
+                ),
+                ("role", "user".to_owned()),
+            ]),
+            ("POST", "/admin/users/{id}/role") => Some(vec![("role", "user".to_owned())]),
             // A fresh pattern every call, so a second caller is not
             // refused as a duplicate.
             ("POST", "/category-rules") => Some(vec![
@@ -299,6 +319,16 @@ fn borrowed<'a>(fields: &'a [(&'static str, String)]) -> Vec<(&'a str, &'a str)>
         .iter()
         .map(|(name, value)| (*name, value.as_str()))
         .collect()
+}
+
+/// A setup token that was never issued, for the same reason as
+/// [`unissued_invite_token`].
+fn unissued_setup_token() -> String {
+    use daycompass_server::auth::token::{Token, TokenKind};
+    Token::generate(TokenKind::Setup)
+        .expect("the OS CSPRNG must be available")
+        .expose()
+        .to_owned()
 }
 
 fn method_of(spec: &RouteSpec) -> Method {

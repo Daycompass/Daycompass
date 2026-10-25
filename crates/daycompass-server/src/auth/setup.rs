@@ -97,14 +97,22 @@ pub async fn issue_token_if_unprovisioned(
 pub fn setup_instructions(token: &Token, public_url: &str) -> String {
     format!(
         "Daycompass first-time setup: no admin account exists yet.\n\
-         Create one within {minutes} minutes by sending this token, a username \
-         and a password to POST {public_url}/api/v1/setup\n\
+         Create one within {minutes} minutes: open {public_url}/setup in a browser, \
+         or send this token, a username and a password to POST \
+         {public_url}/api/v1/setup\n\
          Setup token: {token}\n\
          This token is single use. It appears in this process's output, so treat \
          these logs as sensitive until setup is complete.",
         minutes = SETUP_TOKEN_TTL.as_secs() / 60,
         token = token.expose(),
     )
+}
+
+/// Whether setup is done, which is the same thing as an admin existing:
+/// the check [`complete_setup`] makes first. For the dashboard's setup
+/// page, whose `GET` answers 404 exactly when the `POST` would.
+pub async fn is_complete(pool: &SqlitePool) -> Result<bool, StoreError> {
+    store::admin_exists(pool).await
 }
 
 /// Redeems `presented_token` and creates the first admin.
@@ -599,6 +607,7 @@ mod tests {
 
         assert!(message.contains(token.expose()));
         assert!(message.contains("https://example.org/api/v1/setup"));
+        assert!(message.contains("https://example.org/setup in a browser"));
         assert!(message.contains("60 minutes"));
         assert!(message.contains("single use"));
     }

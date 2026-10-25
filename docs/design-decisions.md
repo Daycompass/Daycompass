@@ -294,6 +294,24 @@ route.
   `assets/vendor/htmx-2.0.11.min.js` (0BSD), checked against the npm
   registry's SHA-512 when it was added. Fredoka and Nunito are under the
   OFL, whose text is served next to them.
+- **Setup and invites have pages, and their secrets stay out of URLs.**
+  `/setup` and `/invite` are the JSON routes' work behind a form, with
+  the same rate-limit buckets. `GET /setup` answers 404 once an admin
+  exists, like `POST /api/v1/setup`. An admin page shows a new invite
+  code once, to be handed over; the account holder pastes it into
+  `/invite`. There is deliberately no `/invite?token=...` link: a URL
+  ends up in history, bookmarks and screenshots, a form body does not.
+  Unlike `POST /api/v1/setup`, `POST /setup` is `Origin`-required, as
+  every dashboard write is.
+- **Admin pages manage, they do not read.** `/admin/users` and
+  `/admin/devices` go through the same shared functions as the API
+  (`routes::users::*_for_admin`, `routes::devices::revoke_any_for_admin`)
+  and show account rows and device metadata only. The paths say
+  `users`, not `accounts`, like the API: `tests/account_log.rs` refuses
+  any id-parameterized route with "account" in its path, and that guard
+  stays as strict as it was. The password-reset button is the known
+  takeover limit from `CLAUDE.md`, one click instead of one API call;
+  who can do it is unchanged.
 - **Not in the wire format.** Dashboard routes answer browsers, not
   clients, so they are neither in `docs/wire-format.md` nor in the
   OpenAPI spec; both tests filter on `Surface::Api`.
