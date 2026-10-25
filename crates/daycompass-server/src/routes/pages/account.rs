@@ -21,8 +21,9 @@ use super::{format_utc, render, render_fragment, Shell};
 use crate::auth::account_log::{self, LogKind};
 use crate::auth::secret::SecretString;
 use crate::error::{ApiError, ErrorKind};
-use crate::routes::{auth, SessionContext};
+use crate::routes::{account, auth, SessionContext};
 use crate::state::AppState;
+use crate::timezone::{self, TimeZoneName};
 
 #[derive(Template)]
 #[template(path = "account.html")]
@@ -30,6 +31,7 @@ struct AccountPage {
     shell: Shell,
     is_admin: bool,
     form: PasswordForm,
+    timezone_form: String,
     log: Vec<LogRow>,
 }
 
@@ -39,6 +41,25 @@ struct AccountPage {
 struct PasswordForm {
     /// How many other sessions the last change ended, after a change.
     changed: Option<u64>,
+}
+
+/// The time zone form on its own: the page's, and a save's answer.
+#[derive(Template)]
+#[template(path = "partials/timezone_form.html")]
+struct TimeZoneForm {
+    current: String,
+    names: Vec<String>,
+    saved: bool,
+}
+
+impl TimeZoneForm {
+    fn new(zone: &TimeZoneName, saved: bool) -> Self {
+        Self {
+            current: zone.as_str().to_owned(),
+            names: timezone::available_names(),
+            saved,
+        }
+    }
 }
 
 struct LogRow {
@@ -56,10 +77,26 @@ pub async fn page(State(state): State<AppState>, session: SessionContext) -> Res
         }
     };
 
+    let zone = match timezone::get_for_user(&state.pool, &auth.user.id).await {
+        Ok(zone) => zone,
+        Err(err) => {
+            tracing::error!(error = %err, "reading the time zone failed");
+            return ApiError::of(ErrorKind::InternalError).into_response();
+        }
+    };
+    let timezone_form = match TimeZoneForm::new(&zone, false).render() {
+        Ok(html) => html,
+        Err(err) => {
+            tracing::error!(error = %err, "rendering a template failed");
+            return ApiError::of(ErrorKind::InternalError).into_response();
+        }
+    };
+
     render(&AccountPage {
         shell: Shell::for_session(auth, "account"),
         is_admin: auth.user.role.is_admin(),
         form: PasswordForm { changed: None },
+        timezone_form,
         log: entries
             .iter()
             .map(|entry| LogRow {
@@ -94,6 +131,23 @@ pub async fn change_password(
         Ok(other_sessions_ended) => render_fragment(&PasswordForm {
             changed: Some(other_sessions_ended),
         }),
+        Err(error) => error.into_response(),
+    }
+}
+
+/// The time zone form. Same field name as the JSON body.
+#[derive(Deserialize)]
+pub struct TimeZoneFormInput {
+    timezone: String,
+}
+
+pub async fn change_timezone(
+    State(state): State<AppState>,
+    session: SessionContext,
+    Form(form): Form<TimeZoneFormInput>,
+) -> Response {
+    match account::change_timezone(&state, &session, &form.timezone).await {
+        Ok(zone) => render_fragment(&TimeZoneForm::new(&zone, true)),
         Err(error) => error.into_response(),
     }
 }

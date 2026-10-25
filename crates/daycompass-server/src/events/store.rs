@@ -264,7 +264,7 @@ pub async fn delete_started_before(
     Ok(result.rows_affected())
 }
 
-/// One (UTC calendar day, `app_id`, `domain`) group's summed
+/// One (time bucket, `app_id`, `domain`) group's summed
 /// `duration_secs`, for an owner's own stats aggregation - M3's
 /// second read, on the same `JOIN` as [`select_own_in_range`].
 ///
@@ -276,9 +276,9 @@ pub async fn delete_started_before(
 /// done the summing.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DailyGroupTotal {
-    /// The Unix timestamp of this group's day's UTC midnight -
-    /// `(start_ts / 86_400) * 86_400`.
-    pub day_start_ts: i64,
+    /// The Unix timestamp of this group's bucket start -
+    /// `(start_ts / bucket_secs) * bucket_secs`.
+    pub bucket_start_ts: i64,
     pub app_id: String,
     pub domain: Option<String>,
     pub total_duration_secs: i64,
@@ -288,7 +288,7 @@ fn daily_group_total_from_row(
     row: &sqlx::sqlite::SqliteRow,
 ) -> Result<DailyGroupTotal, StoreError> {
     Ok(DailyGroupTotal {
-        day_start_ts: row.try_get("day_start_ts")?,
+        bucket_start_ts: row.try_get("bucket_start_ts")?,
         app_id: row.try_get("app_id")?,
         domain: row.try_get("domain")?,
         total_duration_secs: row.try_get("total_duration_secs")?,
@@ -296,8 +296,10 @@ fn daily_group_total_from_row(
 }
 
 /// Sums `duration_secs` for the caller's own events inside
-/// `[start_ts, end_ts)`, grouped by UTC calendar day, `app_id` and
-/// `domain`.
+/// `[start_ts, end_ts)`, grouped by `bucket_secs`-wide bucket of
+/// `start_ts` (aligned to the Unix epoch), `app_id` and `domain`.
+/// `86_400` gives UTC calendar days; a narrower bucket lets the caller
+/// fold into days of a time zone, see `crate::stats::aggregate`.
 ///
 /// Overlapping events are summed exactly as reported - two devices
 /// covering the same span, or one device reporting an app and a
@@ -311,19 +313,21 @@ pub async fn select_own_daily_group_totals(
     user_id: &str,
     start_ts: i64,
     end_ts: i64,
+    bucket_secs: i64,
 ) -> Result<Vec<DailyGroupTotal>, StoreError> {
     let rows = sqlx::query(
-        "SELECT (e.start_ts / 86400) * 86400 AS day_start_ts, e.app_id AS app_id,
+        "SELECT (e.start_ts / ?4) * ?4 AS bucket_start_ts, e.app_id AS app_id,
                 e.domain AS domain, SUM(e.duration_secs) AS total_duration_secs
          FROM events e
          JOIN devices d ON d.id = e.device_id
          WHERE d.user_id = ?1 AND e.start_ts >= ?2 AND e.start_ts < ?3
-         GROUP BY e.start_ts / 86400, e.app_id, e.domain
-         ORDER BY day_start_ts ASC",
+         GROUP BY e.start_ts / ?4, e.app_id, e.domain
+         ORDER BY bucket_start_ts ASC",
     )
     .bind(user_id)
     .bind(start_ts)
     .bind(end_ts)
+    .bind(bucket_secs)
     .fetch_all(pool)
     .await?;
 

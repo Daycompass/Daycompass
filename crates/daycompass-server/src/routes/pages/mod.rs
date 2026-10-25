@@ -255,8 +255,8 @@ impl Shell {
 
 /// `2026-10-25 17:03 UTC` - a Unix second as a UTC date and time.
 ///
-/// UTC because that is the only time zone the server knows about an
-/// account, the same reason the overview counts UTC days. Computed by
+/// Always UTC, labelled as such, whatever zone the account has set: a
+/// log entry is a fact, not a day to be counted. Computed by
 /// hand (the civil-from-days algorithm) rather than with a date crate,
 /// since this is the only place a date is formatted.
 pub fn format_utc(secs: i64) -> String {

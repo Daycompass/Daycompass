@@ -32,6 +32,7 @@ serde_json = { workspace = true }
 futures-util = { workspace = true }
 utoipa = { workspace = true }
 askama = { workspace = true }
+jiff = { workspace = true }
 
 [dev-dependencies]
 # "io-util" for AsyncReadExt/AsyncWriteExt, used only by the test that

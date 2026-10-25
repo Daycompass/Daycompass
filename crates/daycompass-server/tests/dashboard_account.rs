@@ -355,3 +355,56 @@ async fn every_page_renders_without_inline_script_or_style() {
         );
     }
 }
+
+#[tokio::test]
+async fn the_account_page_saves_a_time_zone_and_the_overview_names_it() {
+    let app = TestApp::new().await;
+    let (_credentials, admin) = app.provisioned_admin().await;
+    // The zone is named under the numbers, which an empty week has none of.
+    let device = app.pair_device(&admin, "laptop", "linux").await;
+    let me = app
+        .send(TestRequest::get("/api/v1/device/me").authenticated_as_device(&device))
+        .await;
+    let now = me.body["server_time"].as_i64().unwrap();
+    app.send(
+        TestRequest::post("/api/v1/events")
+            .authenticated_as_device(&device)
+            .json(json!({ "events": [{
+                "event_id": format!("{:032x}", 1),
+                "start_ts": now - 60,
+                "duration_secs": 30,
+                "app_id": "org.example.app",
+            }]})),
+    )
+    .await;
+
+    let account = page(&app, "/account", &admin).await;
+    assert!(account.text.contains(r#"id="timezone""#));
+    assert!(account.text.contains(r#"<option value="Europe/Berlin">"#));
+    assert!(page(&app, "/", &admin)
+        .await
+        .text
+        .contains("Days are counted in UTC."));
+
+    let saved = app
+        .send(write("/account/timezone", &admin).form(&[("timezone", "Europe/Berlin")]))
+        .await;
+    assert_eq!(saved.status, StatusCode::OK, "{}", saved.text);
+    assert!(saved.text.contains("Time zone saved."));
+    assert!(saved.text.contains(r#"value="Europe/Berlin""#));
+    assert!(
+        !saved.text.contains("<!doctype html>"),
+        "a fragment, not a page"
+    );
+
+    assert!(page(&app, "/", &admin)
+        .await
+        .text
+        .contains("Days are counted in Europe/Berlin."));
+
+    let bad = app
+        .send(write("/account/timezone", &admin).form(&[("timezone", "Mars/Olympus")]))
+        .await;
+    assert_eq!(bad.status, StatusCode::BAD_REQUEST);
+    assert_eq!(bad.error_code(), Some("invalid_timezone"));
+}

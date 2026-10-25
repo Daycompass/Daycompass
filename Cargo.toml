@@ -96,3 +96,10 @@ utoipa = { version = "~6.0" }
 # runtime, and HTML escaping is on by default for every expression.
 # Only "derive" and "std": no askama.toml lookup, no urlencode filter.
 askama = { version = "~0.16", default-features = false, features = ["derive", "std"] }
+
+# Per-account time zones: validating an IANA name and finding a local
+# day's boundaries. "tzdb-bundle-always" compiles the time zone database
+# into the binary, so nothing is read from the host's /usr/share/zoneinfo
+# (absent in a minimal container image). Only the features named here:
+# no "logging", no "serde".
+jiff = { version = "~0.2", default-features = false, features = ["std", "tzdb-bundle-always"] }

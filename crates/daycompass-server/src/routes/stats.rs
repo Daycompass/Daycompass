@@ -16,6 +16,7 @@ use crate::error::{ApiError, ErrorKind};
 use crate::routes::SessionContext;
 use crate::state::AppState;
 use crate::stats::aggregate::{self, AggregateError, DailyCategoryTotal, RangeError};
+use crate::timezone::{self, TimeZoneName};
 
 /// `start_ts` and `end_ts` on `GET /api/v1/stats`, both required.
 #[derive(Deserialize, IntoParams)]
@@ -26,6 +27,19 @@ pub struct StatsQueryParams {
     start_ts: i64,
     /// Exclusive end of the window, Unix seconds.
     end_ts: i64,
+    /// Where a day starts: `utc` (the default) or `account`, the time
+    /// zone set with `PATCH /api/v1/account/timezone`.
+    #[serde(default)]
+    day_boundary: DayBoundary,
+}
+
+/// Which midnight separates one day's total from the next.
+#[derive(Deserialize, ToSchema, Default, Clone, Copy)]
+#[serde(rename_all = "snake_case")]
+enum DayBoundary {
+    #[default]
+    Utc,
+    Account,
 }
 
 /// One day's total for one category, as handed back to its owner.
@@ -54,7 +68,7 @@ struct StatsResponse {
 }
 
 /// An account's own screen time, inside `[start_ts, end_ts)`, summed
-/// per UTC calendar day and category.
+/// per calendar day (UTC, or the account's zone) and category.
 ///
 /// Session-authenticated, scoped to the caller alone - no admin
 /// variant and no id parameter that could point it at anyone else,
@@ -64,7 +78,7 @@ struct StatsResponse {
     path = "/api/v1/stats",
     tag = "events",
     operation_id = "stats",
-    summary = "Your screen time per UTC day and category, at most 366 days",
+    summary = "Your screen time per day and category, at most 366 days",
     params(StatsQueryParams),
     responses(
         (status = 200, description = "Sparse daily totals.", body = StatsResponse),
@@ -78,7 +92,19 @@ pub async fn daily_totals(
 ) -> Response {
     let user_id = &session.auth().user.id;
 
-    match aggregate::daily_totals(&state.pool, user_id, params.start_ts, params.end_ts).await {
+    let zone = match params.day_boundary {
+        DayBoundary::Utc => TimeZoneName::utc(),
+        DayBoundary::Account => match timezone::get_for_user(&state.pool, user_id).await {
+            Ok(zone) => zone,
+            Err(err) => {
+                tracing::error!(error = %err, user_id = %user_id, "reading the time zone failed");
+                return ApiError::of(ErrorKind::InternalError).into_response();
+            }
+        },
+    };
+
+    match aggregate::daily_totals(&state.pool, user_id, params.start_ts, params.end_ts, &zone).await
+    {
         Ok(days) => (
             StatusCode::OK,
             Json(StatsResponse {
