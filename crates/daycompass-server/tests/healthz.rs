@@ -114,7 +114,7 @@ async fn unknown_route_returns_uniform_json_error() {
     let response = app
         .oneshot(
             Request::builder()
-                .uri("/does-not-exist")
+                .uri("/api/v1/does-not-exist")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -165,7 +165,7 @@ async fn error_responses_also_carry_security_headers() {
     let response = app
         .oneshot(
             Request::builder()
-                .uri("/does-not-exist")
+                .uri("/api/v1/does-not-exist")
                 .body(Body::empty())
                 .unwrap(),
         )

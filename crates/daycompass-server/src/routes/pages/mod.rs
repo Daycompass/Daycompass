@@ -41,6 +41,10 @@
 //!   sent to `/login`, by `HX-Redirect`.
 //! * Anything else gets a full error page.
 //!
+//! A path no route matches gets the same treatment through
+//! [`render_unknown_path`], except under `/api/` and at `/healthz`,
+//! which stay JSON.
+//!
 //! The message is always [`ErrorKind::message`], so no request input
 //! reaches the page through an error, the same guarantee the JSON shape
 //! gives.
@@ -225,6 +229,18 @@ pub async fn render_errors(request: Request, next: Next) -> Response {
     page.extensions_mut().insert(Deliberate);
     page.extensions_mut().insert(kind);
     page
+}
+
+/// [`render_errors`] for the router fallback: a request that matched no
+/// route. A path in the API's namespace (or `/healthz`) keeps the JSON
+/// 404, because a client wrote it expecting JSON; anything else is a
+/// person's mistyped link and gets the error page.
+pub async fn render_unknown_path(request: Request, next: Next) -> Response {
+    let path = request.uri().path();
+    if path == "/healthz" || path == "/api" || path.starts_with("/api/") {
+        return next.run(request).await;
+    }
+    render_errors(request, next).await
 }
 
 /// What the app layout needs on every signed-in page.
