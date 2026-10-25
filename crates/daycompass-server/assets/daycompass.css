@@ -87,13 +87,15 @@
   --data-study: #FFC21A;
   --data-distraction: #C2255C;
   --data-neutral: #B8B0C4;
-  --cat-0: #FFC21A;
+  /* Category colours, light: each at least 3:1 against both the card
+     and the bar's track, which the brand yellow is not. */
+  --cat-0: #B87800;
   --cat-1: #C2255C;
-  --cat-2: #2F9E44;
+  --cat-2: #2B8A3E;
   --cat-3: #1C7ED6;
   --cat-4: #7048E8;
   --cat-5: #E8590C;
-  --cat-6: #0CA678;
+  --cat-6: #099268;
   --cat-7: #A0522D;
   --edge-primary: 0 4px 0 #D99A00;
   --edge-secondary: 0 4px 0 #8C1844;
@@ -238,7 +240,7 @@ h1, h2, h3 { margin: 0; }
 /* ---------- Card / StatCard ---------- */
 .dc-card { background: var(--surface); border: 2px solid var(--border); border-radius: var(--radius-xl); box-shadow: var(--edge-card); padding: var(--space-5); color: var(--text); }
 .dc-stat__label { font: 700 14px/20px var(--font-ui); color: var(--text-muted); }
-.dc-stat__value { font: 600 44px/48px var(--font-display); font-variant-numeric: tabular-nums; margin-top: var(--space-1); }
+.dc-stat__value { font: 600 44px/48px var(--font-display); font-variant-numeric: tabular-nums; margin: var(--space-1) 0 0; }
 .dc-stat__value--lg { font: 600 28px/32px var(--font-display); }
 
 /* ---------- Category bars ----------
