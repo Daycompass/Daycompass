@@ -257,12 +257,22 @@ route.
   other.
 - **The dashboard's writes require an `Origin`.** The API allows a
   request with no `Origin` because native clients send none
-  (`auth::origin`). `POST /login` and `POST /logout` have no such
-  caller - only browsers, which always send the header on a POST - so
-  they use `OriginRule::Required`, which refuses an absent header too.
+  (`auth::origin`). Dashboard writes have no such caller - only
+  browsers, which always send the header on a POST - so every one of
+  them uses `OriginRule::Required`, which refuses an absent header too.
   Login CSRF then no longer rests on every browser sending `Origin`.
-  Only page routes may claim this rule; `RouteSpec::validate` refuses
-  it on an API route, where it would lock out every native client.
+  `RouteSpec::validate` enforces both directions: a state-changing page
+  route must claim the rule, and an API route may not, where it would
+  lock out every native client.
+- **Writes answer with the part of the page they changed.** Renaming or
+  revoking a device answers with the re-rendered device list, a rule
+  change with the rule list, a password change with a fresh, empty
+  form. No write echoes a password back, not even as a field value.
+- **The export is a link, not a route.** `GET /api/v1/export` is
+  already a same-origin `GET` authenticated by the session cookie, with
+  its own per-session limit and a download response, so the account
+  page links to it. A page route of its own would be another read into
+  events for nothing.
 - **A strict CSP on every response.** `default-src 'none'`, then
   `'self'` for scripts, styles, fonts, images and requests; no inline
   script or style anywhere, no framing, no `<base>`, forms post only
