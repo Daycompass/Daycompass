@@ -142,3 +142,48 @@ documented, logged trade-off (see "An admin can still reset a password"
 above), not a second way to reach this endpoint. Any future admin-
 facing view of usage would need its own explicit decision and its own
 review, not a parameter bolted onto this route.
+
+## Why the export streams keyset pages, and has no admin variant
+
+`GET /api/v1/export` (`crate::export`) hands an account everything it
+has, every event included, with no window and no row cap — unlike
+`GET /api/v1/events` above, whose bounded window exists precisely so
+one request cannot ask for unbounded work. The export cannot take that
+way out: a download that a client has to stitch together from many
+windowed requests is not an export, and until retention exists (the
+next piece of M4) the history it has to cover is unbounded.
+
+So the bound moves from *what* is read to *how*. The account, devices,
+rules and log are small and read up front. Events follow in keyset
+pages of 1,000 (`events::store::select_own_page_after`), and the next
+page is read only when the client has taken the previous one, so:
+
+- memory stays at roughly one page, however large the history — the
+  whole document is never built, which `axum::Json` would have done;
+- each page is a short query, and no pool connection is held while a
+  slow client downloads — the same cost-to-everyone-else argument as
+  above, answered by paging rather than by refusing;
+- keyset rather than `OFFSET`, so the last page costs the same as the
+  first.
+
+The price is that the status line goes out before the events are read.
+A database failure halfway through cannot become a 500 any more; it is
+logged and the connection is cut, and the document's final field,
+`"complete": true`, is never written. A client checks for it — that is
+the whole error channel, and it is documented as such. The pages are
+separate queries rather than one transaction, so the export is not a
+snapshot either; events ingested while it runs may or may not appear,
+but keyset order guarantees that none that existed beforehand is
+repeated or lost. A snapshot would mean one read transaction held open
+for the length of a download, which is the very cost paging avoids.
+
+A per-session rate limit (3 per hour by default) bounds how often one
+caller can ask for this most expensive of reads.
+
+There is no admin variant for the same reason as the event read above:
+the route takes no id, rejects every query parameter, and resolves its
+account from the session alone. `tests/no_event_reads.rs` was
+deliberately extended to allow it as the third owner read, not
+widened. Events are exported without a category — categories are
+assigned at query time, not stored — and the rules are exported
+alongside so the file alone is enough to derive them again.

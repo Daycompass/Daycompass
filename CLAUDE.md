@@ -108,6 +108,7 @@ own env var:
 - `DAYCOMPASS_RATE_LIMIT_INVITE_IP`: 100/300 - per client address
 - `DAYCOMPASS_RATE_LIMIT_INVITE_GLOBAL`: 600/60 - instance-wide
 - `DAYCOMPASS_RATE_LIMIT_INGEST_DEVICE`: 30/60 - per device
+- `DAYCOMPASS_RATE_LIMIT_EXPORT`: 3/3600 - per session
 
 "Per client address" (`src/clientip.rs`) means: the TCP peer address,
 unless that peer is a configured trusted proxy
@@ -129,7 +130,7 @@ through billions of addresses and never hit a limit.
 Not itself a window, but related: `DAYCOMPASS_RATE_LIMIT_MAX_ENTRIES`
 bounds each of the per-key limiters above separately (login/IP,
 login/username, setup/IP, pw-change, pair/IP, ingest/device,
-device-auth-fail, invite/IP) to 10,000 tracked keys each - not a
+device-auth-fail, invite/IP, export) to 10,000 tracked keys each - not a
 total shared across them (`src/state.rs`). The two instance-wide
 limiters (`RATE_LIMIT_PAIR_GLOBAL`, `RATE_LIMIT_INVITE_GLOBAL`) use a
 single shared bucket and are unaffected by this setting. When a
