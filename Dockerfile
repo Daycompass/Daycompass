@@ -12,7 +12,7 @@
 # copied into the build (see .dockerignore), so this tag alone decides
 # the compiler. Debian trixie, the same release as the runtime image
 # below, so the binary links against the glibc it will run with.
-FROM docker.io/library/rust:1.95.0-slim-trixie@sha256:e14e87345b4d5964ddcc3491d27ee046a0f23820f340c3c1e24da6880141f7c0 AS build
+FROM docker.io/library/rust:1.99.0-slim-trixie@sha256:2752b332db73fdbb7dc576f06c82ed1f312005784ef913d7e04a28f5f55dc581 AS build
 
 WORKDIR /src
 COPY Cargo.toml Cargo.lock ./
