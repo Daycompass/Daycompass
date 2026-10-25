@@ -36,7 +36,7 @@ use crate::clientip::ClientAddr;
 use crate::devices::store::DeviceRecord;
 use crate::error::{ApiError, ErrorKind};
 use crate::ratelimit::{DeviceKey, GlobalKey, SessionKey};
-use crate::routes::{rate_limited, Access, Bucket, LimitKey, RouteSpec};
+use crate::routes::{rate_limited, Access, Bucket, LimitKey, OriginRule, RouteSpec};
 use crate::state::AppState;
 
 /// What one route's enforcement layers are built with: the application
@@ -48,7 +48,7 @@ type RouteState = (AppState, &'static RouteSpec);
 /// Attached per route from `origin_checked`. The rule itself lives in
 /// [`crate::auth::origin`], which is where it is tested.
 pub async fn enforce_origin(
-    State((state, _spec)): State<RouteState>,
+    State((state, spec)): State<RouteState>,
     request: Request,
     next: Next,
 ) -> Response {
@@ -73,7 +73,17 @@ pub async fn enforce_origin(
         },
     };
 
-    if !origin::is_allowed(request.method().as_str(), origin, &state.public_url) {
+    let method = request.method().as_str();
+    let allowed = match spec.origin {
+        OriginRule::Checked => origin::is_allowed(method, origin, &state.public_url),
+        OriginRule::Required => {
+            origin::is_allowed_requiring_presence(method, origin, &state.public_url)
+        }
+        // Never attached to such a route; refusing is the safe answer if
+        // it ever were.
+        OriginRule::NoAmbientAuthority => false,
+    };
+    if !allowed {
         return reject_origin();
     }
 

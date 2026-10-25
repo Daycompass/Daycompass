@@ -255,6 +255,14 @@ route.
   password-guessing attack gets by alternating between the routes;
   `tests/dashboard.rs` pins that a refusal on one is a refusal on the
   other.
+- **The dashboard's writes require an `Origin`.** The API allows a
+  request with no `Origin` because native clients send none
+  (`auth::origin`). `POST /login` and `POST /logout` have no such
+  caller - only browsers, which always send the header on a POST - so
+  they use `OriginRule::Required`, which refuses an absent header too.
+  Login CSRF then no longer rests on every browser sending `Origin`.
+  Only page routes may claim this rule; `RouteSpec::validate` refuses
+  it on an API route, where it would lock out every native client.
 - **A strict CSP on every response.** `default-src 'none'`, then
   `'self'` for scripts, styles, fonts, images and requests; no inline
   script or style anywhere, no framing, no `<base>`, forms post only

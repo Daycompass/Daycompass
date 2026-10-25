@@ -132,6 +132,16 @@ pub enum OriginRule {
     /// default, and the only thing a cookie-authenticated route may
     /// be.
     Checked,
+    /// Like [`Self::Checked`], and an **absent** `Origin` is refused as
+    /// well. Dashboard routes only.
+    ///
+    /// `Checked` lets a request with no `Origin` through because native
+    /// clients send none (see [`crate::auth::origin`]). A dashboard form
+    /// post has no such caller, only browsers, so there the exemption
+    /// is dropped: login CSRF then needs a browser that both forgets the
+    /// header and attaches the cookie, rather than resting on every
+    /// browser sending it.
+    Required,
     /// Exempt, because the route has **no ambient cookie authority**
     /// in either direction: it does not authenticate by cookie, and
     /// it does not hand one out.
@@ -289,7 +299,7 @@ pub struct RouteSpec {
 impl RouteSpec {
     /// Whether a mismatched `Origin` is rejected on this route.
     pub const fn origin_checked(&self) -> bool {
-        matches!(self.origin, OriginRule::Checked)
+        matches!(self.origin, OriginRule::Checked | OriginRule::Required)
     }
 }
 
@@ -325,6 +335,15 @@ impl RouteSpec {
         assert!(
             !(self.surface == Surface::Page && self.access.needs_device()),
             "{} {}: a page route cannot authenticate a device",
+            self.method,
+            self.path
+        );
+
+        // Only a page may demand an Origin. An API route doing so would
+        // refuse every native client, which sends none.
+        assert!(
+            self.origin != OriginRule::Required || self.surface == Surface::Page,
+            "{} {}: only a page route may require an Origin header",
             self.method,
             self.path
         );
@@ -900,8 +919,10 @@ pub const INVENTORY: &[RouteSpec] = &[
         max_body_bytes: None,
         rate_limits: &[],
     },
-    // The dashboard's login form. Exactly the API login's protections,
-    // for exactly the API login's reasons - and the *same* two buckets,
+    // The dashboard's login form. The API login's protections, for the
+    // API login's reasons, plus one: `OriginRule::Required`, because only
+    // browsers post here and a browser always sends `Origin`. And the
+    // *same* two buckets,
     // not copies of them: both handlers go through
     // `auth::attempt_login`, so an attacker gains no budget by
     // alternating between the two routes.
@@ -910,7 +931,7 @@ pub const INVENTORY: &[RouteSpec] = &[
         path: "/login",
         surface: Surface::Page,
         access: Access::Public,
-        origin: OriginRule::Checked,
+        origin: OriginRule::Required,
         csrf: false,
         sets_session_cookie: true,
         max_body_bytes: None,
@@ -924,7 +945,7 @@ pub const INVENTORY: &[RouteSpec] = &[
         path: "/logout",
         surface: Surface::Page,
         access: Access::Session,
-        origin: OriginRule::Checked,
+        origin: OriginRule::Required,
         csrf: true,
         sets_session_cookie: true,
         max_body_bytes: None,
@@ -1362,6 +1383,24 @@ mod tests {
         let mut spec = spec_with(Access::Session, true, &[]);
         spec.path = "/probe";
         spec.validate();
+    }
+
+    #[test]
+    #[should_panic(expected = "only a page route may require an Origin header")]
+    fn an_api_route_may_not_require_an_origin() {
+        let mut spec = spec_with(Access::Session, true, &[]);
+        spec.origin = OriginRule::Required;
+        spec.validate();
+    }
+
+    /// Both dashboard writes demand the header; neither may fall back to
+    /// the absent-is-fine rule the API needs for native clients.
+    #[test]
+    fn the_dashboard_writes_require_an_origin() {
+        for (method, path) in [("POST", "/login"), ("POST", "/logout")] {
+            let spec = spec_for(method, path).expect("in the table");
+            assert_eq!(spec.origin, OriginRule::Required, "{method} {path}");
+        }
     }
 
     #[test]

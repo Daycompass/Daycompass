@@ -81,6 +81,26 @@ pub fn is_allowed(method: &str, origin: Option<&str>, public_url: &PublicUrl) ->
     }
 }
 
+/// Like [`is_allowed`], but an **absent** `Origin` is refused too.
+///
+/// For the dashboard's own form posts (`OriginRule::Required` in
+/// [`crate::routes::INVENTORY`]). The absent case is allowed above only
+/// because native clients send no `Origin`; a dashboard route has no
+/// such caller - only browsers, which always send one on a
+/// state-changing request - so the exemption buys nothing there and is
+/// dropped. That makes login CSRF impossible on these routes even for
+/// a browser that, unlike every current one, left the header out.
+pub fn is_allowed_requiring_presence(
+    method: &str,
+    origin: Option<&str>,
+    public_url: &PublicUrl,
+) -> bool {
+    if is_safe_method(method) {
+        return true;
+    }
+    origin.is_some_and(|value| public_url.matches_origin_header(value))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -111,6 +131,22 @@ mod tests {
             assert!(is_allowed(method, Some("https://attacker.example"), &url));
             assert!(is_allowed(method, Some("null"), &url));
         }
+    }
+
+    #[test]
+    fn the_strict_rule_refuses_an_absent_origin_and_nothing_else_changes() {
+        let url = public_url();
+        assert!(!is_allowed_requiring_presence("POST", None, &url));
+        assert!(is_allowed_requiring_presence(
+            "POST",
+            Some("http://127.0.0.1:8080"),
+            &url
+        ));
+        for origin in ["https://attacker.example", "null"] {
+            assert!(!is_allowed_requiring_presence("POST", Some(origin), &url));
+        }
+        // A GET is still exempt: it changes nothing.
+        assert!(is_allowed_requiring_presence("GET", None, &url));
     }
 
     #[test]

@@ -111,6 +111,32 @@ async fn a_failed_login_renders_the_api_error_without_echoing_input() {
     }
 }
 
+/// Only browsers post the login form, and a browser always sends
+/// `Origin`, so the form refuses a request without one - unlike the JSON
+/// login, which native clients reach without the header.
+#[tokio::test]
+async fn the_login_form_refuses_a_request_without_origin() {
+    let app = TestApp::new().await;
+    let credentials = app.provision_admin().await;
+    let fields = [
+        ("username", credentials.username.as_str()),
+        ("password", credentials.password.as_str()),
+    ];
+
+    let form = app.send(TestRequest::post("/login").form(&fields)).await;
+    assert_eq!(form.status, StatusCode::FORBIDDEN, "{}", form.text);
+    assert_eq!(form.error_code(), Some("origin_mismatch"));
+    assert!(form.set_cookie().is_none(), "no session may be minted");
+
+    let api = app
+        .send(TestRequest::post("/api/v1/auth/login").json(json!({
+            "username": credentials.username,
+            "password": credentials.password,
+        })))
+        .await;
+    assert_eq!(api.status, StatusCode::OK, "the API keeps its exemption");
+}
+
 /// The login form and the JSON login spend the *same* per-username
 /// bucket. Two buckets would double what a guessing attack gets.
 #[tokio::test]
