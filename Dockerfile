@@ -10,7 +10,8 @@
 #
 # The tag must match `channel` in rust-toolchain.toml; that file is not
 # copied into the build (see .dockerignore), so this tag alone decides
-# the compiler. Debian trixie, the same release as the runtime image
+# the compiler. CI enforces the match (scripts/check-dockerfile-toolchain.sh)
+# and builds and starts this image on every pull request. Debian trixie, the same release as the runtime image
 # below, so the binary links against the glibc it will run with.
 FROM docker.io/library/rust:1.99.0-slim-trixie@sha256:2752b332db73fdbb7dc576f06c82ed1f312005784ef913d7e04a28f5f55dc581 AS build
 

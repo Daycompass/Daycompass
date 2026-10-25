@@ -85,6 +85,47 @@ jobs:
         run: cargo install cargo-audit --version "${CARGO_AUDIT_VERSION}" --locked
       - run: cargo audit
 
+  # Builds the release image the way an operator would, starts it, and
+  # asks it for /healthz. Nothing is pushed anywhere and no registry is
+  # logged into. Catches a Dockerfile that stopped building (a base image
+  # bump, a crate needing a system library) and a binary that builds but
+  # does not run in the distroless runtime.
+  container:
+    name: container build
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Dockerfile builds with the pinned toolchain
+        run: scripts/check-dockerfile-toolchain.sh
+      - name: Build the image (no push)
+        run: docker build --pull -t daycompass:ci .
+      - name: Runs as the unprivileged user
+        run: |
+          set -eu
+          user=$(docker image inspect --format '{{.Config.User}}' daycompass:ci)
+          echo "image user: ${user}"
+          test "${user}" = "65532:65532"
+      - name: Starts and answers /healthz
+        run: |
+          set -eu
+          # A placeholder origin: binding beyond loopback inside the
+          # container makes DAYCOMPASS_PUBLIC_URL mandatory.
+          docker run -d --name daycompass-ci -p 127.0.0.1:8080:8080 \
+            -e DAYCOMPASS_PUBLIC_URL=http://127.0.0.1:8080 daycompass:ci
+          for _ in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8080/healthz; then
+              echo
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "the container never answered /healthz" >&2
+          docker logs daycompass-ci >&2
+          exit 1
+
   gitleaks:
     name: gitleaks
     runs-on: ubuntu-latest

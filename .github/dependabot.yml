@@ -13,7 +13,8 @@ updates:
 
   # The Dockerfile pins both base images by digest; this is what keeps
   # those digests current. A bump of the Rust image's tag must stay in
-  # step with `channel` in rust-toolchain.toml - see the Dockerfile.
+  # step with `channel` in rust-toolchain.toml - see the Dockerfile; the
+  # CI job "container build" fails a bump that does not.
   - package-ecosystem: "docker"
     directory: "/"
     schedule:
