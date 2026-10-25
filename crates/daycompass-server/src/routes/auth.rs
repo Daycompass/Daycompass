@@ -4,7 +4,7 @@
 //! These handlers parse input, call [`crate::auth`], and map the result
 //! onto HTTP. The rules - no account enumeration, how a session expires,
 //! what the cookie looks like, what a password change revokes - all live
-//! in the service layer, so the later dashboard can reuse them
+//! in the service layer, so the dashboard reuses them
 //! unchanged.
 //!
 //! Every rate limit on these routes except one is attached from the
@@ -21,7 +21,7 @@ use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
 use crate::auth::cookie;
-use crate::auth::login::{self, LoginError};
+use crate::auth::login::{self, LoginError, LoginOutcome};
 use crate::auth::password::{HashError, PasswordPolicyError};
 use crate::auth::secret::SecretString;
 use crate::auth::session;
@@ -65,38 +65,7 @@ struct SessionResponse {
     )
 )]
 pub async fn log_in(State(state): State<AppState>, Json(request): Json<LoginRequest>) -> Response {
-    let now = UnixTime::now();
-
-    // The per-address bucket has already been checked by the layer the
-    // route's inventory entry attached, which is what caps how many
-    // distinct usernames one client can even introduce before anything
-    // bounds them.
-    //
-    // This is the per-username bucket, which protects one account
-    // against a guessing attack spread across many addresses.
-    if let Some(error) = rate_limited(
-        state
-            .limits
-            .login_username
-            .check(UsernameKey::new(&request.username), now),
-    ) {
-        return error.into_response();
-    }
-
-    // Only now is Argon2 work reached: the hasher's semaphore and its
-    // wait timeout are the third and last line of defence.
-    let result = login::log_in(
-        &state.pool,
-        &state.hasher,
-        &state.decoy_password_hash,
-        state.session_policy,
-        &request.username,
-        request.password,
-        now,
-    )
-    .await;
-
-    match result {
+    match attempt_login(&state, &request.username, request.password).await {
         Ok(outcome) => {
             let body = SessionResponse {
                 user: UserView::from(&outcome.user),
@@ -112,19 +81,70 @@ pub async fn log_in(State(state): State<AppState>, Json(request): Json<LoginRequ
             )
                 .into_response()
         }
+        Err(error) => error.into_response(),
+    }
+}
+
+/// One login attempt, from the per-username bucket to the error the
+/// caller is shown.
+///
+/// Shared by the JSON route above and the dashboard's login form, so
+/// both spend the *same* buckets and refuse in the same way: a second
+/// login route with its own budget would double what a guessing attack
+/// gets to try. Both routes' inventory entries attach the per-address
+/// bucket; this is the per-username one, which only a handler can
+/// check because its key is in the body.
+pub(super) async fn attempt_login(
+    state: &AppState,
+    username: &str,
+    password: SecretString,
+) -> Result<LoginOutcome, ApiError> {
+    let now = UnixTime::now();
+
+    // The per-address bucket has already been checked by the layer the
+    // route's inventory entry attached, which is what caps how many
+    // distinct usernames one client can even introduce before anything
+    // bounds them.
+    //
+    // This is the per-username bucket, which protects one account
+    // against a guessing attack spread across many addresses.
+    if let Some(error) = rate_limited(
+        state
+            .limits
+            .login_username
+            .check(UsernameKey::new(username), now),
+    ) {
+        return Err(error);
+    }
+
+    // Only now is Argon2 work reached: the hasher's semaphore and its
+    // wait timeout are the third and last line of defence.
+    let result = login::log_in(
+        &state.pool,
+        &state.hasher,
+        &state.decoy_password_hash,
+        state.session_policy,
+        username,
+        password,
+        now,
+    )
+    .await;
+
+    match result {
+        Ok(outcome) => Ok(outcome),
 
         Err(LoginError::InvalidCredentials) => {
             login::log_failure();
-            invalid_credentials().into_response()
+            Err(invalid_credentials())
         }
 
-        Err(LoginError::Hash(HashError::Busy)) => ApiError::of(ErrorKind::ServerBusy)
-            .retry_after(state.hasher.wait_timeout())
-            .into_response(),
+        Err(LoginError::Hash(HashError::Busy)) => {
+            Err(ApiError::of(ErrorKind::ServerBusy).retry_after(state.hasher.wait_timeout()))
+        }
 
         Err(err) => {
             tracing::error!(error = %err, "login failed unexpectedly");
-            ApiError::of(ErrorKind::InternalError).into_response()
+            Err(ApiError::of(ErrorKind::InternalError))
         }
     }
 }
@@ -154,14 +174,10 @@ fn invalid_credentials() -> ApiError {
     )
 )]
 pub async fn log_out(State(state): State<AppState>, session_context: SessionContext) -> Response {
-    let auth = session_context.auth();
-
-    if let Err(err) = session::end(&state.pool, &auth.session.id).await {
-        tracing::error!(error = %err, "could not delete a session on logout");
-        return ApiError::of(ErrorKind::InternalError).into_response();
+    if let Err(error) = end_session(&state, &session_context).await {
+        return error.into_response();
     }
 
-    tracing::info!(user_id = %auth.user.id, "logout");
     // The cookie is cleared as well as the row deleted. Deleting the row
     // is what actually ends the session; clearing the cookie just stops
     // the client from sending a token that can no longer work.
@@ -170,6 +186,23 @@ pub async fn log_out(State(state): State<AppState>, session_context: SessionCont
         [(header::SET_COOKIE, cookie::clear())],
     )
         .into_response()
+}
+
+/// Ends the caller's session server side. Shared with the dashboard's
+/// logout, which clears the cookie the same way afterwards.
+pub(super) async fn end_session(
+    state: &AppState,
+    session_context: &SessionContext,
+) -> Result<(), ApiError> {
+    let auth = session_context.auth();
+
+    if let Err(err) = session::end(&state.pool, &auth.session.id).await {
+        tracing::error!(error = %err, "could not delete a session on logout");
+        return Err(ApiError::of(ErrorKind::InternalError));
+    }
+
+    tracing::info!(user_id = %auth.user.id, "logout");
+    Ok(())
 }
 
 /// Reports who the caller is, and hands back the CSRF token.

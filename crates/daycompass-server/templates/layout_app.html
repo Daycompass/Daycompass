@@ -1,0 +1,31 @@
+{% import "macros.html" as icons -%}
+<!doctype html>
+<html lang="en">
+<head>
+{% include "partials/head.html" %}
+<title>{% block title %}{% endblock %} · Daycompass</title>
+</head>
+{#- The session's CSRF token, which htmx sends as X-CSRF-Token on every
+    request it makes from this page. Base64url, so it needs no escaping
+    beyond what askama already applies. #}
+<body hx-headers='{"X-CSRF-Token": "{{ shell.csrf_token }}"}'>
+<div class="dc-app">
+  <nav class="dc-side dc-app__side" aria-label="Main">
+    <a class="dc-side__brand" href="/">{% include "partials/mark.html" %}daycompass</a>
+    <a class="dc-side__item" href="/" aria-current="page">{% call icons::icon("today") %}{% endcall %}Overview</a>
+    <div class="dc-side__foot">
+      <span class="dc-side__who">Logged in as {{ shell.username }}</span>
+      <button class="dc-side__item" type="button" hx-post="/logout">{% call icons::icon("close") %}{% endcall %}Log out</button>
+    </div>
+  </nav>
+  <main class="dc-app__main">
+    <div id="dc-flash" class="dc-flash" aria-live="polite"></div>
+    {% block content %}{% endblock %}
+  </main>
+  <nav class="dc-nav dc-app__nav" aria-label="Main">
+    <a class="dc-nav__item" href="/" aria-current="page">{% call icons::icon("today") %}{% endcall %}Overview</a>
+    <button class="dc-nav__item" type="button" hx-post="/logout">{% call icons::icon("close") %}{% endcall %}Log out</button>
+  </nav>
+</div>
+</body>
+</html>

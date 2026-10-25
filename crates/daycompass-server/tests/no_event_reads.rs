@@ -7,7 +7,9 @@
 //! caller's own account. This file's rule is
 //! narrower now than "nobody, ever" - it is *nobody else, and no other
 //! path* - but it is still a rule this file checks against the
-//! sources rather than trusting it to be remembered.
+//! sources rather than trusting it to be remembered. M5's dashboard
+//! overview, `GET /`, is a fourth, rendering the same aggregation as
+//! `GET /api/v1/stats` for the same caller.
 //!
 //! An admin still reaches zero event data, full stop: there is no
 //! admin variant of any of them and no id parameter anywhere that
@@ -63,12 +65,17 @@ use daycompass_server::routes::{Access, INVENTORY};
 /// owner's own raw read.
 const EVENT_ROUTES: &[(&str, &str)] = &[("POST", "/api/v1/events"), ("GET", "/api/v1/events")];
 
-/// The owner's aggregated read, kept separate from [`EVENT_ROUTES`]
-/// because its path does not contain "event" - the first assertion in
+/// The owner's aggregated reads, kept separate from [`EVENT_ROUTES`]
+/// because their paths do not contain "event" - the first assertion in
 /// [`the_inventory_has_exactly_the_write_and_the_owner_read`] filters
-/// on that substring, and folding this in would silently stop it from
+/// on that substring, and folding these in would silently stop it from
 /// checking anything.
-const STATS_ROUTES: &[(&str, &str)] = &[("GET", "/api/v1/stats")];
+///
+/// `GET /` was added with M5: the dashboard's overview, which renders
+/// the same `stats::aggregate::daily_totals` for the caller's own id.
+/// Its path contains neither "stats" nor "event", which is exactly why
+/// it has to be named here rather than caught by the substring check.
+const STATS_ROUTES: &[(&str, &str)] = &[("GET", "/api/v1/stats"), ("GET", "/")];
 
 /// The owner's whole-account download, kept separate for the same
 /// reason as [`STATS_ROUTES`]: its path does not contain "event" either.
@@ -569,6 +576,9 @@ async fn no_get_other_than_the_owners_events_route_returns_an_event() {
 
     // Every path in the inventory except the owner's own events
     // route, plus the ones a reader might reasonably expect to exist.
+    // `/` is the overview, the admin's own: it does read their events,
+    // but renders only per-category totals, never an app id, label or
+    // domain - so it stays in the sweep and must still show none.
     let mut paths: Vec<String> = INVENTORY
         .iter()
         .filter(|spec| spec.path != "/api/v1/events" && spec.path != "/api/v1/export")
@@ -602,7 +612,9 @@ async fn no_get_other_than_the_owners_events_route_returns_an_event() {
             ("nobody", TestRequest::get(&path)),
         ] {
             let response = app.send(request).await;
-            let rendered = response.body.to_string();
+            // The raw text, not the parsed JSON: a dashboard page is
+            // HTML, which parses as `Null` and would hide anything.
+            let rendered = &response.text;
 
             for needle in needles {
                 assert!(

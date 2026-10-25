@@ -4,7 +4,7 @@
 //!
 //! This is the service layer. HTTP concerns (status codes, headers,
 //! cookies on the wire) belong in [`crate::routes`]; the types here know
-//! nothing about axum, so the JSON API and the later dashboard can share
+//! nothing about axum, so the JSON API and the dashboard can share
 //! them without duplicating any logic.
 //!
 //! # Where each decision is written down

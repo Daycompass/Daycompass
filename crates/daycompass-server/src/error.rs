@@ -552,6 +552,9 @@ impl IntoResponse for ApiError {
 
         let mut response = (self.kind.status(), Json(body)).into_response();
         response.extensions_mut().insert(Deliberate);
+        // So the dashboard's error layer can re-render this error as HTML
+        // from the kind itself, rather than by parsing the JSON body back.
+        response.extensions_mut().insert(self.kind);
 
         if let Some(after) = self.retry_after {
             // Whole seconds, and at least one: "Retry-After: 0" invites
