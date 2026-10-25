@@ -4,8 +4,10 @@
 //!
 //!   1. The committed spec is exactly what the code generates - a
 //!      handler or view changed without regenerating fails here.
-//!   2. The spec has an operation for every [`INVENTORY`] route and for
-//!      nothing else.
+//!   2. The spec has an operation for every [`INVENTORY`] API route and
+//!      for nothing else. Dashboard routes (`Surface::Page`) answer
+//!      browsers with HTML, are no part of the wire format, and are not
+//!      in the spec.
 //!   3. Each operation's security says what the route table enforces.
 //!   4. `docs/openapi-wire-v1.json` - the contract the first clients are
 //!      written against - is byte-for-byte the frozen file, pinned by
@@ -38,7 +40,12 @@ use std::path::PathBuf;
 use serde_json::Value;
 
 use daycompass_server::routes::openapi::spec_json;
-use daycompass_server::routes::{Access, INVENTORY};
+use daycompass_server::routes::{Access, RouteSpec, Surface, INVENTORY};
+
+/// The routes the spec describes: the API, not the dashboard.
+fn api_routes() -> impl Iterator<Item = &'static RouteSpec> {
+    INVENTORY.iter().filter(|spec| spec.surface == Surface::Api)
+}
 
 /// SHA-256 of `docs/openapi-wire-v1.json`, as frozen.
 ///
@@ -92,8 +99,7 @@ fn operations(spec: &Value) -> BTreeSet<(String, String)> {
 #[test]
 fn every_route_is_in_the_spec_and_nothing_else_is() {
     let documented = operations(&current());
-    let routed: BTreeSet<(String, String)> = INVENTORY
-        .iter()
+    let routed: BTreeSet<(String, String)> = api_routes()
         .map(|spec| (spec.method.to_owned(), spec.path.to_owned()))
         .collect();
 
@@ -111,7 +117,7 @@ fn every_route_is_in_the_spec_and_nothing_else_is() {
 #[test]
 fn every_operations_security_matches_the_route_table() {
     let spec = current();
-    for route in INVENTORY {
+    for route in api_routes() {
         let operation = &spec["paths"][route.path][route.method.to_lowercase()];
         let schemes: BTreeSet<String> = operation["security"]
             .as_array()

@@ -2,8 +2,8 @@
 //!
 //! Handlers here parse input, call the service layer in
 //! [`crate::auth`], and map results onto status codes. No rules live in
-//! this module: per `CLAUDE.md`, the JSON handlers and the later HTML
-//! handlers must share one service layer.
+//! this module: per `CLAUDE.md`, the JSON handlers and the dashboard's
+//! HTML handlers (in `pages`) share one service layer.
 //!
 //! ## The route inventory
 //!
@@ -38,6 +38,7 @@ mod export;
 mod health;
 mod invites;
 pub mod openapi;
+mod pages;
 mod pairing;
 mod setup;
 mod stats;
@@ -131,6 +132,16 @@ pub enum OriginRule {
     /// default, and the only thing a cookie-authenticated route may
     /// be.
     Checked,
+    /// Like [`Self::Checked`], and an **absent** `Origin` is refused as
+    /// well. Dashboard routes only.
+    ///
+    /// `Checked` lets a request with no `Origin` through because native
+    /// clients send none (see [`crate::auth::origin`]). A dashboard form
+    /// post has no such caller, only browsers, so there the exemption
+    /// is dropped: login CSRF then needs a browser that both forgets the
+    /// header and attaches the cookie, rather than resting on every
+    /// browser sending it.
+    Required,
     /// Exempt, because the route has **no ambient cookie authority**
     /// in either direction: it does not authenticate by cookie, and
     /// it does not hand one out.
@@ -145,6 +156,23 @@ pub enum OriginRule {
     /// [`Access::BodySecret`] or [`Access::Device`], and the route
     /// must set no session cookie.
     NoAmbientAuthority,
+}
+
+/// Who a route answers: a program reading JSON, or a person's browser.
+///
+/// The protections are the same either way - the access, CSRF, `Origin`
+/// and rate-limit columns mean exactly what they mean on an API route.
+/// What changes is only how a refusal is *shown*: on a page route the
+/// layer [`pages::render_errors`] re-renders every error response as
+/// HTML, and sends a browser with no session to the login page instead
+/// of answering 401.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Surface {
+    /// The JSON API under `/api/v1/`, plus `/healthz`.
+    Api,
+    /// The server-rendered dashboard: HTML pages, their htmx form posts
+    /// and their static assets.
+    Page,
 }
 
 /// One of the rate limiters in [`crate::state::Limits`].
@@ -247,6 +275,7 @@ pub struct RouteSpec {
     /// which method a handler answers.
     pub method: &'static str,
     pub path: &'static str,
+    pub surface: Surface,
     pub access: Access,
     /// Whether a mismatched `Origin` is rejected, and if not, why it
     /// is safe not to.
@@ -270,7 +299,7 @@ pub struct RouteSpec {
 impl RouteSpec {
     /// Whether a mismatched `Origin` is rejected on this route.
     pub const fn origin_checked(&self) -> bool {
-        matches!(self.origin, OriginRule::Checked)
+        matches!(self.origin, OriginRule::Checked | OriginRule::Required)
     }
 }
 
@@ -286,6 +315,35 @@ impl RouteSpec {
                 .chars()
                 .all(|c| c.is_ascii_uppercase() || c == '-'),
             "{} {}: the method must be uppercase",
+            self.method,
+            self.path
+        );
+
+        // The surface follows the path, so nothing under `/api/` can be
+        // answered with HTML and no page can hide among the API routes.
+        let api_path = self.path.starts_with("/api/") || self.path == "/healthz";
+        assert!(
+            api_path == (self.surface == Surface::Api),
+            "{} {}: API routes live under /api/ (or are /healthz), pages everywhere else",
+            self.method,
+            self.path
+        );
+
+        // A page is read by a browser, and a device is not one. A device
+        // route on the dashboard surface would mix the two principals the
+        // cross-credential rules keep apart.
+        assert!(
+            !(self.surface == Surface::Page && self.access.needs_device()),
+            "{} {}: a page route cannot authenticate a device",
+            self.method,
+            self.path
+        );
+
+        // Only a page may demand an Origin. An API route doing so would
+        // refuse every native client, which sends none.
+        assert!(
+            self.origin != OriginRule::Required || self.surface == Surface::Page,
+            "{} {}: only a page route may require an Origin header",
             self.method,
             self.path
         );
@@ -414,6 +472,7 @@ pub const INVENTORY: &[RouteSpec] = &[
     RouteSpec {
         method: "GET",
         path: "/healthz",
+        surface: Surface::Api,
         access: Access::Public,
         origin: OriginRule::Checked,
         csrf: false,
@@ -427,6 +486,7 @@ pub const INVENTORY: &[RouteSpec] = &[
     RouteSpec {
         method: "POST",
         path: "/api/v1/setup",
+        surface: Surface::Api,
         access: Access::BodySecret,
         origin: OriginRule::NoAmbientAuthority,
         csrf: false,
@@ -447,6 +507,7 @@ pub const INVENTORY: &[RouteSpec] = &[
     RouteSpec {
         method: "POST",
         path: "/api/v1/auth/login",
+        surface: Surface::Api,
         access: Access::Public,
         origin: OriginRule::Checked,
         csrf: false,
@@ -460,6 +521,7 @@ pub const INVENTORY: &[RouteSpec] = &[
     RouteSpec {
         method: "POST",
         path: "/api/v1/auth/logout",
+        surface: Surface::Api,
         access: Access::Session,
         origin: OriginRule::Checked,
         csrf: true,
@@ -471,6 +533,7 @@ pub const INVENTORY: &[RouteSpec] = &[
     RouteSpec {
         method: "GET",
         path: "/api/v1/auth/me",
+        surface: Surface::Api,
         access: Access::Session,
         origin: OriginRule::Checked,
         csrf: false,
@@ -486,6 +549,7 @@ pub const INVENTORY: &[RouteSpec] = &[
     RouteSpec {
         method: "POST",
         path: "/api/v1/auth/password",
+        surface: Surface::Api,
         access: Access::Session,
         origin: OriginRule::Checked,
         csrf: true,
@@ -496,6 +560,7 @@ pub const INVENTORY: &[RouteSpec] = &[
     RouteSpec {
         method: "POST",
         path: "/api/v1/users",
+        surface: Surface::Api,
         access: Access::Admin,
         origin: OriginRule::Checked,
         csrf: true,
@@ -506,6 +571,7 @@ pub const INVENTORY: &[RouteSpec] = &[
     RouteSpec {
         method: "GET",
         path: "/api/v1/users",
+        surface: Surface::Api,
         access: Access::Admin,
         origin: OriginRule::Checked,
         csrf: false,
@@ -516,6 +582,7 @@ pub const INVENTORY: &[RouteSpec] = &[
     RouteSpec {
         method: "PATCH",
         path: "/api/v1/users/{id}",
+        surface: Surface::Api,
         access: Access::Admin,
         origin: OriginRule::Checked,
         csrf: true,
@@ -526,6 +593,7 @@ pub const INVENTORY: &[RouteSpec] = &[
     RouteSpec {
         method: "DELETE",
         path: "/api/v1/users/{id}",
+        surface: Surface::Api,
         access: Access::Admin,
         origin: OriginRule::Checked,
         csrf: true,
@@ -538,6 +606,7 @@ pub const INVENTORY: &[RouteSpec] = &[
     RouteSpec {
         method: "POST",
         path: "/api/v1/users/{id}/password-reset",
+        surface: Surface::Api,
         access: Access::Admin,
         origin: OriginRule::Checked,
         csrf: true,
@@ -558,6 +627,7 @@ pub const INVENTORY: &[RouteSpec] = &[
     RouteSpec {
         method: "POST",
         path: "/api/v1/invites/redeem",
+        surface: Surface::Api,
         access: Access::BodySecret,
         origin: OriginRule::Checked,
         csrf: false,
@@ -574,6 +644,7 @@ pub const INVENTORY: &[RouteSpec] = &[
     RouteSpec {
         method: "GET",
         path: "/api/v1/account/log",
+        surface: Surface::Api,
         access: Access::Session,
         origin: OriginRule::Checked,
         csrf: false,
@@ -588,6 +659,7 @@ pub const INVENTORY: &[RouteSpec] = &[
     RouteSpec {
         method: "POST",
         path: "/api/v1/pairing-codes",
+        surface: Surface::Api,
         access: Access::Session,
         origin: OriginRule::Checked,
         csrf: true,
@@ -608,6 +680,7 @@ pub const INVENTORY: &[RouteSpec] = &[
     RouteSpec {
         method: "POST",
         path: "/api/v1/pair",
+        surface: Surface::Api,
         access: Access::BodySecret,
         origin: OriginRule::NoAmbientAuthority,
         csrf: false,
@@ -626,6 +699,7 @@ pub const INVENTORY: &[RouteSpec] = &[
     RouteSpec {
         method: "POST",
         path: "/api/v1/events",
+        surface: Surface::Api,
         access: Access::Device,
         origin: OriginRule::NoAmbientAuthority,
         csrf: false,
@@ -644,6 +718,7 @@ pub const INVENTORY: &[RouteSpec] = &[
     RouteSpec {
         method: "GET",
         path: "/api/v1/events",
+        surface: Surface::Api,
         access: Access::Session,
         origin: OriginRule::Checked,
         csrf: false,
@@ -663,6 +738,7 @@ pub const INVENTORY: &[RouteSpec] = &[
     RouteSpec {
         method: "POST",
         path: "/api/v1/category-rules",
+        surface: Surface::Api,
         access: Access::Session,
         origin: OriginRule::Checked,
         csrf: true,
@@ -673,6 +749,7 @@ pub const INVENTORY: &[RouteSpec] = &[
     RouteSpec {
         method: "GET",
         path: "/api/v1/category-rules",
+        surface: Surface::Api,
         access: Access::Session,
         origin: OriginRule::Checked,
         csrf: false,
@@ -683,6 +760,7 @@ pub const INVENTORY: &[RouteSpec] = &[
     RouteSpec {
         method: "DELETE",
         path: "/api/v1/category-rules/{id}",
+        surface: Surface::Api,
         access: Access::Session,
         origin: OriginRule::Checked,
         csrf: true,
@@ -699,6 +777,7 @@ pub const INVENTORY: &[RouteSpec] = &[
     RouteSpec {
         method: "GET",
         path: "/api/v1/stats",
+        surface: Surface::Api,
         access: Access::Session,
         origin: OriginRule::Checked,
         csrf: false,
@@ -720,6 +799,7 @@ pub const INVENTORY: &[RouteSpec] = &[
     RouteSpec {
         method: "GET",
         path: "/api/v1/export",
+        surface: Surface::Api,
         access: Access::Session,
         origin: OriginRule::Checked,
         csrf: false,
@@ -732,6 +812,7 @@ pub const INVENTORY: &[RouteSpec] = &[
     RouteSpec {
         method: "GET",
         path: "/api/v1/device/me",
+        surface: Surface::Api,
         access: Access::Device,
         origin: OriginRule::NoAmbientAuthority,
         csrf: false,
@@ -749,6 +830,7 @@ pub const INVENTORY: &[RouteSpec] = &[
     RouteSpec {
         method: "GET",
         path: "/api/v1/devices",
+        surface: Surface::Api,
         access: Access::Session,
         origin: OriginRule::Checked,
         csrf: false,
@@ -759,6 +841,7 @@ pub const INVENTORY: &[RouteSpec] = &[
     RouteSpec {
         method: "PATCH",
         path: "/api/v1/devices/{id}",
+        surface: Surface::Api,
         access: Access::Session,
         origin: OriginRule::Checked,
         csrf: true,
@@ -771,6 +854,7 @@ pub const INVENTORY: &[RouteSpec] = &[
     RouteSpec {
         method: "POST",
         path: "/api/v1/devices/{id}/revoke",
+        surface: Surface::Api,
         access: Access::Session,
         origin: OriginRule::Checked,
         csrf: true,
@@ -784,6 +868,7 @@ pub const INVENTORY: &[RouteSpec] = &[
     RouteSpec {
         method: "GET",
         path: "/api/v1/admin/devices",
+        surface: Surface::Api,
         access: Access::Admin,
         origin: OriginRule::Checked,
         csrf: false,
@@ -794,9 +879,90 @@ pub const INVENTORY: &[RouteSpec] = &[
     RouteSpec {
         method: "POST",
         path: "/api/v1/admin/devices/{id}/revoke",
+        surface: Surface::Api,
         access: Access::Admin,
         origin: OriginRule::Checked,
         csrf: true,
+        sets_session_cookie: false,
+        max_body_bytes: None,
+        rate_limits: &[],
+    },
+    // --- dashboard (M5) -------------------------------------------------
+    //
+    // The same protections as the API, column for column; only the
+    // surface differs, which changes how a refusal is rendered and
+    // nothing about whether it happens. Every write here is an htmx
+    // request carrying `X-CSRF-Token`, the same header the API reads,
+    // so there is no second CSRF mechanism.
+    //
+    // The stylesheet, fonts, htmx and the favicon, compiled into the
+    // binary. A fixed set of names, nothing read from disk.
+    RouteSpec {
+        method: "GET",
+        path: "/static/{name}",
+        surface: Surface::Page,
+        access: Access::Public,
+        origin: OriginRule::Checked,
+        csrf: false,
+        sets_session_cookie: false,
+        max_body_bytes: None,
+        rate_limits: &[],
+    },
+    RouteSpec {
+        method: "GET",
+        path: "/login",
+        surface: Surface::Page,
+        access: Access::Public,
+        origin: OriginRule::Checked,
+        csrf: false,
+        sets_session_cookie: false,
+        max_body_bytes: None,
+        rate_limits: &[],
+    },
+    // The dashboard's login form. The API login's protections, for the
+    // API login's reasons, plus one: `OriginRule::Required`, because only
+    // browsers post here and a browser always sends `Origin`. And the
+    // *same* two buckets,
+    // not copies of them: both handlers go through
+    // `auth::attempt_login`, so an attacker gains no budget by
+    // alternating between the two routes.
+    RouteSpec {
+        method: "POST",
+        path: "/login",
+        surface: Surface::Page,
+        access: Access::Public,
+        origin: OriginRule::Required,
+        csrf: false,
+        sets_session_cookie: true,
+        max_body_bytes: None,
+        rate_limits: &[
+            RateLimit::new(Bucket::LoginIp, LimitKey::Peer),
+            RateLimit::new(Bucket::LoginUsername, LimitKey::Body),
+        ],
+    },
+    RouteSpec {
+        method: "POST",
+        path: "/logout",
+        surface: Surface::Page,
+        access: Access::Session,
+        origin: OriginRule::Required,
+        csrf: true,
+        sets_session_cookie: true,
+        max_body_bytes: None,
+        rate_limits: &[],
+    },
+    // The overview: the caller's own stats, rendered. A read into
+    // events like `GET /api/v1/stats`, through the same service
+    // function, and with the same shape for the same reasons - session
+    // only, no admin variant, no id parameter. Listed in
+    // `tests/no_event_reads.rs` as an owner read.
+    RouteSpec {
+        method: "GET",
+        path: "/",
+        surface: Surface::Page,
+        access: Access::Session,
+        origin: OriginRule::Checked,
+        csrf: false,
         sets_session_cookie: false,
         max_body_bytes: None,
         rate_limits: &[],
@@ -852,6 +1018,11 @@ pub fn router(state: AppState) -> Router {
     table.add("PATCH", "/api/v1/devices/{id}", devices::rename_own);
     table.add("POST", "/api/v1/devices/{id}/revoke", devices::revoke_own);
     table.add("GET", "/api/v1/admin/devices", devices::list_all);
+    table.add("GET", "/static/{name}", pages::assets::serve);
+    table.add("GET", "/login", pages::login::page);
+    table.add("POST", "/login", pages::login::submit);
+    table.add("POST", "/logout", pages::login::log_out);
+    table.add("GET", "/", pages::overview::page);
     table.add(
         "POST",
         "/api/v1/admin/devices/{id}/revoke",
@@ -947,6 +1118,13 @@ impl RouteTable {
                 (self.state.clone(), spec),
                 access::enforce_origin,
             ));
+        }
+
+        // Outermost, so it sees every refusal the layers above produce -
+        // an Origin mismatch included - and re-renders it for a browser.
+        // It never turns a refusal into a success: the status survives.
+        if spec.surface == Surface::Page {
+            route = route.layer(axum::middleware::from_fn(pages::render_errors));
         }
 
         // The one place a route is registered. `tests/route_inventory.rs`
@@ -1162,7 +1340,8 @@ mod tests {
     fn spec_with(access: Access, csrf: bool, limits: &'static [RateLimit]) -> RouteSpec {
         RouteSpec {
             method: "POST",
-            path: "/probe",
+            path: "/api/v1/probe",
+            surface: Surface::Api,
             access,
             origin: OriginRule::Checked,
             csrf,
@@ -1177,7 +1356,8 @@ mod tests {
     fn exempt_spec(access: Access, sets_session_cookie: bool) -> RouteSpec {
         RouteSpec {
             method: "POST",
-            path: "/probe",
+            path: "/api/v1/probe",
+            surface: Surface::Api,
             access,
             origin: OriginRule::NoAmbientAuthority,
             csrf: false,
@@ -1185,6 +1365,52 @@ mod tests {
             max_body_bytes: None,
             rate_limits: &[],
         }
+    }
+
+    /// The surface follows the path in both directions, so a page can
+    /// never hide among the API routes or the other way round.
+    #[test]
+    #[should_panic(expected = "API routes live under /api/")]
+    fn a_page_may_not_live_under_the_api_prefix() {
+        let mut spec = spec_with(Access::Session, true, &[]);
+        spec.surface = Surface::Page;
+        spec.validate();
+    }
+
+    #[test]
+    #[should_panic(expected = "API routes live under /api/")]
+    fn an_api_route_may_not_live_outside_the_api_prefix() {
+        let mut spec = spec_with(Access::Session, true, &[]);
+        spec.path = "/probe";
+        spec.validate();
+    }
+
+    #[test]
+    #[should_panic(expected = "only a page route may require an Origin header")]
+    fn an_api_route_may_not_require_an_origin() {
+        let mut spec = spec_with(Access::Session, true, &[]);
+        spec.origin = OriginRule::Required;
+        spec.validate();
+    }
+
+    /// Both dashboard writes demand the header; neither may fall back to
+    /// the absent-is-fine rule the API needs for native clients.
+    #[test]
+    fn the_dashboard_writes_require_an_origin() {
+        for (method, path) in [("POST", "/login"), ("POST", "/logout")] {
+            let spec = spec_for(method, path).expect("in the table");
+            assert_eq!(spec.origin, OriginRule::Required, "{method} {path}");
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "a page route cannot authenticate a device")]
+    fn a_page_may_not_authenticate_a_device() {
+        let mut spec = spec_with(Access::Device, false, PRE_AUTH);
+        spec.origin = OriginRule::NoAmbientAuthority;
+        spec.surface = Surface::Page;
+        spec.path = "/probe";
+        spec.validate();
     }
 
     #[test]
@@ -1348,7 +1574,8 @@ mod tests {
         // A safe method needs no CSRF token, whatever the access.
         RouteSpec {
             method: "GET",
-            path: "/probe",
+            path: "/api/v1/probe",
+            surface: Surface::Api,
             access: Access::Admin,
             origin: OriginRule::Checked,
             csrf: false,

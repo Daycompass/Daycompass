@@ -51,7 +51,7 @@
 
 use std::path::{Path, PathBuf};
 
-use daycompass_server::routes::INVENTORY;
+use daycompass_server::routes::{Surface, INVENTORY};
 
 /// Where `docs/wire-format.md` lives, relative to this crate.
 ///
@@ -100,7 +100,11 @@ fn anchors(markdown: &str) -> Vec<(usize, String, String)> {
         .collect()
 }
 
-/// Every route in [`INVENTORY`] has a documentation anchor.
+/// Every API route in [`INVENTORY`] has a documentation anchor.
+///
+/// API routes only: the dashboard's pages (`Surface::Page`) answer a
+/// browser with HTML and are not something a client is written
+/// against, so they are not part of the wire format.
 #[test]
 fn every_route_in_the_inventory_is_documented() {
     let markdown = read_wire_format();
@@ -108,6 +112,7 @@ fn every_route_in_the_inventory_is_documented() {
 
     let missing: Vec<_> = INVENTORY
         .iter()
+        .filter(|spec| spec.surface == Surface::Api)
         .filter(|spec| {
             !documented
                 .iter()

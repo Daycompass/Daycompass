@@ -152,11 +152,13 @@ impl TestApp {
         } else {
             serde_json::from_slice(&bytes).unwrap_or(Value::Null)
         };
+        let text = String::from_utf8_lossy(&bytes).into_owned();
 
         TestResponse {
             status,
             headers,
             body,
+            text,
         }
     }
 
@@ -543,6 +545,13 @@ pub struct TestRequest {
     /// Suppresses the `Content-Type` header a body would otherwise
     /// imply, for the wrong-content-type test.
     omit_content_type: bool,
+    /// A form-encoded body, as a browser posts the dashboard's login
+    /// form. Sent instead of `body`.
+    form: Option<String>,
+    /// Sends `HX-Request: true`, as htmx does.
+    htmx: bool,
+    /// Any other header, verbatim.
+    extra: Vec<(String, String)>,
 }
 
 impl TestRequest {
@@ -575,6 +584,9 @@ impl TestRequest {
             body: None,
             raw_body: None,
             omit_content_type: false,
+            form: None,
+            htmx: false,
+            extra: Vec::new(),
         }
     }
 
@@ -652,6 +664,28 @@ impl TestRequest {
         self
     }
 
+    /// Sends `fields` form-encoded, as a browser posts a `<form>`.
+    pub fn form(mut self, fields: &[(&str, &str)]) -> Self {
+        let encoded: Vec<String> = fields
+            .iter()
+            .map(|(name, value)| format!("{}={}", form_encode(name), form_encode(value)))
+            .collect();
+        self.form = Some(encoded.join("&"));
+        self
+    }
+
+    /// Adds any header, verbatim.
+    pub fn header(mut self, name: &str, value: &str) -> Self {
+        self.extra.push((name.to_owned(), value.to_owned()));
+        self
+    }
+
+    /// Marks the request as one htmx made.
+    pub fn htmx(mut self) -> Self {
+        self.htmx = true;
+        self
+    }
+
     /// Sends the body without a `Content-Type` header.
     pub fn without_content_type(mut self) -> Self {
         self.omit_content_type = true;
@@ -662,8 +696,16 @@ impl TestRequest {
         let mut builder = Request::builder().method(self.method).uri(&self.uri);
 
         let has_body = self.body.is_some() || self.raw_body.is_some();
-        if has_body && !self.omit_content_type {
+        if self.form.is_some() && !self.omit_content_type {
+            builder = builder.header(header::CONTENT_TYPE, "application/x-www-form-urlencoded");
+        } else if has_body && !self.omit_content_type {
             builder = builder.header(header::CONTENT_TYPE, "application/json");
+        }
+        if self.htmx {
+            builder = builder.header("hx-request", "true");
+        }
+        for (name, value) in &self.extra {
+            builder = builder.header(name, value);
         }
         for origin in &self.origins {
             builder = builder.header(header::ORIGIN, origin);
@@ -681,10 +723,11 @@ impl TestRequest {
             builder = builder.header("x-forwarded-for", value);
         }
 
-        let body = match (self.raw_body, self.body) {
-            (Some(bytes), _) => Body::from(bytes),
-            (None, Some(json)) => Body::from(json),
-            (None, None) => Body::empty(),
+        let body = match (self.raw_body, self.form, self.body) {
+            (Some(bytes), _, _) => Body::from(bytes),
+            (None, Some(form), _) => Body::from(form),
+            (None, None, Some(json)) => Body::from(json),
+            (None, None, None) => Body::empty(),
         };
         let mut request = builder.body(body).expect("the request must be valid");
 
@@ -698,11 +741,32 @@ impl TestRequest {
     }
 }
 
+/// `application/x-www-form-urlencoded` for one name or value: what a
+/// browser does, minus nothing the tests need.
+fn form_encode(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for byte in text.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'*' => {
+                out.push(byte as char)
+            }
+            b' ' => out.push('+'),
+            other => out.push_str(&format!("%{other:02X}")),
+        }
+    }
+    out
+}
+
 /// A response, already read.
 pub struct TestResponse {
     pub status: StatusCode,
     pub headers: HeaderMap,
+    /// The body parsed as JSON, or `Null` if it was not JSON.
     pub body: Value,
+    /// The body as text, whatever it was. A dashboard page is HTML, and
+    /// a check that only looked at `body` would see `Null` there and
+    /// pass without having looked at anything.
+    pub text: String,
 }
 
 impl TestResponse {
@@ -727,9 +791,27 @@ impl TestResponse {
             .and_then(|value| value.parse().ok())
     }
 
-    /// The `error.code` field of the uniform error body.
+    /// The error code: `error.code` from the uniform JSON body, or the
+    /// `data-error-code` attribute a dashboard error page carries.
     pub fn error_code(&self) -> Option<&str> {
-        self.body["error"]["code"].as_str()
+        if let Some(code) = self.body["error"]["code"].as_str() {
+            return Some(code);
+        }
+        let start = self.text.find("data-error-code=\"")? + "data-error-code=\"".len();
+        let end = self.text[start..].find('"')?;
+        Some(&self.text[start..start + end])
+    }
+
+    /// The `Location` header, for a redirect.
+    pub fn location(&self) -> Option<&str> {
+        self.headers
+            .get(header::LOCATION)
+            .and_then(|value| value.to_str().ok())
+    }
+
+    /// A response header by name, as text.
+    pub fn header(&self, name: &str) -> Option<&str> {
+        self.headers.get(name).and_then(|value| value.to_str().ok())
     }
 
     /// The set of JSON keys at the top level, for comparing the *shape*

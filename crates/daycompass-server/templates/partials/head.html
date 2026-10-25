@@ -1,0 +1,10 @@
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+{#- htmx, locked down to what the CSP allows anyway: no eval, no inline
+    indicator <style>, no script tags in swapped content, no history
+    snapshots in localStorage (they would hold the CSRF token). Error
+    responses are swapped too; the server retargets them at #dc-flash. #}
+<meta name="htmx-config" content='{"allowEval":false,"allowScriptTags":false,"includeIndicatorStyles":false,"historyCacheSize":0,"refreshOnHistoryMiss":true,"selfRequestsOnly":true,"responseHandling":[{"code":"204","swap":false},{"code":"[23]..","swap":true},{"code":"[45]..","swap":true,"error":true}]}'>
+<link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/static/daycompass.css">
+<script src="/static/{{ crate::routes::pages::assets::HTMX }}" defer></script>
