@@ -301,7 +301,8 @@ pub async fn enforce_rate_limits(
                     | Bucket::PairGlobal
                     | Bucket::IngestDevice
                     | Bucket::DeviceAuthFail
-                    | Bucket::InviteGlobal => return unenforceable(*limit),
+                    | Bucket::InviteGlobal
+                    | Bucket::Export => return unenforceable(*limit),
                 }
             }
             // One shared bucket for the whole endpoint, so there is no
@@ -316,7 +317,8 @@ pub async fn enforce_rate_limits(
                 | Bucket::PairIp
                 | Bucket::IngestDevice
                 | Bucket::DeviceAuthFail
-                | Bucket::InviteIp => return unenforceable(*limit),
+                | Bucket::InviteIp
+                | Bucket::Export => return unenforceable(*limit),
             },
             LimitKey::Device => {
                 let Some(auth) = parts.extensions.get::<Arc<AuthDevice>>() else {
@@ -339,7 +341,8 @@ pub async fn enforce_rate_limits(
                     | Bucket::PairGlobal
                     | Bucket::DeviceAuthFail
                     | Bucket::InviteIp
-                    | Bucket::InviteGlobal => return unenforceable(*limit),
+                    | Bucket::InviteGlobal
+                    | Bucket::Export => return unenforceable(*limit),
                 }
             }
             LimitKey::Session => {
@@ -356,6 +359,10 @@ pub async fn enforce_rate_limits(
                     Bucket::PwChange => state
                         .limits
                         .pw_change
+                        .check(SessionKey::new(&auth.session.id), now),
+                    Bucket::Export => state
+                        .limits
+                        .export
                         .check(SessionKey::new(&auth.session.id), now),
                     Bucket::LoginIp
                     | Bucket::LoginUsername

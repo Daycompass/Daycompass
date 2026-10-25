@@ -51,6 +51,7 @@ pub const GENEROUS_LIMITS: &[(&str, &str)] = &[
     // cannot reach it. `tests/device_auth_limit.rs` sets its own
     // tight values rather than relying on this one.
     ("DAYCOMPASS_RATE_LIMIT_DEVICE_AUTH_FAIL", "1000/60"),
+    ("DAYCOMPASS_RATE_LIMIT_EXPORT", "1000/3600"),
 ];
 
 /// A running app plus the pool behind it.

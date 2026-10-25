@@ -675,6 +675,7 @@ async fn every_layer_enforced_rate_limit_refuses_when_reached() {
         // Same reasoning as the pairing ceiling above: left wide so the
         // per-address bucket is what refuses here.
         ("DAYCOMPASS_RATE_LIMIT_INVITE_GLOBAL", "100000/60"),
+        ("DAYCOMPASS_RATE_LIMIT_EXPORT", "2/3600"),
     ];
 
     for spec in INVENTORY.iter().filter(|spec| {

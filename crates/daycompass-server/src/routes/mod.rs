@@ -34,6 +34,7 @@ mod auth;
 mod categories;
 mod devices;
 mod events;
+mod export;
 mod health;
 mod invites;
 mod pairing;
@@ -165,6 +166,8 @@ pub enum Bucket {
     InviteIp,
     /// Invite redemption attempts across the whole instance.
     InviteGlobal,
+    /// Account exports from one session.
+    Export,
 }
 
 /// What a limiter counts a request against.
@@ -701,6 +704,27 @@ pub const INVENTORY: &[RouteSpec] = &[
         max_body_bytes: None,
         rate_limits: &[],
     },
+    // --- export ---------------------------------------------------------
+    //
+    // M4: everything the account has, events included, as one streamed
+    // download. The third read into events, and the same shape as the
+    // other two: session auth, `Origin`-checked, no CSRF, no admin
+    // variant and no id parameter. `tests/no_event_reads.rs` was
+    // deliberately extended to allow it.
+    //
+    // The only session read with a rate limit of its own: it reads the
+    // account's whole history, which until retention exists is the most
+    // expensive read there is.
+    RouteSpec {
+        method: "GET",
+        path: "/api/v1/export",
+        access: Access::Session,
+        origin: OriginRule::Checked,
+        csrf: false,
+        sets_session_cookie: false,
+        max_body_bytes: None,
+        rate_limits: &[RateLimit::new(Bucket::Export, LimitKey::Session)],
+    },
     // Lets a client detect clock skew, which is what makes the
     // validator's future-dating rules diagnosable from the outside.
     RouteSpec {
@@ -820,6 +844,7 @@ pub fn router(state: AppState) -> Router {
         categories::delete_own,
     );
     table.add("GET", "/api/v1/stats", stats::daily_totals);
+    table.add("GET", "/api/v1/export", export::export_own);
     table.add("GET", "/api/v1/device/me", events::device_me);
     table.add("GET", "/api/v1/devices", devices::list_own);
     table.add("PATCH", "/api/v1/devices/{id}", devices::rename_own);

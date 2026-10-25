@@ -13,6 +13,7 @@ pub mod db;
 pub mod devices;
 pub mod error;
 pub mod events;
+pub mod export;
 pub mod legacy;
 pub mod middleware;
 pub mod ratelimit;

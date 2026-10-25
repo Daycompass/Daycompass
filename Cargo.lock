@@ -301,6 +301,7 @@ dependencies = [
  "argon2",
  "axum",
  "base64 0.23.1",
+ "futures-util",
  "getrandom",
  "ipnet",
  "serde",
