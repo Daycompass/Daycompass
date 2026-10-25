@@ -20,6 +20,7 @@ pub mod ratelimit;
 pub mod routes;
 pub mod state;
 pub mod stats;
+pub mod timezone;
 
 use axum::Router;
 use sqlx::SqlitePool;
