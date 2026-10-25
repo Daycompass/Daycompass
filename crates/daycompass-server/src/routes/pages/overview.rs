@@ -6,8 +6,8 @@
 //! the session. No parameter can point it at anyone else, and an admin
 //! sees their own numbers here like everyone else.
 //!
-//! Days are UTC calendar days, because that is what the aggregation
-//! returns; the page says so rather than pretending otherwise.
+//! Days are calendar days of the account's own time zone
+//! (`crate::timezone`), and the page names the zone it counted in.
 
 use askama::Template;
 use axum::extract::State;
@@ -19,6 +19,7 @@ use crate::error::{ApiError, ErrorKind};
 use crate::routes::SessionContext;
 use crate::state::AppState;
 use crate::stats::aggregate::{self, DailyCategoryTotal};
+use crate::timezone;
 
 const DAY_SECS: i64 = 24 * 60 * 60;
 
@@ -31,6 +32,7 @@ struct OverviewPage {
     shell: Shell,
     today: String,
     week: String,
+    zone: String,
     categories: Vec<CategoryRow>,
 }
 
@@ -50,11 +52,21 @@ struct CategoryRow {
 pub async fn page(State(state): State<AppState>, session: SessionContext) -> Response {
     let auth = session.auth();
     let now = UnixTime::now().as_secs();
-    let today_start = now - now.rem_euclid(DAY_SECS);
-    let start = today_start - (DAYS - 1) * DAY_SECS;
-    let end = today_start + DAY_SECS;
+    let zone = match timezone::get_for_user(&state.pool, &auth.user.id).await {
+        Ok(zone) => zone,
+        Err(err) => {
+            tracing::error!(error = %err, user_id = %auth.user.id, "reading the time zone failed");
+            return ApiError::of(ErrorKind::InternalError).into_response();
+        }
+    };
+    // A local day is 23 to 25 hours long on a clock change, so the
+    // edges are found from the middle of a day, not by adding 24 hours
+    // to a midnight.
+    let today_start = zone.day_start(now);
+    let start = zone.day_start(today_start - (DAYS - 1) * DAY_SECS + DAY_SECS / 2);
+    let end = zone.day_start(today_start + DAY_SECS + DAY_SECS / 2);
 
-    let days = match aggregate::daily_totals(&state.pool, &auth.user.id, start, end).await {
+    let days = match aggregate::daily_totals(&state.pool, &auth.user.id, start, end, &zone).await {
         Ok(days) => days,
         Err(err) => {
             tracing::error!(error = ?err, user_id = %auth.user.id, "aggregating the overview failed");
@@ -67,6 +79,7 @@ pub async fn page(State(state): State<AppState>, session: SessionContext) -> Res
         shell: Shell::for_session(auth, "overview"),
         today: format_duration(summary.today_secs),
         week: format_duration(summary.week_secs),
+        zone: zone.as_str().to_owned(),
         categories: summary.rows(),
     })
 }

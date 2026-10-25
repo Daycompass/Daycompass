@@ -25,6 +25,9 @@ use crate::auth::store::StoreError;
 use crate::categories::resolve::Resolver;
 use crate::categories::service as categories;
 use crate::events::store;
+use crate::timezone::{TimeZoneName, OFFSET_GRANULARITY_SECS};
+
+const UTC_DAY_SECS: i64 = 24 * 60 * 60;
 
 /// The widest span one request's `[start_ts, end_ts)` may cover.
 ///
@@ -56,7 +59,8 @@ pub enum AggregateError {
 /// event in the caller's own history.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DailyCategoryTotal {
-    /// The Unix timestamp of this day's UTC midnight.
+    /// The Unix timestamp of this day's midnight in the zone the totals
+    /// were asked for in.
     pub day_start_ts: i64,
     /// `None` for the total of events no rule matched - a real
     /// bucket, not an error.
@@ -65,7 +69,13 @@ pub struct DailyCategoryTotal {
 }
 
 /// Validates `[start_ts, end_ts)` and, if it is in bounds, sums the
-/// caller's own screen time per UTC calendar day and category.
+/// caller's own screen time per calendar day of `zone`, and category.
+///
+/// With `zone` UTC the days are UTC days and the SQL does the whole
+/// grouping. Any other zone makes SQL group by 15-minute bucket
+/// instead, and each bucket is placed in its local day here, because
+/// SQLite has no time zone rules and a local day is not a fixed
+/// 86,400 seconds long.
 ///
 /// Sparse, like the rule set it is built from: a (day, category)
 /// combination with nothing in it has no row at all, rather than one
@@ -77,6 +87,7 @@ pub async fn daily_totals(
     user_id: &str,
     start_ts: i64,
     end_ts: i64,
+    zone: &TimeZoneName,
 ) -> Result<Vec<DailyCategoryTotal>, AggregateError> {
     if end_ts <= start_ts {
         return Err(AggregateError::Range(RangeError::Inverted));
@@ -92,7 +103,12 @@ pub async fn daily_totals(
         .map_err(AggregateError::Store)?;
     let resolver = Resolver::build(&rules);
 
-    let groups = store::select_own_daily_group_totals(pool, user_id, start_ts, end_ts)
+    let bucket_secs = if zone.is_utc() {
+        UTC_DAY_SECS
+    } else {
+        OFFSET_GRANULARITY_SECS
+    };
+    let groups = store::select_own_daily_group_totals(pool, user_id, start_ts, end_ts, bucket_secs)
         .await
         .map_err(AggregateError::Store)?;
 
@@ -101,7 +117,12 @@ pub async fn daily_totals(
         let category = resolver
             .category_for(&group.app_id, group.domain.as_deref())
             .map(str::to_owned);
-        *totals.entry((group.day_start_ts, category)).or_insert(0) += group.total_duration_secs;
+        let day_start_ts = if zone.is_utc() {
+            group.bucket_start_ts
+        } else {
+            zone.day_start(group.bucket_start_ts)
+        };
+        *totals.entry((day_start_ts, category)).or_insert(0) += group.total_duration_secs;
     }
 
     let mut totals: Vec<DailyCategoryTotal> = totals
@@ -222,9 +243,15 @@ mod tests {
         )
         .await;
 
-        let totals = daily_totals(&pool, "alice", day_start, day_start + DAY)
-            .await
-            .expect("a valid range must succeed");
+        let totals = daily_totals(
+            &pool,
+            "alice",
+            day_start,
+            day_start + DAY,
+            &TimeZoneName::utc(),
+        )
+        .await
+        .expect("a valid range must succeed");
         assert_eq!(
             totals,
             vec![DailyCategoryTotal {
@@ -255,9 +282,15 @@ mod tests {
         )
         .await;
 
-        let totals = daily_totals(&pool, "alice", day_start, day_start + DAY)
-            .await
-            .expect("a valid range must succeed");
+        let totals = daily_totals(
+            &pool,
+            "alice",
+            day_start,
+            day_start + DAY,
+            &TimeZoneName::utc(),
+        )
+        .await
+        .expect("a valid range must succeed");
         assert_eq!(totals.len(), 1);
         assert_eq!(
             totals[0].total_duration_secs, 1200,
@@ -278,9 +311,15 @@ mod tests {
         )
         .await;
 
-        let totals = daily_totals(&pool, "alice", day_start, day_start + DAY)
-            .await
-            .expect("a valid range must succeed");
+        let totals = daily_totals(
+            &pool,
+            "alice",
+            day_start,
+            day_start + DAY,
+            &TimeZoneName::utc(),
+        )
+        .await
+        .expect("a valid range must succeed");
         assert_eq!(
             totals,
             vec![DailyCategoryTotal {
@@ -315,9 +354,15 @@ mod tests {
         )
         .await;
 
-        let totals = daily_totals(&pool, "alice", day_start, day_start + DAY)
-            .await
-            .expect("a valid range must succeed");
+        let totals = daily_totals(
+            &pool,
+            "alice",
+            day_start,
+            day_start + DAY,
+            &TimeZoneName::utc(),
+        )
+        .await
+        .expect("a valid range must succeed");
         assert_eq!(
             totals,
             vec![DailyCategoryTotal {
@@ -328,7 +373,7 @@ mod tests {
         );
     }
 
-    /// An event is attributed whole to the UTC day its own `start_ts`
+    /// An event is attributed whole to the day its own `start_ts`
     /// falls in, even when `start_ts + duration_secs` crosses into the
     /// next one - the chosen simplicity tradeoff, not a bug.
     #[tokio::test]
@@ -342,9 +387,15 @@ mod tests {
         )
         .await;
 
-        let totals = daily_totals(&pool, "alice", day_start, day_start + DAY + DAY)
-            .await
-            .expect("a valid range must succeed");
+        let totals = daily_totals(
+            &pool,
+            "alice",
+            day_start,
+            day_start + DAY + DAY,
+            &TimeZoneName::utc(),
+        )
+        .await
+        .expect("a valid range must succeed");
         assert_eq!(totals.len(), 1);
         assert_eq!(totals[0].day_start_ts, day_start);
     }
@@ -366,9 +417,15 @@ mod tests {
         )
         .await;
 
-        let totals = daily_totals(&pool, "alice", day_start, day_start + DAY)
-            .await
-            .expect("a valid range must succeed");
+        let totals = daily_totals(
+            &pool,
+            "alice",
+            day_start,
+            day_start + DAY,
+            &TimeZoneName::utc(),
+        )
+        .await
+        .expect("a valid range must succeed");
         let categories: Vec<Option<String>> = totals.into_iter().map(|t| t.category).collect();
         assert_eq!(
             categories,
@@ -380,7 +437,7 @@ mod tests {
     async fn an_account_with_nothing_stored_gets_an_empty_result() {
         let pool = pool_with_one_owner().await;
 
-        let totals = daily_totals(&pool, "alice", NOW - 10, NOW + 10)
+        let totals = daily_totals(&pool, "alice", NOW - 10, NOW + 10, &TimeZoneName::utc())
             .await
             .expect("a valid range must succeed");
         assert!(totals.is_empty());
@@ -391,7 +448,7 @@ mod tests {
         let pool = pool_with_one_owner().await;
 
         for (start, end) in [(NOW, NOW), (NOW, NOW - 1)] {
-            let err = daily_totals(&pool, "alice", start, end)
+            let err = daily_totals(&pool, "alice", start, end, &TimeZoneName::utc())
                 .await
                 .expect_err("start >= end must be refused");
             assert!(matches!(err, AggregateError::Range(RangeError::Inverted)));
@@ -402,14 +459,66 @@ mod tests {
     async fn a_range_wider_than_the_cap_is_refused() {
         let pool = pool_with_one_owner().await;
 
-        let err = daily_totals(&pool, "alice", NOW, NOW + MAX_RANGE_SECS + 1)
-            .await
-            .expect_err("a too-wide range must be refused");
+        let err = daily_totals(
+            &pool,
+            "alice",
+            NOW,
+            NOW + MAX_RANGE_SECS + 1,
+            &TimeZoneName::utc(),
+        )
+        .await
+        .expect_err("a too-wide range must be refused");
         assert!(matches!(err, AggregateError::Range(RangeError::TooWide)));
 
         // The boundary itself must still be accepted.
-        daily_totals(&pool, "alice", NOW, NOW + MAX_RANGE_SECS)
+        daily_totals(
+            &pool,
+            "alice",
+            NOW,
+            NOW + MAX_RANGE_SECS,
+            &TimeZoneName::utc(),
+        )
+        .await
+        .expect("exactly the cap must be accepted");
+    }
+
+    /// 23:30 and 00:30 Berlin time on either side of midnight are the
+    /// same UTC day but two Berlin days.
+    #[tokio::test]
+    async fn a_zone_moves_the_day_boundary() {
+        let pool = pool_with_one_owner().await;
+        // 2026-01-10 22:30 UTC = 23:30 CET, and 23:30 UTC = 00:30 CET
+        // the next day.
+        let utc_day = 1_768_003_200;
+        assert_eq!(utc_day % DAY, 0);
+        insert_for(
+            &pool,
+            "d-one",
+            &[
+                event(1, utc_day + 22 * 3600 + 1800, 60, "org.example.a", None),
+                event(2, utc_day + 23 * 3600 + 1800, 120, "org.example.a", None),
+            ],
+        )
+        .await;
+        let berlin = TimeZoneName::parse("Europe/Berlin").unwrap();
+
+        let in_utc = daily_totals(&pool, "alice", utc_day, utc_day + DAY, &TimeZoneName::utc())
             .await
-            .expect("exactly the cap must be accepted");
+            .unwrap();
+        assert_eq!(in_utc.len(), 1);
+        assert_eq!(in_utc[0].total_duration_secs, 180);
+
+        let local = daily_totals(&pool, "alice", utc_day, utc_day + DAY, &berlin)
+            .await
+            .unwrap();
+        // Berlin midnight is 23:00 UTC the day before.
+        let first = utc_day - 3600;
+        assert_eq!(
+            local
+                .iter()
+                .map(|t| (t.day_start_ts, t.total_duration_secs))
+                .collect::<Vec<_>>(),
+            vec![(first, 60), (first + DAY, 120)]
+        );
     }
 }
