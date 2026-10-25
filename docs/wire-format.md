@@ -931,18 +931,22 @@ GET /api/v1/events?start_ts=1799990000&end_ts=1800000000
       "duration_secs": 300,
       "app_id": "org.mozilla.firefox",
       "label": "Firefox",
-      "domain": "example.com"
+      "domain": "example.com",
+      "category": "Browsing"
     }
   ],
   "truncated": false
 }
 ```
 
-Ordered `start_ts, device_id, event_id` ascending. `label` and
-`domain` are omitted when the event has none — same optionality as on
-the way in. **There is no `category` field here either**, for the
-same reason there is none on ingest: categories are assigned at query
-time, from rules, which is separate M3 work built on top of this read.
+Ordered `start_ts, device_id, event_id` ascending. `label`, `domain`
+and `category` are all omitted when the event has none — same
+optionality as `label`/`domain` have on the way in. `category` is
+never stored on the row: it is resolved from the caller's own
+[category rules](#category-rules-session-auth) at the moment this
+route answers, so creating, editing or deleting a rule changes what
+the *next* call to this route reports, never anything already
+returned.
 
 **`truncated`:** `true` when more events matched the window than this
 response carries. There is no cursor to resume with — narrow
@@ -957,6 +961,109 @@ page token.
 | 400 | `bad_request` | `start_ts` or `end_ts` missing, not a number, or an unknown query parameter was sent. |
 | 400 | `invalid_event_range` | `end_ts` is not strictly after `start_ts`, **or** the span between them is wider than this server allows in one request. |
 | 401 | `unauthenticated` | No session. A device's bearer token does not substitute for one — this route does not accept it. |
+
+## Category rules (session auth)
+
+An account's own rules for turning an event's `app_id` or `domain`
+into the `category` field on `GET /api/v1/events` above. Session-
+scoped only, same reasoning as that route: there is no admin variant
+and no id parameter that could point a rule at another account.
+
+A rule matches on exactly one of two fields, named by `kind`:
+
+- `app_id` — exact, case-sensitive, the same identifier semantics as
+  an event's own `app_id`.
+- `domain` — case-insensitive, and matches the pattern's subdomains
+  too: a rule on `google.com` also matches `mail.google.com`, but not
+  `notgoogle.com`.
+
+When an event matches both an `app_id` rule and one or more `domain`
+rules, the `app_id` rule wins. Among domain rules, the longest (most
+specific) matching pattern wins. An event matching no rule has no
+`category` at all, not a sentinel value.
+
+<!-- route: POST /api/v1/category-rules -->
+### `POST /api/v1/category-rules`
+
+Session auth, CSRF required. Creates a rule for the caller's own
+account.
+
+```json
+{ "kind": "domain", "pattern": "google.com", "category": "Search" }
+```
+
+`pattern` is validated and normalized per `kind`: an `app_id` pattern
+follows the same rules as an event's `app_id` (never modified); a
+`domain` pattern follows the same rules as an event's `domain`
+(lowercased, one trailing dot stripped, checked as a bare hostname —
+no scheme, path, port or query). `category` is a display string, 1–64
+characters after trimming, with the same control/text-direction
+charset rule as a device name.
+
+**`201 Created`:**
+
+```json
+{
+  "rule": {
+    "id": "0199…",
+    "kind": "domain",
+    "pattern": "google.com",
+    "category": "Search",
+    "created_at": 1800000000
+  }
+}
+```
+
+**Failures:**
+
+| Status | Code | Meaning |
+| --- | --- | --- |
+| 400 | `invalid_category_rule_kind` | `kind` was something other than `app_id` or `domain`. |
+| 400 | `invalid_category_pattern` | `pattern` is blank, too long for its kind, not shaped like a hostname (`domain` only), or carries a control or text-direction character. |
+| 400 | `invalid_category_label` | `category` is blank once trimmed, too long, or carries a control or text-direction character. |
+| 409 | `category_rule_duplicate` | This account already has a rule of this `kind` for this `pattern` — `(kind, pattern)` is the whole key, whatever `category` either one names. |
+| 409 | `category_rule_limit_reached` | This account already holds the maximum number of category rules. |
+| 401 | `unauthenticated` | No session. |
+
+<!-- route: GET /api/v1/category-rules -->
+### `GET /api/v1/category-rules`
+
+Session auth, no CSRF (a `GET`). The caller's own rules.
+
+**`200 OK`:**
+
+```json
+{
+  "rules": [
+    {
+      "id": "0199…",
+      "kind": "app_id",
+      "pattern": "org.mozilla.firefox",
+      "category": "Browsing",
+      "created_at": 1800000000
+    }
+  ]
+}
+```
+
+Ordered `created_at, id` ascending.
+
+**Failures:** `401 unauthenticated` for no session.
+
+<!-- route: DELETE /api/v1/category-rules/{id} -->
+### `DELETE /api/v1/category-rules/{id}`
+
+Session auth, CSRF required. Deletes one of the caller's own rules.
+No request body.
+
+**`204 No Content`** on success.
+
+**Failures:**
+
+| Status | Code | Meaning |
+| --- | --- | --- |
+| 404 | `not_found` | No such rule, **or** it exists but belongs to someone else — deliberately the same answer, so a caller cannot probe which rule ids exist on other accounts. |
+| 401 | `unauthenticated` | No session. |
 
 ## Admin endpoints
 
