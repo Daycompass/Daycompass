@@ -22,6 +22,7 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use serde::{Deserialize, Serialize};
+use utoipa::ToSchema;
 
 use crate::auth::secret::SecretString;
 use crate::auth::time::UnixTime;
@@ -31,7 +32,7 @@ use crate::error::{ApiError, ErrorKind};
 use crate::routes::{DeviceView, SessionContext};
 use crate::state::AppState;
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 struct NewCodeResponse {
     /// Grouped for reading aloud: `XXXXX-XXXXX`. Shown once; the
     /// server stores only a hash and cannot show it again.
@@ -42,6 +43,17 @@ struct NewCodeResponse {
     server_time: i64,
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/v1/pairing-codes",
+    tag = "devices",
+    operation_id = "create_pairing_code",
+    summary = "Mint a one-time pairing code for a new device",
+    responses(
+        (status = 201, description = "A code, shown exactly once.", body = NewCodeResponse),
+        (status = 409, description = "`pairing_code_limit_reached`: too many live codes.", body = crate::error::ErrorBody),
+    )
+)]
 pub async fn create_code(State(state): State<AppState>, session: SessionContext) -> Response {
     let now = UnixTime::now();
     let user_id = &session.auth().user.id;
@@ -72,11 +84,12 @@ pub async fn create_code(State(state): State<AppState>, session: SessionContext)
     }
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct PairRequest {
     /// Accepted in any spelling a person might type; normalized in
     /// [`crate::devices::code`].
+    #[schema(value_type = String, format = Password)]
     pairing_code: SecretString,
     device_name: String,
     /// Taken as a string and parsed in the service layer, so an
@@ -85,7 +98,7 @@ pub struct PairRequest {
     platform: String,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 struct PairResponse {
     /// Returned exactly once. The server keeps only its hash.
     device_token: String,
@@ -93,6 +106,20 @@ struct PairResponse {
     server_time: i64,
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/v1/pair",
+    tag = "devices",
+    operation_id = "pair_device",
+    summary = "Redeem a pairing code; returns the device's bearer token",
+    request_body = PairRequest,
+    responses(
+        (status = 201, description = "Paired. `device_token` is shown exactly once.", body = PairResponse),
+        (status = 400, description = "`invalid_device_name` or `invalid_platform`.", body = crate::error::ErrorBody),
+        (status = 401, description = "`invalid_pairing_code`, whatever was wrong with it.", body = crate::error::ErrorBody),
+        (status = 409, description = "`device_limit_reached`.", body = crate::error::ErrorBody),
+    )
+)]
 pub async fn pair_device(
     State(state): State<AppState>,
     Json(request): Json<PairRequest>,

@@ -21,9 +21,51 @@ use axum::Json;
 use serde::Serialize;
 
 #[derive(Serialize)]
-struct ErrorBody {
+pub struct ErrorBody {
     error: ErrorDetail,
 }
+
+/// The error shape as an OpenAPI schema, for `docs/openapi.json`.
+///
+/// Written by hand rather than derived so `code` can list every value
+/// it can take, read from [`ALL_ERROR_KINDS`] - a derive would only say
+/// "a string", and a client generating code from the spec would have
+/// nothing to match on.
+impl utoipa::PartialSchema for ErrorBody {
+    fn schema() -> utoipa::openapi::RefOr<utoipa::openapi::schema::Schema> {
+        use utoipa::openapi::schema::{ObjectBuilder, Type};
+
+        let mut codes: Vec<&'static str> = ALL_ERROR_KINDS.iter().map(|kind| kind.code()).collect();
+        codes.sort_unstable();
+        codes.dedup();
+
+        let detail = ObjectBuilder::new()
+            .property(
+                "code",
+                ObjectBuilder::new()
+                    .schema_type(Type::String)
+                    .description(Some("Stable. Branch on this, never on `message`."))
+                    .enum_values(Some(codes)),
+            )
+            .required("code")
+            .property(
+                "message",
+                ObjectBuilder::new()
+                    .schema_type(Type::String)
+                    .description(Some(
+                        "For humans; may be reworded. Never echoes request input.",
+                    )),
+            )
+            .required("message");
+
+        ObjectBuilder::new()
+            .property("error", detail)
+            .required("error")
+            .into()
+    }
+}
+
+impl utoipa::ToSchema for ErrorBody {}
 
 #[derive(Serialize)]
 struct ErrorDetail {

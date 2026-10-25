@@ -37,6 +37,7 @@ mod events;
 mod export;
 mod health;
 mod invites;
+pub mod openapi;
 mod pairing;
 mod setup;
 mod stats;
@@ -46,6 +47,7 @@ use axum::handler::Handler;
 use axum::routing::{on, MethodFilter, MethodRouter};
 use axum::Router;
 use serde::Serialize;
+use utoipa::ToSchema;
 
 use crate::auth::store::{UserRecord, UserSummary};
 use crate::devices::store::{DeviceRecord, DeviceWithOwner};
@@ -990,7 +992,7 @@ fn method_filter(method: &str) -> MethodFilter {
 /// Deliberately not the full [`UserRecord`]: the password hash has no
 /// business leaving the server, and `created_at` is not something the
 /// session endpoints need.
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 pub struct UserView {
     pub id: String,
     pub username: String,
@@ -1011,7 +1013,7 @@ impl From<&UserRecord> for UserView {
 ///
 /// Built from [`UserSummary`], which has no password hash to leave out
 /// in the first place. `created_at` is the Unix second the row stores.
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 pub struct UserDetailView {
     pub id: String,
     pub username: String,
@@ -1040,7 +1042,7 @@ impl From<&UserSummary> for UserDetailView {
 /// once, in the pairing response, and the hash has no business leaving
 /// it at all. `revoked_at` is present so an owner can see what they
 /// revoked and when.
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 pub struct DeviceView {
     pub id: String,
     pub name: String,
@@ -1069,7 +1071,7 @@ impl From<&DeviceRecord> for DeviceView {
 /// that grows over time: the field list is pinned by a test, because
 /// this is the one view where a careless addition could put event
 /// data in front of somebody who must never see it.
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 pub struct AdminDeviceView {
     pub id: String,
     pub owner_id: String,

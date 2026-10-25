@@ -11,6 +11,7 @@
 //! category can be derived again from the file alone.
 
 use serde::Serialize;
+use utoipa::ToSchema;
 
 use crate::auth::account_log::LogEntry;
 use crate::auth::store::UserRecord;
@@ -28,7 +29,7 @@ pub const FORMAT_VERSION: u32 = 1;
 ///
 /// `events` and `complete` are not fields here: they are written by
 /// [`super::service`] a page at a time, after this.
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 pub struct Head {
     pub format: &'static str,
     pub format_version: u32,
@@ -42,7 +43,7 @@ pub struct Head {
 /// The account itself. No password hash, no status: the first is a
 /// secret, the second says nothing an account holding a session does
 /// not already know.
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 pub struct Account {
     pub id: String,
     pub username: String,
@@ -62,7 +63,7 @@ impl From<&UserRecord> for Account {
 }
 
 /// Same fields as `GET /api/v1/devices`.
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 pub struct Device {
     pub id: String,
     pub name: String,
@@ -86,7 +87,7 @@ impl From<&DeviceRecord> for Device {
 }
 
 /// Same fields as `GET /api/v1/category-rules`.
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 pub struct CategoryRule {
     pub id: String,
     pub kind: &'static str,
@@ -108,7 +109,7 @@ impl From<&CategoryRuleRecord> for CategoryRule {
 }
 
 /// Same fields as `GET /api/v1/account/log`.
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 pub struct AccountLogEntry {
     pub kind: &'static str,
     pub actor_id: Option<String>,
@@ -126,7 +127,7 @@ impl From<&LogEntry> for AccountLogEntry {
 }
 
 /// One event, exactly as reported. No `category` - see the module doc.
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 pub struct Event<'a> {
     pub device_id: &'a str,
     pub event_id: &'a str,
@@ -134,8 +135,10 @@ pub struct Event<'a> {
     pub duration_secs: i64,
     pub app_id: &'a str,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
     pub label: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
     pub domain: Option<&'a str>,
 }
 
@@ -151,4 +154,27 @@ impl<'a> From<&'a QueriedEvent> for Event<'a> {
             domain: event.domain.as_deref(),
         }
     }
+}
+
+/// The whole document as `docs/openapi.json` describes it.
+///
+/// Never constructed: [`super::service`] writes the document a page at
+/// a time, which no single Rust value models. This type exists only so
+/// the spec can describe what that stream adds up to.
+#[derive(ToSchema)]
+#[allow(dead_code)]
+pub struct Document {
+    /// Always `daycompass-export`.
+    pub format: String,
+    /// Bumped on any change to the document's shape.
+    pub format_version: u32,
+    pub exported_at: i64,
+    pub account: Account,
+    pub devices: Vec<Device>,
+    pub category_rules: Vec<CategoryRule>,
+    pub account_log: Vec<AccountLogEntry>,
+    pub events: Vec<Event<'static>>,
+    /// Always `true`, and always the last field. Missing means the
+    /// export was cut off and must be discarded.
+    pub complete: bool,
 }

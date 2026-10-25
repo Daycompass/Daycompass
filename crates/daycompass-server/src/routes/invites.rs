@@ -15,6 +15,7 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use serde::Deserialize;
+use utoipa::ToSchema;
 
 use crate::auth::invite::{self, RedeemError};
 use crate::auth::password::{HashError, PasswordPolicyError};
@@ -23,11 +24,13 @@ use crate::auth::time::UnixTime;
 use crate::error::{ApiError, ErrorKind};
 use crate::state::AppState;
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct RedeemInviteRequest {
     /// The token handed over by an admin.
+    #[schema(value_type = String, format = Password)]
     invite_token: SecretString,
+    #[schema(value_type = String, format = Password)]
     new_password: SecretString,
 }
 
@@ -35,6 +38,20 @@ pub struct RedeemInviteRequest {
 ///
 /// No session is created: the response is `204 No Content`, and the
 /// person logs in normally afterwards through `POST /api/v1/auth/login`.
+#[utoipa::path(
+    post,
+    path = "/api/v1/invites/redeem",
+    tag = "accounts",
+    operation_id = "redeem_invite",
+    summary = "Redeem an invite by choosing a password",
+    request_body = RedeemInviteRequest,
+    responses(
+        (status = 204, description = "Redeemed; the account is active. Log in next."),
+        (status = 400, description = "`invalid_password`.", body = crate::error::ErrorBody),
+        (status = 401, description = "`invalid_invite_token`.", body = crate::error::ErrorBody),
+        (status = 503, description = "`server_busy`. Honour `Retry-After`.", body = crate::error::ErrorBody),
+    )
+)]
 pub async fn redeem(
     State(state): State<AppState>,
     Json(request): Json<RedeemInviteRequest>,

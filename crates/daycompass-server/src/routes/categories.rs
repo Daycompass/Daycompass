@@ -14,6 +14,7 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use serde::{Deserialize, Serialize};
+use utoipa::ToSchema;
 
 use crate::auth::time::UnixTime;
 use crate::categories::kind::PatternError;
@@ -24,7 +25,7 @@ use crate::error::{ApiError, ErrorKind};
 use crate::routes::SessionContext;
 use crate::state::AppState;
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct CreateRuleRequest {
     kind: String,
@@ -36,7 +37,7 @@ pub struct CreateRuleRequest {
 ///
 /// No `user_id`: the caller already knows which account they are,
 /// same reasoning as other owner-scoped views in this server.
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 struct RuleView {
     id: String,
     kind: &'static str,
@@ -57,16 +58,29 @@ impl From<&CategoryRuleRecord> for RuleView {
     }
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 struct RuleResponse {
     rule: RuleView,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 struct RuleListResponse {
     rules: Vec<RuleView>,
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/v1/category-rules",
+    tag = "categories",
+    operation_id = "create_category_rule",
+    summary = "Add a rule mapping an app_id or domain to a category",
+    request_body = CreateRuleRequest,
+    responses(
+        (status = 201, description = "Created.", body = RuleResponse),
+        (status = 400, description = "`invalid_category_rule_kind`, `invalid_category_pattern` or `invalid_category_label`.", body = crate::error::ErrorBody),
+        (status = 409, description = "`category_rule_duplicate` or `category_rule_limit_reached`.", body = crate::error::ErrorBody),
+    )
+)]
 pub async fn create_own(
     State(state): State<AppState>,
     session: SessionContext,
@@ -98,6 +112,16 @@ pub async fn create_own(
 
 /// Ordered `created_at, id` ascending, same convention as
 /// `GET /api/v1/devices`.
+#[utoipa::path(
+    get,
+    path = "/api/v1/category-rules",
+    tag = "categories",
+    operation_id = "list_category_rules",
+    summary = "Your own category rules",
+    responses(
+        (status = 200, description = "Your rules.", body = RuleListResponse),
+    )
+)]
 pub async fn list_own(State(state): State<AppState>, session: SessionContext) -> Response {
     let user_id = &session.auth().user.id;
 
@@ -116,6 +140,18 @@ pub async fn list_own(State(state): State<AppState>, session: SessionContext) ->
     }
 }
 
+#[utoipa::path(
+    delete,
+    path = "/api/v1/category-rules/{id}",
+    tag = "categories",
+    operation_id = "delete_category_rule",
+    summary = "Delete one of your category rules",
+    params(("id" = String, Path, description = "The rule id.")),
+    responses(
+        (status = 204, description = "Deleted."),
+        (status = 404, description = "`not_found`: no such rule, or not yours.", body = crate::error::ErrorBody),
+    )
+)]
 pub async fn delete_own(
     State(state): State<AppState>,
     session: SessionContext,

@@ -11,6 +11,7 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use serde::Serialize;
+use utoipa::ToSchema;
 
 use crate::auth::account_log::{self, LogEntry, LogKind};
 use crate::error::{ApiError, ErrorKind};
@@ -18,7 +19,7 @@ use crate::routes::SessionContext;
 use crate::state::AppState;
 
 /// One entry of an account's log, as shown to the account itself.
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 pub struct AccountLogEntryView {
     pub kind: &'static str,
     /// The acting admin's id, for `password_reset_by_admin`. `None` for
@@ -41,11 +42,21 @@ impl From<&LogEntry> for AccountLogEntryView {
     }
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 struct AccountLogResponse {
     entries: Vec<AccountLogEntryView>,
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/v1/account/log",
+    tag = "accounts",
+    operation_id = "account_log",
+    summary = "Your own account log, newest 200 first",
+    responses(
+        (status = 200, description = "The log.", body = AccountLogResponse),
+    )
+)]
 pub async fn log(State(state): State<AppState>, session: SessionContext) -> Response {
     let user_id = &session.auth().user.id;
 

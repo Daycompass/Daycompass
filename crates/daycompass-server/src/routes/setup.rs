@@ -21,6 +21,7 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use serde::{Deserialize, Serialize};
+use utoipa::ToSchema;
 
 use crate::auth::password::{HashError, PasswordPolicyError};
 use crate::auth::secret::SecretString;
@@ -31,19 +32,36 @@ use crate::error::{ApiError, ErrorKind};
 use crate::routes::UserView;
 use crate::state::AppState;
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ToSchema)]
 pub struct SetupRequest {
     /// The token printed to stdout at startup.
+    #[schema(value_type = String, format = Password)]
     setup_token: SecretString,
     username: String,
+    #[schema(value_type = String, format = Password)]
     password: SecretString,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 struct SetupResponse {
     user: UserView,
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/v1/setup",
+    tag = "setup",
+    operation_id = "setup",
+    summary = "Create the first admin with the one-time setup token",
+    request_body = SetupRequest,
+    responses(
+        (status = 201, description = "The first admin exists.", body = SetupResponse),
+        (status = 400, description = "`invalid_username` or `invalid_password`.", body = crate::error::ErrorBody),
+        (status = 401, description = "`invalid_setup_token`.", body = crate::error::ErrorBody),
+        (status = 404, description = "Setup is already complete; same answer as a route that does not exist.", body = crate::error::ErrorBody),
+        (status = 503, description = "`server_busy`: password hashing capacity exhausted. Honour `Retry-After`.", body = crate::error::ErrorBody),
+    )
+)]
 pub async fn create_first_admin(
     State(state): State<AppState>,
     Json(request): Json<SetupRequest>,
