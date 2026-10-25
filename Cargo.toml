@@ -91,3 +91,8 @@ futures-util = { version = "~0.3", default-features = false }
 # compile time and committed as docs/openapi.json. Never served at
 # runtime - see crate::openapi.
 utoipa = { version = "~6.0" }
+# Compile-time HTML templates for the M5 dashboard. Templates are
+# checked and compiled into the binary, so nothing is read from disk at
+# runtime, and HTML escaping is on by default for every expression.
+# Only "derive" and "std": no askama.toml lookup, no urlencode filter.
+askama = { version = "~0.16", default-features = false, features = ["derive", "std"] }

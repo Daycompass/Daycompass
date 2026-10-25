@@ -29,6 +29,11 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 
 const REQUEST_ID_HEADER_NAME: &str = "x-request-id";
 
+/// The Content-Security-Policy sent on every response. See [`apply`].
+pub const CONTENT_SECURITY_POLICY: &str = "default-src 'none'; script-src 'self'; \
+     style-src 'self'; img-src 'self'; font-src 'self'; connect-src 'self'; \
+     form-action 'self'; frame-ancestors 'none'; base-uri 'none'";
+
 /// Wraps `router` with the full middleware stack. Order matters: each
 /// `.layer()` call wraps everything added before it, so the request
 /// flows through these top-to-bottom and the response flows back
@@ -51,9 +56,24 @@ pub fn apply(router: Router) -> Router {
             HeaderName::from_static("referrer-policy"),
             HeaderValue::from_static("no-referrer"),
         ))
-        .layer(SetResponseHeaderLayer::overriding(
+        // `if_not_present` rather than `overriding`, for one reason: the
+        // dashboard's static assets (`routes::pages::assets`) answer
+        // `no-cache` with an ETag, so a browser can keep them. Nothing
+        // else sets the header, so every API response and every page -
+        // which carry the CSRF token and the account's own stats - is
+        // still `no-store`. `tests/dashboard.rs` pins both halves.
+        .layer(SetResponseHeaderLayer::if_not_present(
             HeaderName::from_static("cache-control"),
             HeaderValue::from_static("no-store"),
+        ))
+        // On every response, not only on pages: a JSON body or an SVG
+        // opened directly is a document too, and should run nothing.
+        // Same-origin scripts, styles, fonts, images and requests only,
+        // no inline script or style, no framing, no <base>, and forms
+        // may only post back here.
+        .layer(SetResponseHeaderLayer::overriding(
+            HeaderName::from_static("content-security-policy"),
+            HeaderValue::from_static(CONTENT_SECURITY_POLICY),
         ))
         .layer(
             ServiceBuilder::new()

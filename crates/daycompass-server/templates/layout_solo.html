@@ -1,0 +1,15 @@
+<!doctype html>
+<html lang="en">
+<head>
+{% include "partials/head.html" %}
+<title>{% block title %}{% endblock %} · Daycompass</title>
+</head>
+<body>
+<main class="dc-solo">
+  <div class="dc-solo__card">
+    <div class="dc-solo__brand">{% include "partials/mark.html" %}daycompass</div>
+    {% block content %}{% endblock %}
+  </div>
+</main>
+</body>
+</html>

@@ -224,3 +224,69 @@ one sweep never holds SQLite's write lock long enough for ingest or a
 login to notice, and migration `0006` adds an index on `start_ts` so a
 sweep with nothing to delete costs an index probe, not a table scan.
 
+
+## How the dashboard (M5) fits the existing protections
+
+The dashboard is server-rendered HTML (askama) with htmx for writes.
+It adds no new kind of protection and no second copy of an existing
+one; every page route is an ordinary entry in `routes::INVENTORY`, and
+the inventory walk in `tests/route_inventory.rs` covers it like any API
+route.
+
+- **A `surface` column, not a second router.** `Surface::Page` changes
+  how a refusal is *shown* - an HTML page, an htmx fragment, or a 303 to
+  `/login` for a plain page load without a session - and nothing about
+  whether it happens. The status code survives the re-rendering. The
+  surface follows the path (API under `/api/` plus `/healthz`, pages
+  everywhere else) and `RouteSpec::validate` refuses an entry where it
+  does not.
+- **CSRF is the same header.** The layout puts the session's CSRF token
+  into `hx-headers` on `<body>`, so every htmx request carries the same
+  `X-CSRF-Token` the API checks, through the same `verify_csrf`. A
+  hidden form field would have worked without JavaScript, but it would
+  have meant a second CSRF path, and one that reads the request body in
+  the access layer - which today runs, deliberately, before any body is
+  read. The cost: writes on the dashboard need JavaScript. Reading
+  does not, and the login form (no session, so no token) works as a
+  plain form post, `Origin`-checked exactly like the API login.
+- **One login budget.** `POST /login` and `POST /api/v1/auth/login`
+  share one function (`routes::auth::attempt_login`) and the same two
+  rate-limit buckets. A second set of buckets would have doubled what a
+  password-guessing attack gets by alternating between the routes;
+  `tests/dashboard.rs` pins that a refusal on one is a refusal on the
+  other.
+- **The dashboard's writes require an `Origin`.** The API allows a
+  request with no `Origin` because native clients send none
+  (`auth::origin`). `POST /login` and `POST /logout` have no such
+  caller - only browsers, which always send the header on a POST - so
+  they use `OriginRule::Required`, which refuses an absent header too.
+  Login CSRF then no longer rests on every browser sending `Origin`.
+  Only page routes may claim this rule; `RouteSpec::validate` refuses
+  it on an API route, where it would lock out every native client.
+- **A strict CSP on every response.** `default-src 'none'`, then
+  `'self'` for scripts, styles, fonts, images and requests; no inline
+  script or style anywhere, no framing, no `<base>`, forms post only
+  here. htmx is configured to match (no `eval`, no inline indicator
+  `<style>`) and with its history cache off, because a history snapshot
+  is the page's HTML - CSRF token included - copied into
+  `localStorage`. Bars on the overview are `<progress>` elements for
+  the same reason: a sized `<div>` would need an inline style.
+- **Pages are never cached; assets are revalidated.** Pages carry the
+  CSRF token and the account's own numbers, so they stay `no-store`
+  like the API. The global `Cache-Control` layer now sets `no-store`
+  only where a handler set nothing, and the one handler that does set
+  something is the asset route: `no-cache` with an `ETag`, so a browser
+  keeps its copy and asks with `If-None-Match`. Asset URLs carry no
+  version, which is why revalidation rather than a long `max-age`.
+- **Assets are a table, not a directory.** Stylesheet, fonts, htmx and
+  favicon are compiled in with `include_bytes!` and looked up by exact
+  name, so no request ever touches the filesystem. htmx is vendored as
+  `assets/vendor/htmx-2.0.11.min.js` (0BSD), checked against the npm
+  registry's SHA-512 when it was added. Fredoka and Nunito are under the
+  OFL, whose text is served next to them.
+- **Not in the wire format.** Dashboard routes answer browsers, not
+  clients, so they are neither in `docs/wire-format.md` nor in the
+  OpenAPI spec; both tests filter on `Surface::Api`.
+- **Days are UTC.** The overview shows what `GET /api/v1/stats`
+  computes, and that is UTC calendar days. The page says so. A
+  per-account time zone is a separate decision.

@@ -30,7 +30,7 @@ use serde_json::{json, Value};
 use common::{
     Credentials, Device, Session, TestApp, TestRequest, TestResponse, BAD_ORIGIN, GOOD_ORIGIN,
 };
-use daycompass_server::routes::{Access, RouteSpec, INVENTORY};
+use daycompass_server::routes::{Access, OriginRule, RouteSpec, Surface, INVENTORY};
 
 /// Error codes that mean "not allowed", as opposed to any other refusal
 /// a route might answer with.
@@ -177,8 +177,23 @@ impl Fixture {
         if let Some(body) = self.body_for(spec, caller, target_id).await {
             request = request.json(body);
         }
+        if let Some(fields) = self.form_for(spec) {
+            request = request.form(&borrowed(&fields));
+        }
 
         self.app.send(request).await
+    }
+
+    /// A form body for the dashboard routes that take one, valid in the
+    /// same sense as [`Self::body_for`]'s JSON bodies.
+    fn form_for(&self, spec: &RouteSpec) -> Option<Vec<(&'static str, String)>> {
+        match (spec.method, spec.path) {
+            ("POST", "/login") => Some(vec![
+                ("username", self.admin_credentials.username.clone()),
+                ("password", self.admin_credentials.password.clone()),
+            ]),
+            _ => None,
+        }
     }
 
     /// A body that is valid for the route, so the answer is about
@@ -260,6 +275,14 @@ fn unissued_invite_token() -> String {
         .to_owned()
 }
 
+/// `form_for`'s owned fields, in the shape `TestRequest::form` takes.
+fn borrowed<'a>(fields: &'a [(&'static str, String)]) -> Vec<(&'a str, &'a str)> {
+    fields
+        .iter()
+        .map(|(name, value)| (*name, value.as_str()))
+        .collect()
+}
+
 fn method_of(spec: &RouteSpec) -> Method {
     Method::from_bytes(spec.method.as_bytes()).expect("the inventory names a real method")
 }
@@ -303,6 +326,21 @@ async fn every_route_answers_each_caller_the_way_the_inventory_says() {
                         "{label}: an anonymous route must not refuse the caller ({code}, {:?})",
                         response.body
                     );
+                }
+
+                // A page a browser simply loads without a session sends
+                // it to the login page instead of answering 401 - and a
+                // device token is no session there either.
+                (Access::Session | Access::Admin, Caller::Anonymous | Caller::Device)
+                    if spec.surface == Surface::Page && is_safe(spec.method) =>
+                {
+                    assert_eq!(
+                        response.status,
+                        StatusCode::SEE_OTHER,
+                        "{label}: {}",
+                        response.text
+                    );
+                    assert_eq!(response.location(), Some("/login"), "{label}");
                 }
 
                 // A device token is not a session, and must be
@@ -633,6 +671,9 @@ async fn the_origin_check_follows_the_inventory() {
         if let Some(body) = fixture.body_for(spec, caller, &target).await {
             request = request.json(body);
         }
+        if let Some(fields) = fixture.form_for(spec) {
+            request = request.form(&borrowed(&fields));
+        }
         let response = fixture.app.send(request).await;
 
         if spec.origin_checked() && !is_safe(spec.method) {
@@ -643,6 +684,51 @@ async fn the_origin_check_follows_the_inventory() {
                 response.error_code(),
                 Some("origin_mismatch"),
                 "{label} is not Origin-checked for this method: {:?}",
+                response.body
+            );
+        }
+    }
+}
+
+/// `OriginRule::Required` has to mean something beyond `Checked`: an
+/// absent `Origin` is refused on those routes, while it stays allowed on
+/// every other checked route (native clients send none).
+#[tokio::test]
+async fn a_required_origin_refuses_an_absent_header() {
+    for spec in INVENTORY {
+        let fixture = Fixture::new().await;
+        let caller = if spec.access == Access::Device {
+            Caller::Device
+        } else {
+            Caller::Admin
+        };
+        let target = fixture.target_for(spec, caller).await;
+        let path = spec.path.replace("{id}", &target);
+        let label = format!("{} {}", spec.method, spec.path);
+
+        // No `.origin(..)` at all.
+        let mut request = TestRequest::new(method_of(spec), &path);
+        match spec.access {
+            Access::Public | Access::BodySecret => {}
+            Access::Session | Access::Admin => request = request.authenticated(&fixture.admin),
+            Access::Device => request = request.authenticated_as_device(&fixture.device),
+        }
+        if let Some(body) = fixture.body_for(spec, caller, &target).await {
+            request = request.json(body);
+        }
+        if let Some(fields) = fixture.form_for(spec) {
+            request = request.form(&borrowed(&fields));
+        }
+        let response = fixture.app.send(request).await;
+
+        if spec.origin == OriginRule::Required && !is_safe(spec.method) {
+            assert_eq!(response.status, StatusCode::FORBIDDEN, "{label}");
+            assert_eq!(response.error_code(), Some("origin_mismatch"), "{label}");
+        } else {
+            assert_ne!(
+                response.error_code(),
+                Some("origin_mismatch"),
+                "{label} refused a request without Origin: {:?}",
                 response.body
             );
         }

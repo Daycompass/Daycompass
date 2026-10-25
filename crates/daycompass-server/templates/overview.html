@@ -1,0 +1,41 @@
+{% extends "layout_app.html" %}
+{% block title %}Overview{% endblock %}
+{% block content %}
+<header class="dc-page-head">
+  <span class="dc-overline">Overview</span>
+  <h1 class="dc-heading-1">Your week</h1>
+</header>
+{% if categories.is_empty() %}
+<section class="dc-card dc-empty">
+  {% include "partials/pip_sleepy.html" %}
+  <h2 class="dc-heading-2">Nothing tracked yet</h2>
+  <p class="dc-body-lg dc-muted">Once a paired device syncs, your screen time for the last 7 days shows up here.</p>
+</section>
+{% else %}
+<div class="dc-stack dc-stack--lg">
+  <div class="dc-grid">
+    <section class="dc-card">
+      <h2 class="dc-stat__label">Today</h2>
+      <p class="dc-stat__value">{{ today }}</p>
+    </section>
+    <section class="dc-card">
+      <h2 class="dc-stat__label">Last 7 days</h2>
+      <p class="dc-stat__value">{{ week }}</p>
+    </section>
+  </div>
+  <section class="dc-card dc-stack">
+    <h2 class="dc-heading-3">By category, last 7 days</h2>
+    <ul class="dc-bars">
+      {% for row in categories %}
+      <li class="dc-bars__row">
+        <span class="dc-bars__name">{{ row.name }}</span>
+        <span class="dc-bars__value">{{ row.duration }}</span>
+        <progress class="dc-bar{% if row.uncategorized %} dc-bar--neutral{% endif %}" value="{{ row.value }}" max="{{ row.max }}" aria-label="{{ row.name }}: {{ row.duration }}"></progress>
+      </li>
+      {% endfor %}
+    </ul>
+    <p class="dc-caption">Days are counted in UTC.</p>
+  </section>
+</div>
+{% endif %}
+{% endblock %}

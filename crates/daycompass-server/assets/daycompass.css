@@ -1,0 +1,315 @@
+/* Daycompass dashboard stylesheet.
+ *
+ * Built from the Daycompass design system: the custom properties below
+ * are generated from its tokens.json (light first, dark under
+ * prefers-color-scheme), the components are adapted from its
+ * bundle.css. One addition: --error-edge, the danger button's edge,
+ * which the system hardcoded.
+ *
+ * Served from this binary under a strict CSP: no inline styles, no
+ * external fonts. Fredoka and Nunito ship next to this file under the
+ * SIL Open Font License 1.1 (assets/fonts/*-OFL.txt in the repository).
+ */
+
+@font-face {
+  font-family: Fredoka;
+  src: url("Fredoka-Variable.woff2") format("woff2");
+  font-weight: 300 700;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: Nunito;
+  src: url("Nunito-Variable.woff2") format("woff2");
+  font-weight: 200 1000;
+  font-style: normal;
+  font-display: swap;
+}
+
+:root {
+  color-scheme: light dark;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+  --space-12: 48px;
+  --space-16: 64px;
+  --radius-sm: 10px;
+  --radius-md: 14px;
+  --radius-lg: 16px;
+  --radius-xl: 20px;
+  --radius-pill: 999px;
+  --control-lg: 52px;
+  --control-md: 44px;
+  --control-sm: 36px;
+  --edge-depth: 4px;
+  --icon-md: 24px;
+  --icon-sm: 20px;
+  --nav-height: 72px;
+  --sidebar-width: 248px;
+  --font-display: Fredoka, "Nunito", system-ui, sans-serif;
+  --font-ui: Nunito, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --bg: #FFF8EC;
+  --surface: #FFFFFF;
+  --surface-sunken: #F7EFDF;
+  --text: #23202E;
+  --text-muted: #6B6577;
+  --border: #EFE7D8;
+  --border-control: #8A8296;
+  --primary: #FFC21A;
+  --primary-hover: #FFCD47;
+  --primary-pressed: #F2B200;
+  --primary-edge: #D99A00;
+  --on-primary: #23202E;
+  --primary-soft: #FFE7A6;
+  --secondary: #C2255C;
+  --secondary-hover: #D02F68;
+  --secondary-pressed: #AD1F51;
+  --secondary-edge: #8C1844;
+  --on-secondary: #FFFFFF;
+  --secondary-soft: #FCE4EE;
+  --neutral-edge: #E3DCCF;
+  --disabled-bg: #EFE8DA;
+  --disabled-text: #A39CAD;
+  --focus: #6741D9;
+  --success: #2B7A3B;
+  --success-soft: #EAF7EC;
+  --warning: #A35200;
+  --warning-soft: #FFF0DC;
+  --error: #C92A2A;
+  --error-soft: #FFE5E5;
+  --info: #1C6DC2;
+  --info-soft: #E2F0FD;
+  --data-study: #FFC21A;
+  --data-distraction: #C2255C;
+  --data-neutral: #B8B0C4;
+  --edge-primary: 0 4px 0 #D99A00;
+  --edge-secondary: 0 4px 0 #8C1844;
+  --edge-neutral: 0 4px 0 #E3DCCF;
+  --edge-card: 0 3px 0 #EFE7D8;
+  --shadow-float: 0 12px 32px rgba(35,32,46,0.16);
+  --error-edge: #8F1D1D;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #17151F;
+    --surface: #221F2D;
+    --surface-sunken: #1C1A26;
+    --text: #F4F1F8;
+    --text-muted: #A9A3B6;
+    --border: #2F2B3B;
+    --border-control: #7C758C;
+    --primary: #FFC93D;
+    --primary-hover: #FFD466;
+    --primary-pressed: #F2B620;
+    --primary-edge: #B88600;
+    --on-primary: #17151F;
+    --primary-soft: #3D3214;
+    --secondary: #F783AC;
+    --secondary-hover: #FA9BBD;
+    --secondary-pressed: #F06595;
+    --secondary-edge: #C2255C;
+    --on-secondary: #17151F;
+    --secondary-soft: #3A1A28;
+    --neutral-edge: #2F2B3B;
+    --disabled-bg: #2A2735;
+    --disabled-text: #615B6E;
+    --focus: #B197FC;
+    --success: #69DB7C;
+    --success-soft: #173322;
+    --warning: #FFA94D;
+    --warning-soft: #3A2814;
+    --error: #FF8787;
+    --error-soft: #3D1A1C;
+    --info: #74C0FC;
+    --info-soft: #14283D;
+    --data-study: #FFC93D;
+    --data-distraction: #D6336C;
+    --data-neutral: #4A4458;
+    --edge-primary: 0 4px 0 #B88600;
+    --edge-secondary: 0 4px 0 #C2255C;
+    --edge-neutral: 0 4px 0 #2F2B3B;
+    --edge-card: 0 3px 0 #13111A;
+    --shadow-float: 0 12px 32px rgba(0,0,0,0.5);
+    --error-edge: #C92A2A;
+  }
+}
+
+/* ---------- Base ---------- */
+*, *::before, *::after { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body { background: var(--bg); color: var(--text); font: 500 16px/24px var(--font-ui); margin: 0; }
+a { color: var(--secondary); }
+a:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; border-radius: 4px; }
+h1, h2, h3 { margin: 0; }
+.dc-heading-1 { font: 600 30px/36px var(--font-display); }
+.dc-heading-2 { font: 600 22px/28px var(--font-display); }
+.dc-heading-3 { font: 800 18px/24px var(--font-ui); }
+.dc-body-lg { font: 500 17px/26px var(--font-ui); }
+.dc-caption { font: 600 13px/18px var(--font-ui); color: var(--text-muted); }
+.dc-overline { font: 800 12px/16px var(--font-ui); letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-muted); }
+.dc-muted { color: var(--text-muted); }
+.dc-visually-hidden { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+.dc-stack { display: flex; flex-direction: column; gap: var(--space-4); }
+.dc-stack--lg { gap: var(--space-6); }
+.dc-stack > * { margin: 0; }
+
+/* ---------- Button ---------- */
+.dc-btn {
+  font: 800 16px/20px var(--font-ui); letter-spacing: 0;
+  display: inline-flex; align-items: center; justify-content: center; gap: var(--space-2);
+  height: var(--control-md); min-width: var(--control-md); padding: 0 var(--space-5);
+  border: 0; border-radius: var(--radius-lg); cursor: pointer; text-decoration: none;
+  margin-bottom: var(--edge-depth);
+  transition: transform 80ms ease-out, box-shadow 80ms ease-out, background-color 120ms;
+  -webkit-tap-highlight-color: transparent;
+}
+.dc-btn svg { width: var(--icon-sm); height: var(--icon-sm); flex: none; }
+.dc-btn--lg { height: var(--control-lg); padding: 0 var(--space-6); font-size: 17px; }
+.dc-btn--sm { height: var(--control-sm); padding: 0 var(--space-4); font-size: 14px; border-radius: var(--radius-md); }
+.dc-btn--block { display: flex; width: 100%; }
+.dc-btn--primary { background: var(--primary); color: var(--on-primary); box-shadow: var(--edge-primary); }
+.dc-btn--primary:hover { background: var(--primary-hover); }
+.dc-btn--primary:active { background: var(--primary-pressed); }
+.dc-btn--secondary { background: var(--secondary); color: var(--on-secondary); box-shadow: var(--edge-secondary); }
+.dc-btn--secondary:hover { background: var(--secondary-hover); }
+.dc-btn--secondary:active { background: var(--secondary-pressed); }
+.dc-btn--neutral { background: var(--surface); color: var(--text); box-shadow: inset 0 0 0 2px var(--neutral-edge), var(--edge-neutral); }
+.dc-btn--neutral:hover { background: var(--surface-sunken); }
+.dc-btn--ghost { background: transparent; color: var(--secondary); box-shadow: none; margin-bottom: 0; }
+.dc-btn--ghost:hover { background: var(--secondary-soft); }
+.dc-btn--danger { background: var(--error); color: var(--on-secondary); box-shadow: 0 4px 0 var(--error-edge); }
+.dc-btn:active { transform: translateY(var(--edge-depth)); box-shadow: none; }
+.dc-btn--neutral:active { box-shadow: inset 0 0 0 2px var(--neutral-edge); }
+.dc-btn--ghost:active { transform: none; background: var(--secondary-soft); }
+.dc-btn:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
+.dc-btn:disabled {
+  background: var(--disabled-bg); color: var(--disabled-text); box-shadow: none; transform: translateY(var(--edge-depth)); cursor: not-allowed;
+}
+.dc-btn--ghost:disabled { background: transparent; transform: none; }
+.dc-btn[aria-busy="true"] { cursor: progress; }
+.dc-spin { width: 18px; height: 18px; border-radius: 50%; border: 3px solid currentColor; border-right-color: transparent; animation: dc-spin .7s linear infinite; }
+@keyframes dc-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .dc-btn { transition: none; } .dc-spin { animation-duration: 2s; } }
+
+/* htmx adds .htmx-request to the element that issued a request. Its own
+   indicator stylesheet is switched off (it would be an inline <style>,
+   which the CSP refuses), so the busy state is drawn here instead. */
+.dc-btn .dc-spin { display: none; }
+.dc-btn.htmx-request .dc-spin { display: inline-block; }
+.dc-btn.htmx-request svg { display: none; }
+.dc-btn.htmx-request { cursor: progress; }
+
+/* ---------- TextField ---------- */
+.dc-field { display: flex; flex-direction: column; gap: var(--space-2); }
+.dc-field__label { font: 700 14px/20px var(--font-ui); color: var(--text); }
+.dc-field__input {
+  font: 600 16px/24px var(--font-ui); color: var(--text);
+  height: var(--control-md); padding: 0 var(--space-4);
+  background: var(--surface); border: 2px solid var(--border-control); border-radius: var(--radius-md);
+  outline: none; transition: border-color 120ms, box-shadow 120ms; width: 100%;
+}
+.dc-field__input::placeholder { color: var(--text-muted); font-weight: 500; }
+.dc-field__input:hover { border-color: var(--text-muted); }
+.dc-field__input:focus { border-color: var(--focus); box-shadow: 0 0 0 3px color-mix(in srgb, var(--focus) 28%, transparent); }
+.dc-field__help { font: 600 13px/18px var(--font-ui); color: var(--text-muted); display: flex; gap: var(--space-1); align-items: center; }
+
+/* ---------- Card / StatCard ---------- */
+.dc-card { background: var(--surface); border: 2px solid var(--border); border-radius: var(--radius-xl); box-shadow: var(--edge-card); padding: var(--space-5); color: var(--text); }
+.dc-stat__label { font: 700 14px/20px var(--font-ui); color: var(--text-muted); }
+.dc-stat__value { font: 600 44px/48px var(--font-display); font-variant-numeric: tabular-nums; margin-top: var(--space-1); }
+.dc-stat__value--lg { font: 600 28px/32px var(--font-display); }
+
+/* ---------- Category bars ----------
+   A <progress> per row rather than a sized <div>: the width of a div
+   would need an inline style, which the CSP refuses. */
+.dc-bars { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-3); }
+.dc-bars__row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--space-1) var(--space-3); align-items: baseline; }
+.dc-bars__name { font: 700 14px/20px var(--font-ui); overflow-wrap: anywhere; }
+.dc-bars__value { font: 800 14px/20px var(--font-ui); font-variant-numeric: tabular-nums; }
+.dc-bar {
+  grid-column: 1 / -1; width: 100%; height: 12px; border: 0; border-radius: var(--radius-pill);
+  background: var(--surface-sunken); overflow: hidden; -webkit-appearance: none; appearance: none; color: var(--data-study);
+}
+.dc-bar::-webkit-progress-bar { background: var(--surface-sunken); border-radius: var(--radius-pill); }
+.dc-bar::-webkit-progress-value { background: var(--data-study); border-radius: var(--radius-pill); }
+.dc-bar::-moz-progress-bar { background: var(--data-study); border-radius: var(--radius-pill); }
+.dc-bar--neutral { color: var(--data-neutral); }
+.dc-bar--neutral::-webkit-progress-value { background: var(--data-neutral); }
+.dc-bar--neutral::-moz-progress-bar { background: var(--data-neutral); }
+
+/* ---------- Banner ---------- */
+.dc-banner { display: flex; gap: var(--space-3); align-items: flex-start; padding: var(--space-4); border-radius: var(--radius-lg); font: 600 15px/22px var(--font-ui); color: var(--text); border: 2px solid transparent; }
+.dc-banner svg { width: var(--icon-md); height: var(--icon-md); flex: none; }
+.dc-banner b { display: block; font-weight: 800; }
+.dc-banner--info { background: var(--info-soft); border-color: var(--info); } .dc-banner--info svg { color: var(--info); }
+.dc-banner--success { background: var(--success-soft); border-color: var(--success); } .dc-banner--success svg { color: var(--success); }
+.dc-banner--warning { background: var(--warning-soft); border-color: var(--warning); } .dc-banner--warning svg { color: var(--warning); }
+.dc-banner--error { background: var(--error-soft); border-color: var(--error); } .dc-banner--error svg { color: var(--error); }
+
+/* ---------- Mark and Pip ----------
+   Fills come from classes, not from fill="var(...)" attributes, so the
+   disc follows the theme without relying on var() in a presentation
+   attribute. The needle colors are fixed brand colors. */
+.dc-mark, .dc-pip { display: inline-block; flex: none; }
+.dc-svg-edge { fill: var(--primary-edge); }
+.dc-svg-disc { fill: var(--primary); }
+.dc-svg-ink { fill: #23202E; stroke: #23202E; }
+.dc-svg-berry { fill: #C2255C; stroke: #C2255C; }
+.dc-svg-hub { fill: #FFF8EC; }
+.dc-svg-visor { fill: #23202E; }
+.dc-svg-eye { fill: #FFF8EC; }
+.dc-svg-eye-line { fill: none; stroke: #FFF8EC; }
+
+/* ---------- Sidebar (desktop) ---------- */
+.dc-side { width: var(--sidebar-width); background: var(--surface); border-right: 2px solid var(--border); padding: var(--space-4); display: flex; flex-direction: column; gap: var(--space-1); }
+.dc-side__brand { display: flex; align-items: center; gap: var(--space-2); padding: var(--space-2) var(--space-3) var(--space-5); font: 700 22px/1 var(--font-display); color: var(--text); }
+.dc-side__item { display: flex; align-items: center; gap: var(--space-3); height: var(--control-md); padding: 0 var(--space-3); border-radius: var(--radius-md); font: 700 15px/20px var(--font-ui); color: var(--text-muted); text-decoration: none; background: none; border: 0; cursor: pointer; width: 100%; text-align: left; }
+.dc-side__item svg { width: var(--icon-sm); height: var(--icon-sm); }
+.dc-side__item:hover { background: var(--surface-sunken); color: var(--text); }
+.dc-side__item[aria-current="page"] { background: var(--primary-soft); color: var(--text); }
+.dc-side__item:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
+.dc-side__foot { margin-top: auto; display: flex; flex-direction: column; gap: var(--space-1); }
+.dc-side__who { font: 600 13px/18px var(--font-ui); color: var(--text-muted); padding: var(--space-3) var(--space-3) 0; overflow-wrap: anywhere; }
+
+/* ---------- NavBar (mobile) ---------- */
+.dc-nav { display: flex; justify-content: space-around; align-items: center; height: var(--nav-height); padding: 0 var(--space-2); background: var(--surface); border-top: 2px solid var(--border); }
+.dc-nav__item { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; min-width: 64px; height: 56px; padding: 0 var(--space-3); border-radius: var(--radius-lg);
+  font: 800 12px/16px var(--font-ui); color: var(--text-muted); text-decoration: none; background: none; border: 0; cursor: pointer; }
+.dc-nav__item svg { width: var(--icon-md); height: var(--icon-md); }
+.dc-nav__item:hover { color: var(--text); }
+.dc-nav__item[aria-current="page"] { color: var(--text); background: var(--primary-soft); }
+.dc-nav__item[aria-current="page"] svg { stroke-width: 2.5; }
+.dc-nav__item:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
+
+/* ---------- App shell ----------
+   Below 720px the bottom NavBar, from 720px the Sidebar; content is
+   capped at 1120px. */
+.dc-app { min-height: 100vh; display: flex; flex-direction: column; }
+.dc-app__side { display: none; }
+.dc-app__main { flex: 1; width: 100%; max-width: 1120px; margin: 0 auto; padding: var(--space-6) var(--space-4) calc(var(--nav-height) + var(--space-6)); }
+.dc-app__nav { position: fixed; left: 0; right: 0; bottom: 0; }
+@media (min-width: 720px) {
+  .dc-app { flex-direction: row; }
+  .dc-app__side { display: flex; position: sticky; top: 0; height: 100vh; flex: none; }
+  .dc-app__nav { display: none; }
+  .dc-app__main { padding: var(--space-10) var(--space-8); }
+}
+.dc-page-head { display: flex; flex-direction: column; gap: var(--space-1); margin-bottom: var(--space-6); }
+.dc-grid { display: grid; gap: var(--space-6); grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr)); }
+.dc-flash:empty { display: none; }
+.dc-flash { margin-bottom: var(--space-6); }
+
+/* ---------- Empty state ---------- */
+.dc-empty { display: flex; flex-direction: column; align-items: center; text-align: center; gap: var(--space-4); padding: var(--space-16) var(--space-4); }
+.dc-empty p { margin: 0; max-width: 36ch; }
+
+/* ---------- Single-card pages (login, errors) ---------- */
+.dc-solo { min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: var(--space-8) var(--space-4); }
+.dc-solo__card { width: 100%; max-width: 400px; }
+.dc-solo__brand { display: flex; align-items: center; justify-content: center; gap: var(--space-2); margin-bottom: var(--space-6); font: 700 28px/1 var(--font-display); }
