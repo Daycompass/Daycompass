@@ -1,0 +1,31 @@
+# Keep the build context to what the build needs, and keep anything
+# that could hold a secret or local data out of it entirely.
+
+# Secrets and local environment. `.env.example` holds names only, but
+# the build does not need it either.
+.env
+.env.*
+*.pem
+*.key
+*.p12
+*.pfx
+secrets/
+**/secrets/
+
+# Local runtime data and build output.
+data/
+target/
+**/target/
+
+# Not needed to build, and `.git` can be large.
+.git/
+.github/
+.githooks/
+.claude/
+docs/
+*.diff
+
+# The base image already is the pinned toolchain (see the Dockerfile).
+# Leaving this file out stops rustup from downloading rustfmt and clippy,
+# which the build does not use.
+rust-toolchain.toml

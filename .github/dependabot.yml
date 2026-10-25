@@ -11,6 +11,10 @@ updates:
     schedule:
       interval: "weekly"
 
-# A "docker" entry is intentionally omitted: no Dockerfile exists yet in
-# this milestone. Add it once one does, otherwise Dependabot errors out
-# looking for a manifest that is not there.
+  # The Dockerfile pins both base images by digest; this is what keeps
+  # those digests current. A bump of the Rust image's tag must stay in
+  # step with `channel` in rust-toolchain.toml - see the Dockerfile.
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "weekly"
