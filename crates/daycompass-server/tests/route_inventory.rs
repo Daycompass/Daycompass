@@ -130,6 +130,38 @@ impl Fixture {
         id
     }
 
+    /// A category rule belonging to `caller`, for
+    /// `DELETE /api/v1/category-rules/{id}` - same reasoning as
+    /// [`Self::disposable_device`]: the route is owner-scoped, so the
+    /// target has to be real and has to be this caller's own, or a
+    /// legitimate 404 would be misread as the route being missing.
+    async fn disposable_category_rule(&self, caller: Caller) -> String {
+        let owner = match caller {
+            Caller::Admin => &self.admin,
+            Caller::Anonymous | Caller::User | Caller::Device => &self.user,
+        };
+        let response = self
+            .app
+            .send(
+                TestRequest::post("/api/v1/category-rules")
+                    .origin(GOOD_ORIGIN)
+                    .authenticated(owner)
+                    .json(json!({
+                        "kind": "app_id",
+                        "pattern": format!(
+                            "org.example.disposable-{}",
+                            common::random_secret()[..8].to_ascii_lowercase()
+                        ),
+                        "category": "Disposable",
+                    })),
+            )
+            .await;
+        response.body["rule"]["id"]
+            .as_str()
+            .expect("the created rule's id")
+            .to_owned()
+    }
+
     /// Sends `spec`'s request as `caller`, with a matching `Origin` and,
     /// where there is a session, its CSRF token.
     async fn call(&self, spec: &RouteSpec, caller: Caller, target_id: &str) -> TestResponse {
@@ -189,6 +221,11 @@ impl Fixture {
                 "platform": "linux",
             })),
             ("POST", "/api/v1/events") => Some(json!({ "events": [] })),
+            ("POST", "/api/v1/category-rules") => Some(json!({
+                "kind": "app_id",
+                "pattern": format!("org.example.probe-{}", &target_id[..8]),
+                "category": "Probe",
+            })),
             ("PATCH", "/api/v1/devices/{id}") => Some(json!({ "name": "renamed" })),
             ("PATCH", _) => Some(json!({ "role": "user" })),
             _ => None,
@@ -196,12 +233,15 @@ impl Fixture {
     }
 
     /// The right kind of `{id}` for this route: a device id for the
-    /// device routes, an account id for the rest. Without this a
-    /// device route would answer 404 for want of a real target and the
-    /// walk could not tell that apart from a refusal.
+    /// device routes, a category rule id for the category-rule route,
+    /// an account id for the rest. Without this a route scoped to a
+    /// real resource would answer 404 for want of one and the walk
+    /// could not tell that apart from a refusal.
     async fn target_for(&self, spec: &RouteSpec, caller: Caller) -> String {
         if spec.path.contains("/devices/{id}") {
             self.disposable_device(caller).await
+        } else if spec.path.contains("/category-rules/{id}") {
+            self.disposable_category_rule(caller).await
         } else {
             self.disposable_account().await
         }
