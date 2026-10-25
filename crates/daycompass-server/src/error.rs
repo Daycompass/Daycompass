@@ -137,6 +137,13 @@ pub enum ErrorKind {
     /// rules.
     CategoryRuleLimitReached,
 
+    // Stats.
+    /// `end_ts` on a stats query was not strictly after `start_ts`.
+    StatsRangeInverted,
+    /// The span between `start_ts` and `end_ts` on a stats query was
+    /// wider than the server allows in one request.
+    StatsRangeTooWide,
+
     // Input policies. These describe public rules and never echo what
     // was sent.
     UsernameLength,
@@ -169,7 +176,9 @@ impl ErrorKind {
             | Self::CategoryPatternMalformed
             | Self::CategoryPatternCharset
             | Self::CategoryLabelLength
-            | Self::CategoryLabelCharset => StatusCode::BAD_REQUEST,
+            | Self::CategoryLabelCharset
+            | Self::StatsRangeInverted
+            | Self::StatsRangeTooWide => StatusCode::BAD_REQUEST,
             Self::Unauthorized
             | Self::Unauthenticated
             | Self::InvalidCredentials
@@ -247,6 +256,7 @@ impl ErrorKind {
             Self::CategoryLabelLength | Self::CategoryLabelCharset => "invalid_category_label",
             Self::CategoryRuleDuplicate => "category_rule_duplicate",
             Self::CategoryRuleLimitReached => "category_rule_limit_reached",
+            Self::StatsRangeInverted | Self::StatsRangeTooWide => "invalid_stats_range",
         }
     }
 
@@ -331,6 +341,10 @@ impl ErrorKind {
             Self::CategoryRuleLimitReached => {
                 "this account already has the maximum number of category rules"
             }
+            Self::StatsRangeInverted => "end_ts must be strictly after start_ts",
+            Self::StatsRangeTooWide => {
+                "the time range between start_ts and end_ts is wider than this server allows in one request"
+            }
         }
     }
 }
@@ -386,6 +400,8 @@ pub(crate) const ALL_ERROR_KINDS: &[ErrorKind] = &[
     ErrorKind::CategoryLabelCharset,
     ErrorKind::CategoryRuleDuplicate,
     ErrorKind::CategoryRuleLimitReached,
+    ErrorKind::StatsRangeInverted,
+    ErrorKind::StatsRangeTooWide,
 ];
 
 /// Compile-time proof that every code and message is a constant.
