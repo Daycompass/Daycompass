@@ -198,7 +198,7 @@ mod tests {
     /// input folding would collapse two distinct codes onto one.
     #[test]
     fn the_alphabet_omits_every_confusable_character() {
-        for omitted in [b'I', b'L', b'O', b'U'] {
+        for omitted in *b"ILOU" {
             assert!(
                 !ALPHABET.contains(&omitted),
                 "{} must not be generated",
