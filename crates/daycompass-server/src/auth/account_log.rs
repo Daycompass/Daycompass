@@ -33,7 +33,9 @@ pub enum LogKind {
 }
 
 impl LogKind {
-    const fn as_str(self) -> &'static str {
+    /// The value stored in `account_log.kind`, which is also the value
+    /// every read of the log puts on the wire.
+    pub const fn as_str(self) -> &'static str {
         match self {
             Self::InviteRedeemed => "invite_redeemed",
             Self::PasswordResetByAdmin => "password_reset_by_admin",
@@ -118,6 +120,29 @@ pub async fn list_for_user(pool: &SqlitePool, user_id: &str) -> Result<Vec<LogEn
     let rows = sqlx::query(
         "SELECT id, kind, actor_id, at FROM account_log
          WHERE user_id = ?1 ORDER BY at DESC, id DESC LIMIT 200",
+    )
+    .bind(user_id)
+    .fetch_all(pool)
+    .await?;
+
+    rows.iter().map(entry_from_row).collect()
+}
+
+/// Every entry of one account's log, oldest first, for the account's
+/// own export.
+///
+/// No `LIMIT`, unlike [`list_for_user`]: an export that silently
+/// dropped the oldest entries would not be one. The log only grows on
+/// invite redemptions and password events, so it stays small without a
+/// cap. Same "the caller's own id, nothing else" contract as
+/// [`list_for_user`] - see `crate::export`.
+pub async fn list_all_for_user(
+    pool: &SqlitePool,
+    user_id: &str,
+) -> Result<Vec<LogEntry>, StoreError> {
+    let rows = sqlx::query(
+        "SELECT id, kind, actor_id, at FROM account_log
+         WHERE user_id = ?1 ORDER BY at ASC, id ASC",
     )
     .bind(user_id)
     .fetch_all(pool)
@@ -223,5 +248,44 @@ mod tests {
 
         assert_eq!(list_for_user(&pool, &user_id).await.unwrap().len(), 1);
         assert_eq!(list_for_user(&pool, &other_id).await.unwrap().len(), 1);
+    }
+
+    /// The export's read: past the 200 the endpoint shows, oldest
+    /// first, and still only the caller's own.
+    #[tokio::test]
+    async fn the_full_log_is_uncapped_oldest_first_and_own_only() {
+        let (pool, user_id) = pool_with_user().await;
+        let other_id = new_id();
+        sqlx::query(
+            "INSERT INTO users (id, username, password_hash, role, created_at)
+             VALUES (?1, 'bob', 'placeholder', 'user', 0)",
+        )
+        .bind(&other_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+        let mut conn = pool.acquire().await.expect("a connection");
+
+        for n in 0..250u64 {
+            record(
+                &mut conn,
+                &user_id,
+                LogKind::PasswordChanged,
+                None,
+                now().saturating_add(std::time::Duration::from_secs(n)),
+            )
+            .await
+            .unwrap();
+        }
+        record(&mut conn, &other_id, LogKind::PasswordChanged, None, now())
+            .await
+            .unwrap();
+        drop(conn);
+
+        let entries = list_all_for_user(&pool, &user_id).await.unwrap();
+        assert_eq!(entries.len(), 250);
+        assert_eq!(entries[0].at, now());
+        assert!(entries.windows(2).all(|pair| pair[0].at <= pair[1].at));
+        assert_eq!(list_all_for_user(&pool, &other_id).await.unwrap().len(), 1);
     }
 }
