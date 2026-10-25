@@ -26,6 +26,7 @@ use utoipa::ToSchema;
 use crate::auth::password::{HashError, PasswordPolicyError};
 use crate::auth::secret::SecretString;
 use crate::auth::setup::{self, SetupError};
+use crate::auth::store::UserRecord;
 use crate::auth::time::UnixTime;
 use crate::auth::username::UsernameError;
 use crate::error::{ApiError, ErrorKind};
@@ -66,31 +67,60 @@ pub async fn create_first_admin(
     State(state): State<AppState>,
     Json(request): Json<SetupRequest>,
 ) -> Response {
-    let now = UnixTime::now();
-
-    let result = setup::complete_setup(
-        &state.pool,
-        &state.hasher,
+    match attempt_setup(
+        &state,
         &request.setup_token,
         &request.username,
         request.password,
-        now,
+    )
+    .await
+    {
+        Ok(user) => (
+            StatusCode::CREATED,
+            Json(SetupResponse {
+                user: UserView::from(&user),
+            }),
+        )
+            .into_response(),
+        Err(error) => error.into_response(),
+    }
+}
+
+/// Redeems the setup token and creates the first admin. Shared with the
+/// dashboard's setup page; the order of checks is the service's, so the
+/// 404 once an admin exists holds for both.
+pub(super) async fn attempt_setup(
+    state: &AppState,
+    setup_token: &SecretString,
+    username: &str,
+    password: SecretString,
+) -> Result<UserRecord, ApiError> {
+    let result = setup::complete_setup(
+        &state.pool,
+        &state.hasher,
+        setup_token,
+        username,
+        password,
+        UnixTime::now(),
     )
     .await;
 
     match result {
         Ok(user) => {
             tracing::info!(user_id = %user.id, "first admin account created");
-            (
-                StatusCode::CREATED,
-                Json(SetupResponse {
-                    user: UserView::from(&user),
-                }),
-            )
-                .into_response()
+            Ok(user)
         }
-        Err(err) => to_api_error(err, &state).into_response(),
+        Err(err) => Err(to_api_error(err, state)),
     }
+}
+
+/// Whether the first admin exists, for the setup page's `GET`, which
+/// must answer 404 exactly when `POST` would.
+pub(super) async fn setup_is_complete(state: &AppState) -> Result<bool, ApiError> {
+    setup::is_complete(&state.pool).await.map_err(|err| {
+        tracing::error!(error = %err, "checking whether setup is complete failed");
+        ApiError::of(ErrorKind::InternalError)
+    })
 }
 
 fn to_api_error(err: SetupError, state: &AppState) -> ApiError {

@@ -14,7 +14,7 @@ use axum::http::StatusCode;
 use serde_json::json;
 
 use common::{Credentials, TestApp, TestRequest, GOOD_ORIGIN};
-use daycompass_server::routes::{Access, INVENTORY};
+use daycompass_server::routes::{Access, Surface, INVENTORY};
 
 /// Nothing a client is ever shown may contain a stored hash, whatever
 /// else a test is about.
@@ -690,13 +690,17 @@ async fn no_admin_route_answers_an_anonymous_or_ordinary_caller() {
                     .json(json!({ "role": "user" })),
             )
             .await;
+        // A dashboard page a browser simply loads is sent to the login
+        // page instead; anything else is a 401.
+        let expected = if spec.surface == Surface::Page && spec.method == "GET" {
+            StatusCode::SEE_OTHER
+        } else {
+            StatusCode::UNAUTHORIZED
+        };
         assert_eq!(
-            anonymous.status,
-            StatusCode::UNAUTHORIZED,
+            anonymous.status, expected,
             "{} {}: {:?}",
-            spec.method,
-            spec.path,
-            anonymous.body
+            spec.method, spec.path, anonymous.body
         );
 
         let ordinary = app

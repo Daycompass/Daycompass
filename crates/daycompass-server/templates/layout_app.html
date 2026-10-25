@@ -13,6 +13,11 @@
   <nav class="dc-side dc-app__side" aria-label="Main">
     <a class="dc-side__brand" href="/">{% include "partials/mark.html" %}daycompass</a>
     {% let item_class = "dc-side__item" %}{% include "partials/nav_items.html" %}
+    {% if shell.is_admin %}
+    <span class="dc-overline dc-side__section">Admin</span>
+    <a class="dc-side__item" href="/admin/users"{% if shell.current == "admin-accounts" %} aria-current="page"{% endif %}>{% call icons::icon("book") %}{% endcall %}Accounts</a>
+    <a class="dc-side__item" href="/admin/devices"{% if shell.current == "admin-devices" %} aria-current="page"{% endif %}>{% call icons::icon("server") %}{% endcall %}All devices</a>
+    {% endif %}
     <div class="dc-side__foot">
       <span class="dc-side__who">Logged in as {{ shell.username }}</span>
       <button class="dc-side__item" type="button" hx-post="/logout">{% call icons::icon("close") %}{% endcall %}Log out</button>

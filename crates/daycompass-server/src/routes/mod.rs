@@ -1092,6 +1092,142 @@ pub const INVENTORY: &[RouteSpec] = &[
         max_body_bytes: None,
         rate_limits: &[RateLimit::new(Bucket::PwChange, LimitKey::Session)],
     },
+    // First-start setup. 404 once an admin exists, exactly like
+    // `POST /api/v1/setup`. The POST authenticates by the setup token in
+    // its body, mints no session, and shares the API's per-address
+    // bucket - but unlike the API it is `Origin`-required, as every
+    // dashboard write is: only browsers post here.
+    RouteSpec {
+        method: "GET",
+        path: "/setup",
+        surface: Surface::Page,
+        access: Access::Public,
+        origin: OriginRule::Checked,
+        csrf: false,
+        sets_session_cookie: false,
+        max_body_bytes: None,
+        rate_limits: &[],
+    },
+    RouteSpec {
+        method: "POST",
+        path: "/setup",
+        surface: Surface::Page,
+        access: Access::BodySecret,
+        origin: OriginRule::Required,
+        csrf: false,
+        sets_session_cookie: false,
+        max_body_bytes: None,
+        rate_limits: &[RateLimit::new(Bucket::SetupIp, LimitKey::Peer)],
+    },
+    // Activating an invited account. The token is pasted into the form,
+    // never carried in the URL. Same buckets as
+    // `POST /api/v1/invites/redeem`.
+    RouteSpec {
+        method: "GET",
+        path: "/invite",
+        surface: Surface::Page,
+        access: Access::Public,
+        origin: OriginRule::Checked,
+        csrf: false,
+        sets_session_cookie: false,
+        max_body_bytes: None,
+        rate_limits: &[],
+    },
+    RouteSpec {
+        method: "POST",
+        path: "/invite",
+        surface: Surface::Page,
+        access: Access::BodySecret,
+        origin: OriginRule::Required,
+        csrf: false,
+        sets_session_cookie: false,
+        max_body_bytes: None,
+        rate_limits: &[
+            RateLimit::new(Bucket::InviteIp, LimitKey::Peer),
+            RateLimit::new(Bucket::InviteGlobal, LimitKey::Global),
+        ],
+    },
+    // Admin account management: the same shared functions as
+    // `/api/v1/users*`, account rows only.
+    RouteSpec {
+        method: "GET",
+        path: "/admin/users",
+        surface: Surface::Page,
+        access: Access::Admin,
+        origin: OriginRule::Checked,
+        csrf: false,
+        sets_session_cookie: false,
+        max_body_bytes: None,
+        rate_limits: &[],
+    },
+    RouteSpec {
+        method: "POST",
+        path: "/admin/users",
+        surface: Surface::Page,
+        access: Access::Admin,
+        origin: OriginRule::Required,
+        csrf: true,
+        sets_session_cookie: false,
+        max_body_bytes: None,
+        rate_limits: &[],
+    },
+    RouteSpec {
+        method: "POST",
+        path: "/admin/users/{id}/role",
+        surface: Surface::Page,
+        access: Access::Admin,
+        origin: OriginRule::Required,
+        csrf: true,
+        sets_session_cookie: false,
+        max_body_bytes: None,
+        rate_limits: &[],
+    },
+    RouteSpec {
+        method: "POST",
+        path: "/admin/users/{id}/password-reset",
+        surface: Surface::Page,
+        access: Access::Admin,
+        origin: OriginRule::Required,
+        csrf: true,
+        sets_session_cookie: false,
+        max_body_bytes: None,
+        rate_limits: &[],
+    },
+    RouteSpec {
+        method: "POST",
+        path: "/admin/users/{id}/delete",
+        surface: Surface::Page,
+        access: Access::Admin,
+        origin: OriginRule::Required,
+        csrf: true,
+        sets_session_cookie: false,
+        max_body_bytes: None,
+        rate_limits: &[],
+    },
+    // Every device on the instance, metadata only - the same fields as
+    // `GET /api/v1/admin/devices`, never anything a device reported.
+    RouteSpec {
+        method: "GET",
+        path: "/admin/devices",
+        surface: Surface::Page,
+        access: Access::Admin,
+        origin: OriginRule::Checked,
+        csrf: false,
+        sets_session_cookie: false,
+        max_body_bytes: None,
+        rate_limits: &[],
+    },
+    RouteSpec {
+        method: "POST",
+        path: "/admin/devices/{id}/revoke",
+        surface: Surface::Page,
+        access: Access::Admin,
+        origin: OriginRule::Required,
+        csrf: true,
+        sets_session_cookie: false,
+        max_body_bytes: None,
+        rate_limits: &[],
+    },
 ];
 
 /// The entry for one method and path, if the inventory has one.
@@ -1165,6 +1301,29 @@ pub fn router(state: AppState) -> Router {
     );
     table.add("GET", "/account", pages::account::page);
     table.add("POST", "/account/password", pages::account::change_password);
+    table.add("GET", "/setup", pages::onboarding::setup_page);
+    table.add("POST", "/setup", pages::onboarding::submit_setup);
+    table.add("GET", "/invite", pages::onboarding::invite_page);
+    table.add("POST", "/invite", pages::onboarding::submit_invite);
+    table.add("GET", "/admin/users", pages::admin::accounts_page);
+    table.add("POST", "/admin/users", pages::admin::create_account);
+    table.add("POST", "/admin/users/{id}/role", pages::admin::change_role);
+    table.add(
+        "POST",
+        "/admin/users/{id}/password-reset",
+        pages::admin::reset_password,
+    );
+    table.add(
+        "POST",
+        "/admin/users/{id}/delete",
+        pages::admin::delete_account,
+    );
+    table.add("GET", "/admin/devices", pages::admin::devices_page);
+    table.add(
+        "POST",
+        "/admin/devices/{id}/revoke",
+        pages::admin::revoke_device,
+    );
     table.add(
         "POST",
         "/api/v1/admin/devices/{id}/revoke",

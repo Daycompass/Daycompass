@@ -48,10 +48,12 @@
 //! [`Surface::Page`]: crate::routes::Surface::Page
 
 pub mod account;
+pub mod admin;
 pub mod assets;
 pub mod categories;
 pub mod devices;
 pub mod login;
+pub mod onboarding;
 pub mod overview;
 
 use askama::Template;
@@ -209,8 +211,12 @@ pub struct Shell {
     /// Put into `hx-headers` on `<body>`, which is how htmx sends it.
     pub csrf_token: String,
     /// Which navigation item is the current page: `overview`, `devices`,
-    /// `categories` or `account`.
+    /// `categories`, `account`, `admin-accounts` or `admin-devices`.
     pub current: &'static str,
+    /// Whether to show the admin links. Read from the account row this
+    /// request resolved, like every role check; the admin routes check
+    /// it again for themselves, so this decides visibility only.
+    pub is_admin: bool,
 }
 
 impl Shell {
@@ -219,6 +225,7 @@ impl Shell {
             username: auth.user.username.as_str().to_owned(),
             csrf_token: auth.csrf_token(),
             current,
+            is_admin: auth.user.role.is_admin(),
         }
     }
 }

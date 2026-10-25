@@ -295,7 +295,14 @@ async fn every_page_renders_without_inline_script_or_style() {
     let (_credentials, admin) = app.provisioned_admin().await;
     app.pair_device(&admin, "laptop", "linux").await;
 
-    for path in ["/", "/devices", "/category-rules", "/account"] {
+    for path in [
+        "/",
+        "/devices",
+        "/category-rules",
+        "/account",
+        "/admin/users",
+        "/admin/devices",
+    ] {
         let text = page(&app, path, &admin).await.text;
         assert!(!text.contains(" style="), "{path} has an inline style");
         assert!(!text.contains("<style"), "{path} has a <style>");

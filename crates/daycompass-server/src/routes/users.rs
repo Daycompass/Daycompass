@@ -25,8 +25,11 @@ use axum::Json;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
-use crate::auth::invite::{CreatePendingAccountError, IssuedInvite, ResetPasswordError};
+use crate::auth::invite::{
+    CreatePendingAccountError, IssuedInvite, ResetPasswordError, ResetReport,
+};
 use crate::auth::role::Role;
+use crate::auth::store::UserSummary;
 use crate::auth::time::UnixTime;
 use crate::auth::username::UsernameError;
 use crate::auth::users::{self, DeleteUserError, RoleChangeError};
@@ -106,29 +109,8 @@ pub async fn create_user(
     admin: AdminContext,
     Json(request): Json<CreateUserRequest>,
 ) -> Response {
-    let Some(role) = Role::parse(&request.role) else {
-        return ApiError::of(ErrorKind::RoleUnknown).into_response();
-    };
-
-    let result = users::create_user(
-        &state.pool,
-        &request.username,
-        role,
-        state.invite_policy,
-        UnixTime::now(),
-    )
-    .await;
-
-    match result {
+    match create_for_admin(&state, &admin, &request.username, &request.role).await {
         Ok(issued) => {
-            // Who did it and who was created, by id. The username is
-            // deliberately absent: it is the one field of an account
-            // that identifies a person to anyone reading the logs.
-            tracing::info!(
-                actor_id = %admin.auth().user.id,
-                user_id = %issued.user.id,
-                "admin created a pending account"
-            );
             let user = UserDetailView::from(&issued.user);
             (
                 StatusCode::CREATED,
@@ -139,7 +121,44 @@ pub async fn create_user(
             )
                 .into_response()
         }
-        Err(err) => create_error(err).into_response(),
+        Err(error) => error.into_response(),
+    }
+}
+
+/// Creates a pending account and its invite on an admin's behalf.
+/// Shared with the dashboard's account management, so both validate,
+/// log and refuse alike.
+pub(super) async fn create_for_admin(
+    state: &AppState,
+    admin: &AdminContext,
+    username: &str,
+    role: &str,
+) -> Result<IssuedInvite, ApiError> {
+    let Some(role) = Role::parse(role) else {
+        return Err(ApiError::of(ErrorKind::RoleUnknown));
+    };
+
+    match users::create_user(
+        &state.pool,
+        username,
+        role,
+        state.invite_policy,
+        UnixTime::now(),
+    )
+    .await
+    {
+        Ok(issued) => {
+            // Who did it and who was created, by id. The username is
+            // deliberately absent: it is the one field of an account
+            // that identifies a person to anyone reading the logs.
+            tracing::info!(
+                actor_id = %admin.auth().user.id,
+                user_id = %issued.user.id,
+                "admin created a pending account"
+            );
+            Ok(issued)
+        }
+        Err(err) => Err(create_error(err)),
     }
 }
 
@@ -188,9 +207,31 @@ pub async fn reset_password(
     admin: AdminContext,
     Path(user_id): Path<String>,
 ) -> Response {
+    match reset_for_admin(&state, &admin, &user_id).await {
+        Ok(report) => (
+            StatusCode::OK,
+            Json(ResetPasswordResponse {
+                invite: InviteView::from(report.invite),
+                sessions_ended: report.sessions_ended,
+                devices_revoked: report.devices_revoked,
+            }),
+        )
+            .into_response(),
+        Err(error) => error.into_response(),
+    }
+}
+
+/// Resets an account to pending on an admin's behalf. Shared with the
+/// dashboard, so the account-log entry, the log line and the refusals
+/// are the same whichever surface did it.
+pub(super) async fn reset_for_admin(
+    state: &AppState,
+    admin: &AdminContext,
+    user_id: &str,
+) -> Result<ResetReport, ApiError> {
     let result = crate::auth::invite::reset_password(
         &state.pool,
-        &user_id,
+        user_id,
         &admin.auth().user.id,
         state.invite_policy,
         UnixTime::now(),
@@ -206,26 +247,16 @@ pub async fn reset_password(
                 devices_revoked = report.devices_revoked,
                 "admin reset an account to pending"
             );
-            (
-                StatusCode::OK,
-                Json(ResetPasswordResponse {
-                    invite: InviteView::from(report.invite),
-                    sessions_ended: report.sessions_ended,
-                    devices_revoked: report.devices_revoked,
-                }),
-            )
-                .into_response()
+            Ok(report)
         }
         // The id came from the caller, so reporting that it names
         // nothing tells an admin only what they could learn from the
         // list endpoint.
-        Err(ResetPasswordError::NotFound) => ApiError::of(ErrorKind::NotFound).into_response(),
-        Err(ResetPasswordError::LastAdmin) => {
-            ApiError::of(ErrorKind::LastAdminProtected).into_response()
-        }
+        Err(ResetPasswordError::NotFound) => Err(ApiError::of(ErrorKind::NotFound)),
+        Err(ResetPasswordError::LastAdmin) => Err(ApiError::of(ErrorKind::LastAdminProtected)),
         Err(err @ (ResetPasswordError::Rng(_) | ResetPasswordError::Store(_))) => {
             tracing::error!(error = %err, "resetting an account failed");
-            ApiError::of(ErrorKind::InternalError).into_response()
+            Err(ApiError::of(ErrorKind::InternalError))
         }
     }
 }
@@ -283,35 +314,47 @@ pub async fn change_role(
     Path(user_id): Path<String>,
     Json(request): Json<ChangeRoleRequest>,
 ) -> Response {
-    let Some(role) = Role::parse(&request.role) else {
-        return ApiError::of(ErrorKind::RoleUnknown).into_response();
+    match change_role_for_admin(&state, &admin, &user_id, &request.role).await {
+        Ok(user) => (
+            StatusCode::OK,
+            Json(UserResponse {
+                user: UserDetailView::from(&user),
+            }),
+        )
+            .into_response(),
+        Err(error) => error.into_response(),
+    }
+}
+
+/// Changes an account's role on an admin's behalf. Shared with the
+/// dashboard; the last-admin rule lives in the service either way.
+pub(super) async fn change_role_for_admin(
+    state: &AppState,
+    admin: &AdminContext,
+    user_id: &str,
+    role: &str,
+) -> Result<UserSummary, ApiError> {
+    let Some(role) = Role::parse(role) else {
+        return Err(ApiError::of(ErrorKind::RoleUnknown));
     };
 
-    match users::change_role(&state.pool, &user_id, role).await {
+    match users::change_role(&state.pool, user_id, role).await {
         Ok(user) => {
             tracing::info!(
                 actor_id = %admin.auth().user.id,
                 user_id = %user.id,
                 "admin changed an account's role"
             );
-            (
-                StatusCode::OK,
-                Json(UserResponse {
-                    user: UserDetailView::from(&user),
-                }),
-            )
-                .into_response()
+            Ok(user)
         }
         // The id came from the caller, so reporting that it names
         // nothing tells an admin only what they could learn from the
         // list endpoint.
-        Err(RoleChangeError::NotFound) => ApiError::of(ErrorKind::NotFound).into_response(),
-        Err(RoleChangeError::LastAdmin) => {
-            ApiError::of(ErrorKind::LastAdminProtected).into_response()
-        }
+        Err(RoleChangeError::NotFound) => Err(ApiError::of(ErrorKind::NotFound)),
+        Err(RoleChangeError::LastAdmin) => Err(ApiError::of(ErrorKind::LastAdminProtected)),
         Err(err @ RoleChangeError::Store(_)) => {
             tracing::error!(error = %err, "changing an account's role failed");
-            ApiError::of(ErrorKind::InternalError).into_response()
+            Err(ApiError::of(ErrorKind::InternalError))
         }
     }
 }
@@ -334,22 +377,32 @@ pub async fn delete_user(
     admin: AdminContext,
     Path(user_id): Path<String>,
 ) -> Response {
-    match users::delete_user(&state.pool, &user_id).await {
+    match delete_for_admin(&state, &admin, &user_id).await {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(error) => error.into_response(),
+    }
+}
+
+/// Deletes an account on an admin's behalf. Shared with the dashboard.
+pub(super) async fn delete_for_admin(
+    state: &AppState,
+    admin: &AdminContext,
+    user_id: &str,
+) -> Result<(), ApiError> {
+    match users::delete_user(&state.pool, user_id).await {
         Ok(()) => {
             tracing::info!(
                 actor_id = %admin.auth().user.id,
                 user_id = %user_id,
                 "admin deleted an account"
             );
-            StatusCode::NO_CONTENT.into_response()
+            Ok(())
         }
-        Err(DeleteUserError::NotFound) => ApiError::of(ErrorKind::NotFound).into_response(),
-        Err(DeleteUserError::LastAdmin) => {
-            ApiError::of(ErrorKind::LastAdminProtected).into_response()
-        }
+        Err(DeleteUserError::NotFound) => Err(ApiError::of(ErrorKind::NotFound)),
+        Err(DeleteUserError::LastAdmin) => Err(ApiError::of(ErrorKind::LastAdminProtected)),
         Err(err @ DeleteUserError::Store(_)) => {
             tracing::error!(error = %err, "deleting an account failed");
-            ApiError::of(ErrorKind::InternalError).into_response()
+            Err(ApiError::of(ErrorKind::InternalError))
         }
     }
 }

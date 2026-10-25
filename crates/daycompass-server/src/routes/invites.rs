@@ -71,7 +71,8 @@ pub async fn redeem(
     }
 }
 
-fn to_api_error(err: RedeemError, state: &AppState) -> ApiError {
+/// Shared with the dashboard's invite page, so both answer alike.
+pub(super) fn to_api_error(err: RedeemError, state: &AppState) -> ApiError {
     match err {
         // Unknown, expired, malformed or already used all collapse to
         // this one response - see `RedeemError::Rejected`.

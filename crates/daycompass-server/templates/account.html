@@ -25,6 +25,15 @@
     </ul>
     {% endif %}
   </section>
+  {% if is_admin %}
+  {#- On a phone the bottom bar has room for four destinations only, so
+      the admin pages are reached from here. #}
+  <section class="dc-card dc-stack">
+    <h2 class="dc-heading-3">Admin</h2>
+    <p class="dc-muted">Manage accounts and devices on this server. You never see anyone else's screen time.</p>
+    <div class="dc-list__actions"><a class="dc-btn dc-btn--neutral" href="/admin/users">Accounts</a><a class="dc-btn dc-btn--neutral" href="/admin/devices">All devices</a></div>
+  </section>
+  {% endif %}
   <section class="dc-card dc-stack">
     <h2 class="dc-heading-3">Log out</h2>
     <div><button class="dc-btn dc-btn--neutral" type="button" hx-post="/logout">Log out</button></div>
