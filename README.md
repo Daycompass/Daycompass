@@ -73,6 +73,47 @@ If that trade-off is not acceptable for your deployment, complete setup
 promptly and rotate the log, or run the first start with log collection
 disabled.
 
+## Running in a container
+
+The repository's `Dockerfile` builds a small image (a distroless base,
+no shell, running as a non-root user). Both base images are pinned by
+digest.
+
+```sh
+podman build -t daycompass .        # or: docker build -t daycompass .
+
+podman volume create daycompass-data
+podman run -d --name daycompass \
+  -p 127.0.0.1:8080:8080 \
+  -v daycompass-data:/data \
+  -e DAYCOMPASS_PUBLIC_URL=https://daycompass.example.com \
+  daycompass
+```
+
+Then read the setup token from `podman logs daycompass` (see
+"First start" above).
+
+- **`DAYCOMPASS_PUBLIC_URL` is required.** The image binds to
+  `0.0.0.0:8080` so the port can be published, and for any bind beyond
+  loopback the server refuses to start without knowing its public
+  origin. Set it to the URL people actually open.
+- **Keep `/data` on a volume.** It holds the SQLite database. A named
+  volume, as above, gets the right owner automatically. A bind mount
+  must be owned by uid `65532`, the image's user, or the server
+  refuses to start: `chown 65532:65532 /srv/daycompass` before the first
+  run.
+- **Configuration is environment variables only**, as everywhere else.
+  Every `DAYCOMPASS_*` variable can be passed with `-e`, or read from a
+  mounted file through its `_FILE` variant. Nothing is baked into the
+  image beyond the bind address and data directory above.
+- **Behind a reverse proxy**, publish the port to loopback only (as
+  above) and set `DAYCOMPASS_TRUSTED_PROXIES` - see "Behind a reverse
+  proxy" below.
+- **There is no `HEALTHCHECK`**: the image has no shell or `curl` to run
+  one with. Probe `GET /healthz` from your orchestrator instead.
+- The server handles `SIGTERM` itself, so `podman stop` / `docker stop`
+  shut it down cleanly.
+
 ## Authentication
 
 | Endpoint | Purpose |
