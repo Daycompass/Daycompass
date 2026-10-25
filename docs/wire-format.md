@@ -3,9 +3,9 @@
 Reference for client implementations: every route this server answers
 — setup, login and session management, account and device
 administration, pairing a device, authenticating as one, reporting
-events, and reading an account's own events back. There is still no
-category on an event and no stats endpoint; both are later M3 work
-built on top of the read documented here, not part of it.
+events, reading an account's own events back, managing the category
+rules those events are matched against, and reading the resulting
+screen time summed per day and category.
 
 Everything here is normative for the server as it stands. The
 authoritative definitions live in the code (`src/routes/`,
@@ -1065,11 +1065,79 @@ No request body.
 | 404 | `not_found` | No such rule, **or** it exists but belongs to someone else — deliberately the same answer, so a caller cannot probe which rule ids exist on other accounts. |
 | 401 | `unauthenticated` | No session. |
 
+## Stats (session auth)
+
+<!-- route: GET /api/v1/stats -->
+### `GET /api/v1/stats`
+
+Session auth, no CSRF (a `GET`). The caller's own screen time, across
+every device it owns, summed per UTC calendar day and
+[category](#category-rules-session-auth). There is no admin variant
+and no id parameter — same reasoning as `GET /api/v1/events`.
+
+**Query parameters, both required:**
+
+| Parameter | Meaning |
+| --- | --- |
+| `start_ts` | Inclusive start of the window, Unix seconds. |
+| `end_ts` | Exclusive end of the window, Unix seconds. |
+
+The window is `[start_ts, end_ts)`, same convention as
+[`GET /api/v1/events`](#get-apiv1events), but wider: up to 366 days in
+one request rather than 31. The response here is bounded by the
+number of (day, category) combinations in the window, not by raw
+event count, so it can afford to cover a full year.
+
+```
+GET /api/v1/stats?start_ts=1799990000&end_ts=1800000000
+```
+
+**`200 OK`:**
+
+```json
+{
+  "days": [
+    {
+      "day_start_ts": 1799942400,
+      "category": "Study",
+      "total_duration_secs": 5400
+    },
+    {
+      "day_start_ts": 1799942400,
+      "total_duration_secs": 300
+    }
+  ]
+}
+```
+
+Each entry is one (day, category) total. `category` is omitted when
+it is the total for events that matched no rule — not a sentinel
+string. **Sparse:** a day or category with nothing in it has no entry
+at all, there is no zero-filled row. Ordered `day_start_ts` ascending,
+then `category` ascending with the no-category entry last within its
+day.
+
+An event's whole duration counts toward the UTC calendar day its own
+`start_ts` falls in, even one that runs past midnight — it is not
+split across the boundary. Overlapping events — two devices covering
+the same span, or one device reporting an app and a domain for the
+same span — are summed exactly as reported, the same as
+`GET /api/v1/events` hands them back unmerged; this endpoint does not
+resolve that either.
+
+**Failures:**
+
+| Status | Code | Meaning |
+| --- | --- | --- |
+| 400 | `bad_request` | `start_ts` or `end_ts` missing, not a number, or an unknown query parameter was sent. |
+| 400 | `invalid_stats_range` | `end_ts` is not strictly after `start_ts`, **or** the span between them is wider than this server allows in one request. |
+| 401 | `unauthenticated` | No session. A device's bearer token does not substitute for one — this route does not accept it. |
+
 ## Admin endpoints
 
 An admin sees device **metadata only** — id, owner, name, platform, and
-the three timestamps. An admin has no way to read any user's events, by
-design and enforced by `tests/no_event_reads.rs`.
+the three timestamps. An admin has no way to read any user's events or
+aggregated stats, by design and enforced by `tests/no_event_reads.rs`.
 
 <!-- route: GET /api/v1/admin/devices -->
 ### `GET /api/v1/admin/devices`
