@@ -41,12 +41,13 @@
 //! as well as a right one would. That part stays a human review, on
 //! every PR that touches the wire format.
 //!
-//! # What this is not a placeholder for
+//! # Alongside the OpenAPI spec
 //!
-//! When utoipa/OpenAPI lands (see CLAUDE.md's roadmap), the anchor
-//! convention and this test are what it *replaces*, not what it sits
-//! alongside - a generated spec does not need a hand-written anchor to
-//! prove a route is documented. Until then, this is the cheap version.
+//! `tests/openapi.rs` now proves every route has an operation in the
+//! generated `docs/openapi.json`. This test was kept anyway, by
+//! decision: the spec carries shapes, this file carries the prose that
+//! says what they mean, and a route with a spec but no prose is still
+//! undocumented for a client author. Retiring it is a separate call.
 
 use std::path::{Path, PathBuf};
 

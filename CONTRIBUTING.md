@@ -101,6 +101,8 @@ When reviewing, look especially for:
 - `cargo clippy --all-targets -- -D warnings`
 - `cargo test --locked`
 - `cargo deny check` (install with `cargo install cargo-deny --locked`)
+- If you changed a handler, a request or a response:
+  `cargo run -p daycompass-server --example openapi > docs/openapi.json`
 
 All of these also run in CI; running them locally first saves a review
 round-trip.

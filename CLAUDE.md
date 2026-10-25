@@ -218,7 +218,12 @@ Hard rules:
   description.
 - CLAUDE.md, the roadmap and docs can be updated as part of a normal
   feature PR. Keep docs/wire-format.md in sync with any protocol change
-  in the same PR.
+  in the same PR, and regenerate docs/openapi.json
+  (`cargo run -p daycompass-server --example openapi > docs/openapi.json`;
+  `tests/openapi.rs` fails until you do).
+- docs/openapi-wire-v1.json is the frozen v1 contract, pinned by hash
+  in `tests/openapi.rs`. Never edit it to make a test pass. A change
+  that breaks it needs a new wire version - ask first.
 
 Roadmap / project handling:
 - Use `gh project` for issue tracking (item-add, item-edit, item-list).

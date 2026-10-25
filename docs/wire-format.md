@@ -13,6 +13,13 @@ authoritative definitions live in the code (`src/routes/`,
 `src/events/validate.rs`); this file exists so client repositories have
 something to read without following Rust.
 
+The same API is described machine-readably in
+[`openapi.json`](openapi.json), generated from the handlers and checked
+against them by `tests/openapi.rs`; [`openapi-wire-v1.json`](openapi-wire-v1.json)
+is the frozen v1 contract the current spec must stay backward compatible
+with. This file stays the normative prose - what the spec's shapes mean
+in context.
+
 Every route in `src/routes/mod.rs`'s `INVENTORY` has a section below,
 each preceded by an HTML-comment anchor naming its method and path.
 `tests/wire_format_documented.rs` enforces the correspondence in both
