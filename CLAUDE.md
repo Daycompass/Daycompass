@@ -31,8 +31,9 @@ web dashboard (askama or maud, htmx) is planned for M5.
 ## Known limits
 
 Admin password reset can be used for account takeover: an admin can
-reset a user's password (`POST /api/v1/users/{id}/password-reset`)
-and then redeem that invite themselves before the account holder
+reset a user's password (`POST /api/v1/users/{id}/password-reset`,
+or the dashboard's reset button on `/admin/users`, which calls the
+same function) and then redeem that invite themselves before the account holder
 does, logging in as that account. This breaks the "an admin manages
 accounts but never reads another user's events or stats" promise in
 this one edge case.
