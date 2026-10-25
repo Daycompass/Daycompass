@@ -4,8 +4,9 @@ Reference for client implementations: every route this server answers
 — setup, login and session management, account and device
 administration, pairing a device, authenticating as one, reporting
 events, reading an account's own events back, managing the category
-rules those events are matched against, and reading the resulting
-screen time summed per day and category.
+rules those events are matched against, reading the resulting
+screen time summed per day and category, and exporting an account's
+whole data.
 
 Everything here is normative for the server as it stands. The
 authoritative definitions live in the code (`src/routes/`,
@@ -1132,6 +1133,108 @@ resolve that either.
 | 400 | `bad_request` | `start_ts` or `end_ts` missing, not a number, or an unknown query parameter was sent. |
 | 400 | `invalid_stats_range` | `end_ts` is not strictly after `start_ts`, **or** the span between them is wider than this server allows in one request. |
 | 401 | `unauthenticated` | No session. A device's bearer token does not substitute for one — this route does not accept it. |
+
+## Exporting your account (session auth)
+
+<!-- route: GET /api/v1/export -->
+### `GET /api/v1/export`
+
+Session auth, no CSRF (a `GET`). Everything the caller's own account
+holds, as one JSON document meant to be saved to a file: the account,
+its devices, its category rules, its full account log, and **every**
+event any of its devices ever reported — no time window, no row cap.
+There is no admin variant and no id parameter — same reasoning as
+`GET /api/v1/events`. An admin calling it gets the admin's own data.
+
+Rate limited per session: 3 per hour by default
+(`DAYCOMPASS_RATE_LIMIT_EXPORT`). A second session of the same account
+has its own budget.
+
+No query parameters.
+
+**`200 OK`**, with `Content-Disposition: attachment;
+filename="daycompass-export.json"` and `Cache-Control: no-store`:
+
+```json
+{
+  "format": "daycompass-export",
+  "format_version": 1,
+  "exported_at": 1800000000,
+  "account": {
+    "id": "0190a0b2-0000-7000-8000-000000000001",
+    "username": "alice",
+    "role": "user",
+    "created_at": 1790000000
+  },
+  "devices": [
+    {
+      "id": "0190a0b2-0000-7000-8000-000000000002",
+      "name": "laptop",
+      "platform": "linux",
+      "created_at": 1790000100,
+      "last_seen_at": 1799999000,
+      "revoked_at": null
+    }
+  ],
+  "category_rules": [
+    {
+      "id": "0190a0b2-0000-7000-8000-000000000003",
+      "kind": "app_id",
+      "pattern": "org.example.study",
+      "category": "Study",
+      "created_at": 1790000200
+    }
+  ],
+  "account_log": [
+    { "kind": "invite_redeemed", "actor_id": null, "at": 1790000050 }
+  ],
+  "events": [
+    {
+      "device_id": "0190a0b2-0000-7000-8000-000000000002",
+      "event_id": "0123456789abcdef0123456789abcdef",
+      "start_ts": 1799990000,
+      "duration_secs": 300,
+      "app_id": "org.example.study"
+    }
+  ],
+  "complete": true
+}
+```
+
+- `devices`, `category_rules` and `account_log` carry the same fields
+  as [`GET /api/v1/devices`](#get-apiv1devices),
+  [`GET /api/v1/category-rules`](#get-apiv1category-rules) and
+  [`GET /api/v1/account/log`](#get-apiv1accountlog). The account log
+  is complete here, oldest entry first — not capped at the newest 200.
+- `events` carry the same fields as
+  [`GET /api/v1/events`](#get-apiv1events) **except `category`**:
+  events are exported exactly as reported, and the rules that assign
+  categories are exported next to them. `label` and `domain` are
+  omitted when absent. Ordered by `start_ts`, then `device_id`, then
+  `event_id`, all ascending.
+- No password, token or hash of either appears anywhere in the
+  document, nor any session, invite or pairing-code data.
+- `format_version` changes whenever the document's shape does.
+
+**Accept an export only if it parses and ends with `"complete": true`.**
+The body is streamed: the status line is sent before the events are
+read, so a server-side failure partway through cannot become an error
+status. The server ends the connection instead, and the body you
+received is cut off — not valid JSON, and without `complete`. The
+10-second request timeout covers only the time until the response
+starts, not the download itself.
+
+The export is **not a snapshot**. Events your devices report while it
+is being produced may or may not be in it; every event that existed
+when it started is in it exactly once.
+
+**Failures:**
+
+| Status | Code | Meaning |
+| --- | --- | --- |
+| 400 | `bad_request` | An unknown query parameter was sent. |
+| 401 | `unauthenticated` | No session. A device's bearer token does not substitute for one — this route does not accept it. |
+| 429 | `rate_limited` | Too many exports from this session in the current window. `Retry-After` says when to try again. |
 
 ## Admin endpoints
 

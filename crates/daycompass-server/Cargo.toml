@@ -28,6 +28,8 @@ base64 = { workspace = true }
 uuid = { workspace = true }
 getrandom = { workspace = true }
 ipnet = { workspace = true }
+serde_json = { workspace = true }
+futures-util = { workspace = true }
 
 [dev-dependencies]
 # "io-util" for AsyncReadExt/AsyncWriteExt, used only by the test that

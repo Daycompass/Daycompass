@@ -79,3 +79,11 @@ getrandom = { version = "~0.4" }
 # Hand-rolling IPv6 prefix matching is error-prone; this crate has no
 # dependencies of its own.
 ipnet = { version = "~2.12" }
+# Serializes the account export one page at a time, rather than through
+# axum's `Json`, which needs the whole document in memory. Already in the
+# graph via axum.
+serde_json = { version = "~1.0" }
+# `stream::unfold`, which turns the export's page-by-page reads into the
+# response body. Already in the graph via axum; no default features
+# needed for it.
+futures-util = { version = "~0.3", default-features = false }

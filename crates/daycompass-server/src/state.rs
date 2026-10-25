@@ -80,6 +80,9 @@ pub struct Limits {
     /// shape and the same trade-off as [`Self::pair_global`]: a ceiling
     /// on total work, not a guessing defence.
     pub invite_global: Arc<RateLimiter<GlobalKey>>,
+    /// Account exports, keyed by session - same reasoning as
+    /// [`Self::pw_change`].
+    pub export: Arc<RateLimiter<SessionKey>>,
 }
 
 impl Limits {
@@ -129,6 +132,10 @@ impl Limits {
             // One key ever, so one entry - same reasoning as
             // `pair_global` above.
             invite_global: Arc::new(RateLimiter::new(config.rate_limit_invite_global, 1)),
+            export: Arc::new(RateLimiter::new(
+                config.rate_limit_export,
+                config.rate_limit_max_entries,
+            )),
         }
     }
 }

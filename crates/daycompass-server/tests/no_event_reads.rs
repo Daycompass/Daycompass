@@ -2,24 +2,25 @@
 //!
 //! M2 shipped with no read path for anyone - not an endpoint, not a
 //! service function, not a join. M3 adds exactly two:
-//! `GET /api/v1/events`, and `GET /api/v1/stats` on top of it, both
-//! session-scoped to the caller's own account. This file's rule is
+//! `GET /api/v1/events`, and `GET /api/v1/stats` on top of it, and M4
+//! adds a third, `GET /api/v1/export` - all three session-scoped to the
+//! caller's own account. This file's rule is
 //! narrower now than "nobody, ever" - it is *nobody else, and no other
 //! path* - but it is still a rule this file checks against the
 //! sources rather than trusting it to be remembered.
 //!
 //! An admin still reaches zero event data, full stop: there is no
-//! admin variant of either route and no id parameter anywhere that
-//! could point one at another account. Neither [`query::list_own`]
-//! nor `stats::aggregate::daily_totals` ever takes anything but the
-//! caller's own id, resolved from the session the access layer
-//! already authenticated.
+//! admin variant of any of them and no id parameter anywhere that
+//! could point one at another account. None of [`query::list_own`],
+//! `stats::aggregate::daily_totals` or `export::service::export_own`
+//! ever takes anything but the caller's own id (or record), resolved
+//! from the session the access layer already authenticated.
 //!
 //! Four checks, deliberately overlapping, because each one catches a
 //! different way the rule could be broken:
 //!
-//!   1. The route inventory has exactly the write and the two owner
-//!      reads it is supposed to, and both reads are session-scoped.
+//!   1. The route inventory has exactly the write and the three owner
+//!      reads it is supposed to, and every read is session-scoped.
 //!   2. No source file outside `events/store.rs` mentions the `events`
 //!      table in SQL, and that one file's reads are provably scoped
 //!      by the caller's own `user_id` rather than a bare, unscoped
@@ -27,10 +28,9 @@
 //!   3. The responses an admin and an owner actually receive from
 //!      *other* routes have exactly the fields they are supposed to,
 //!      and no more.
-//!   4. The owner's own-events route returns only the caller's own
-//!      events, inside the requested window, to a session - and
-//!      nothing at all to an anonymous caller or a device's bearer
-//!      token.
+//!   4. The owner's own-events and export routes return only the
+//!      caller's own events to a session - and nothing at all to an
+//!      anonymous caller or a device's bearer token.
 //!
 //! # A note for M4
 //!
@@ -41,7 +41,10 @@
 //! it to "anything under src/", is not the same thing and is not what
 //! it is for. Adding `GET /api/v1/stats` to [`STATS_ROUTES`] below, when
 //! that route shipped, is exactly the kind of deliberate, reviewed
-//! extension this note describes.
+//! extension this note describes - and so is [`EXPORT_ROUTES`], added
+//! with M4's export. The export's SQL lives in `events/store.rs` like
+//! every other read, so [`FILES_ALLOWED_TO_QUERY_EVENTS`] did not grow
+//! for it.
 
 mod common;
 
@@ -62,6 +65,10 @@ const EVENT_ROUTES: &[(&str, &str)] = &[("POST", "/api/v1/events"), ("GET", "/ap
 /// on that substring, and folding this in would silently stop it from
 /// checking anything.
 const STATS_ROUTES: &[(&str, &str)] = &[("GET", "/api/v1/stats")];
+
+/// The owner's whole-account download, kept separate for the same
+/// reason as [`STATS_ROUTES`]: its path does not contain "event" either.
+const EXPORT_ROUTES: &[(&str, &str)] = &[("GET", "/api/v1/export")];
 
 /// Files permitted to name the `events` table in SQL.
 ///
@@ -85,8 +92,8 @@ const SQL_VERBS: &[&str] = &[
     "table events",
 ];
 
-/// The inventory may contain exactly the write and the two owner
-/// reads, and both reads must be session-scoped - never admin, never
+/// The inventory may contain exactly the write and the three owner
+/// reads, and every read must be session-scoped - never admin, never
 /// a device's bearer token.
 #[test]
 fn the_inventory_has_exactly_the_write_and_the_owner_read() {
@@ -104,7 +111,7 @@ fn the_inventory_has_exactly_the_write_and_the_owner_read() {
         "a route touching events appeared outside the write and the owner's own read"
     );
 
-    for (method, path) in EVENT_ROUTES.iter().chain(STATS_ROUTES) {
+    for (method, path) in EVENT_ROUTES.iter().chain(STATS_ROUTES).chain(EXPORT_ROUTES) {
         let spec = daycompass_server::routes::spec_for(method, path)
             .unwrap_or_else(|| panic!("{method} {path} must be in the table"));
         if *method == "GET" {
@@ -122,11 +129,14 @@ fn the_inventory_has_exactly_the_write_and_the_owner_read() {
     for spec in INVENTORY {
         if EVENT_ROUTES.contains(&(spec.method, spec.path))
             || STATS_ROUTES.contains(&(spec.method, spec.path))
+            || EXPORT_ROUTES.contains(&(spec.method, spec.path))
         {
             continue;
         }
         assert!(
-            !spec.path.contains("event") && !spec.path.contains("stats"),
+            !spec.path.contains("event")
+                && !spec.path.contains("stats")
+                && !spec.path.contains("export"),
             "{} {} looks like an event read path",
             spec.method,
             spec.path
@@ -458,14 +468,15 @@ async fn the_owners_device_listing_carries_no_event_data_either() {
     assert!(!listing.body.to_string().contains("org.example.secretgame"));
 }
 
-/// No `GET` other than the owner's own events route ever returns an
-/// event, to anybody.
+/// No `GET` other than the owner's own events and export routes ever
+/// returns an event, to anybody.
 ///
 /// The property asserted is "never 2xx, and no event data in the
-/// body", not a particular status code. `GET /api/v1/events` itself
-/// is excluded from this sweep and tested on its own below, with its
-/// query string, where it is supposed to answer with the caller's own
-/// events; every other path here must still refuse to.
+/// body", not a particular status code. `GET /api/v1/events` and
+/// `GET /api/v1/export` are excluded from this sweep and tested on
+/// their own below, where they are supposed to answer with the
+/// caller's own events - the admin here owns the device that reported
+/// them. Every other path here must still refuse to.
 #[tokio::test]
 async fn no_get_other_than_the_owners_events_route_returns_an_event() {
     let app = TestApp::new().await;
@@ -505,7 +516,7 @@ async fn no_get_other_than_the_owners_events_route_returns_an_event() {
     // route, plus the ones a reader might reasonably expect to exist.
     let mut paths: Vec<String> = INVENTORY
         .iter()
-        .filter(|spec| spec.path != "/api/v1/events")
+        .filter(|spec| spec.path != "/api/v1/events" && spec.path != "/api/v1/export")
         .map(|spec| spec.path.replace("{id}", &device.id))
         .collect();
     paths.extend(
@@ -515,6 +526,8 @@ async fn no_get_other_than_the_owners_events_route_returns_an_event() {
             "/api/v1/admin/events",
             "/api/v1/admin/devices/events",
             "/api/v1/devices/{id}/events",
+            "/api/v1/admin/export",
+            "/api/v1/users/{id}/export",
         ]
         .map(|path| path.replace("{id}", &device.id)),
     );
@@ -651,4 +664,75 @@ async fn the_owner_route_refuses_anonymous_and_device_callers() {
         .await;
     assert_eq!(as_device.status, StatusCode::UNAUTHORIZED);
     assert!(as_device.body.get("events").is_none());
+}
+
+/// `GET /api/v1/export` carries the caller's own events and no one
+/// else's - the same regression as the events-route test above, on the
+/// one route that returns an account's whole history at once.
+#[tokio::test]
+async fn the_export_route_returns_only_the_callers_own_events() {
+    let app = TestApp::new().await;
+    let (_credentials, admin) = app.provisioned_admin().await;
+    let (_bob_id, bob_credentials) = app.create_account(&admin, "bob", "user").await;
+    let bob = app.log_in(&bob_credentials).await;
+
+    let admin_device = app.pair_device(&admin, "admins-laptop", "linux").await;
+    let bobs_device = app.pair_device(&bob, "bobs-laptop", "android").await;
+
+    let me = app
+        .send(TestRequest::get("/api/v1/device/me").authenticated_as_device(&admin_device))
+        .await;
+    let now = me.body["server_time"].as_i64().unwrap();
+
+    for (device, domain) in [
+        (&admin_device, "admin.example"),
+        (&bobs_device, "private.example"),
+    ] {
+        let ingested = app
+            .send(
+                TestRequest::post("/api/v1/events")
+                    .authenticated_as_device(device)
+                    .json(serde_json::json!({
+                        "events": [{
+                            "event_id": "0123456789abcdef0123456789abcdef",
+                            "start_ts": now - 600,
+                            "duration_secs": 300,
+                            "app_id": "org.example.secretgame",
+                            "domain": domain,
+                        }],
+                    })),
+            )
+            .await;
+        assert_eq!(ingested.body["accepted"], 1, "{:?}", ingested.body);
+    }
+
+    for (session, own, other) in [
+        (&bob, "private.example", "admin.example"),
+        (&admin, "admin.example", "private.example"),
+    ] {
+        let response = app
+            .send(
+                TestRequest::get("/api/v1/export")
+                    .origin(GOOD_ORIGIN)
+                    .authenticated(session),
+            )
+            .await;
+        assert_eq!(response.status, StatusCode::OK, "{:?}", response.body);
+        let events = response.body["events"].as_array().expect("an array");
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0]["domain"], own);
+        assert!(
+            !response.body.to_string().contains(other),
+            "an export carried another account's event"
+        );
+    }
+
+    for request in [
+        TestRequest::get("/api/v1/export").origin(GOOD_ORIGIN),
+        TestRequest::get("/api/v1/export").authenticated_as_device(&admin_device),
+    ] {
+        let response = app.send(request).await;
+        assert_eq!(response.status, StatusCode::UNAUTHORIZED);
+        assert!(response.body.get("events").is_none());
+    }
 }

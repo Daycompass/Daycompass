@@ -53,6 +53,7 @@ const VAR_RATE_LIMIT_DEVICE_AUTH_FAIL: &str = "DAYCOMPASS_RATE_LIMIT_DEVICE_AUTH
 const VAR_INVITE_TTL: &str = "DAYCOMPASS_INVITE_TTL_SECS";
 const VAR_RATE_LIMIT_INVITE_IP: &str = "DAYCOMPASS_RATE_LIMIT_INVITE_IP";
 const VAR_RATE_LIMIT_INVITE_GLOBAL: &str = "DAYCOMPASS_RATE_LIMIT_INVITE_GLOBAL";
+const VAR_RATE_LIMIT_EXPORT: &str = "DAYCOMPASS_RATE_LIMIT_EXPORT";
 
 const DEFAULT_BIND_ADDR: &str = "127.0.0.1:8080";
 const DEFAULT_DATA_DIR: &str = "./data";
@@ -217,6 +218,16 @@ const DEFAULT_RATE_LIMIT_INVITE_GLOBAL: &str = "600/60";
 /// spend.
 const DEFAULT_RATE_LIMIT_INGEST_DEVICE: &str = "30/60";
 
+/// Three account exports per hour for one session.
+///
+/// An export reads every event an account has ever reported, which -
+/// until retention exists - is the single most expensive read an
+/// authenticated caller can ask for. A person downloads their data
+/// once; a retry after a dropped connection is the second request, and
+/// the third is headroom. The session and not the account, for the
+/// same reason as [`DEFAULT_RATE_LIMIT_PW_CHANGE`].
+const DEFAULT_RATE_LIMIT_EXPORT: &str = "3/3600";
+
 const VALID_LOG_LEVELS: &[&str] = &["error", "warn", "info", "debug", "trace"];
 
 /// Backend configuration. Construct with [`Config::from_env`].
@@ -258,6 +269,8 @@ pub struct Config {
     pub rate_limit_invite_ip: RateLimitRule,
     /// Invite redemption attempts across the whole instance, per window.
     pub rate_limit_invite_global: RateLimitRule,
+    /// Account exports per session, per window.
+    pub rate_limit_export: RateLimitRule,
 }
 
 /// Failed to load configuration. Messages name the offending variable but
@@ -603,6 +616,7 @@ impl Config {
             VAR_RATE_LIMIT_INVITE_GLOBAL,
             DEFAULT_RATE_LIMIT_INVITE_GLOBAL,
         )?;
+        let rate_limit_export = rule(source, VAR_RATE_LIMIT_EXPORT, DEFAULT_RATE_LIMIT_EXPORT)?;
 
         Ok(Config {
             bind_addr,
@@ -629,6 +643,7 @@ impl Config {
             invite_ttl,
             rate_limit_invite_ip,
             rate_limit_invite_global,
+            rate_limit_export,
         })
     }
 }
@@ -666,6 +681,7 @@ impl fmt::Debug for Config {
             .field("invite_ttl", &self.invite_ttl)
             .field("rate_limit_invite_ip", &self.rate_limit_invite_ip)
             .field("rate_limit_invite_global", &self.rate_limit_invite_global)
+            .field("rate_limit_export", &self.rate_limit_export)
             .finish()
     }
 }
@@ -1117,6 +1133,8 @@ mod tests {
         assert_eq!(config.rate_limit_invite_ip.max, 100);
         assert_eq!(config.rate_limit_invite_ip.window, Duration::from_secs(300));
         assert_eq!(config.rate_limit_invite_global.max, 600);
+        assert_eq!(config.rate_limit_export.max, 3);
+        assert_eq!(config.rate_limit_export.window, Duration::from_secs(3_600));
         assert_eq!(
             config.rate_limit_invite_global.window,
             Duration::from_secs(60)
@@ -1300,6 +1318,7 @@ mod tests {
             .with(VAR_RATE_LIMIT_LOGIN_USERNAME, " 2 / 30 ")
             .with(VAR_RATE_LIMIT_SETUP_IP, "1/120")
             .with(VAR_RATE_LIMIT_PW_CHANGE, "4/90")
+            .with(VAR_RATE_LIMIT_EXPORT, "2/600")
             .with(VAR_RATE_LIMIT_MAX_ENTRIES, "500");
         let config = Config::load(&env).expect("valid limits must parse");
 
@@ -1313,6 +1332,8 @@ mod tests {
         assert_eq!(config.rate_limit_setup_ip.max, 1);
         assert_eq!(config.rate_limit_pw_change.max, 4);
         assert_eq!(config.rate_limit_pw_change.window, Duration::from_secs(90));
+        assert_eq!(config.rate_limit_export.max, 2);
+        assert_eq!(config.rate_limit_export.window, Duration::from_secs(600));
         assert_eq!(config.rate_limit_max_entries, 500);
     }
 
@@ -1526,7 +1547,8 @@ mod tests {
                 "rate_limit_device_auth_fail: RateLimitRule { max: 600, window: 60s }, ",
                 "invite_ttl: 259200s, ",
                 "rate_limit_invite_ip: RateLimitRule { max: 100, window: 300s }, ",
-                "rate_limit_invite_global: RateLimitRule { max: 600, window: 60s }",
+                "rate_limit_invite_global: RateLimitRule { max: 600, window: 60s }, ",
+                "rate_limit_export: RateLimitRule { max: 3, window: 3600s }",
                 " }",
             )
         );

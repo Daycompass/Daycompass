@@ -4,13 +4,12 @@
 //! `events` table**, and `tests/no_event_reads.rs` fails the build if
 //! that stops being true.
 //!
-//! Two statements live here: the insert ingest uses, and the one read
-//! M3 adds - an owner's own events, joined against `devices` to prove
-//! ownership in the `WHERE` clause rather than trusting a caller-
-//! supplied id. There is still no statement here for anyone else: an
-//! admin manages accounts and devices and must never reach event data,
-//! full stop. Category rules are a later piece of M3, built on top of
-//! this read rather than inside it.
+//! The insert ingest uses, and the owner's own reads: M3's windowed
+//! read and daily totals, and M4's export pages. Every read is joined
+//! against `devices` to prove ownership in the `WHERE` clause rather
+//! than trusting a caller-supplied id. There is still no statement here
+//! for anyone else: an admin manages accounts and devices and must
+//! never reach event data, full stop.
 //!
 //! # Why `ON CONFLICT ... DO NOTHING` and not `INSERT OR IGNORE`
 //!
@@ -161,6 +160,81 @@ pub async fn select_own_in_range(
     rows.iter().map(queried_event_from_row).collect()
 }
 
+/// Where the previous export page ended: the sort key of its last row.
+///
+/// The three columns together are unique - `(device_id, event_id)`
+/// already is - so a page that starts strictly after this key neither
+/// repeats nor skips a row, however many events share one `start_ts`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PageKey {
+    pub start_ts: i64,
+    pub device_id: String,
+    pub event_id: String,
+}
+
+impl PageKey {
+    /// The key of `event`, for resuming after it.
+    pub fn after(event: &QueriedEvent) -> Self {
+        Self {
+            start_ts: event.start_ts,
+            device_id: event.device_id.clone(),
+            event_id: event.event_id.clone(),
+        }
+    }
+}
+
+/// One page of an account's own events, in `(start_ts, device_id,
+/// event_id)` order, starting strictly after `after` - or at the very
+/// first event when `after` is `None`.
+///
+/// M4's export read: every event the account has, a page at a time, on
+/// the same ownership `JOIN` as [`select_own_in_range`]. Keyset rather
+/// than `OFFSET`, so a late page costs the same as the first one
+/// instead of re-scanning every row before it, and so each page is its
+/// own short query: the caller holds no connection between pages.
+pub async fn select_own_page_after(
+    pool: &SqlitePool,
+    user_id: &str,
+    after: Option<&PageKey>,
+    limit: i64,
+) -> Result<Vec<QueriedEvent>, StoreError> {
+    let rows =
+        match after {
+            None => sqlx::query(
+                "SELECT e.device_id, e.event_id, e.start_ts, e.duration_secs, e.app_id, e.label,
+                        e.domain
+                 FROM events e
+                 JOIN devices d ON d.id = e.device_id
+                 WHERE d.user_id = ?1
+                 ORDER BY e.start_ts ASC, e.device_id ASC, e.event_id ASC
+                 LIMIT ?2",
+            )
+            .bind(user_id)
+            .bind(limit)
+            .fetch_all(pool)
+            .await?,
+            Some(key) => sqlx::query(
+                "SELECT e.device_id, e.event_id, e.start_ts, e.duration_secs, e.app_id, e.label,
+                        e.domain
+                 FROM events e
+                 JOIN devices d ON d.id = e.device_id
+                 WHERE d.user_id = ?1
+                   AND (e.start_ts, e.device_id, e.event_id) > (?2, ?3, ?4)
+                 ORDER BY e.start_ts ASC, e.device_id ASC, e.event_id ASC
+                 LIMIT ?5",
+            )
+            .bind(user_id)
+            .bind(key.start_ts)
+            .bind(&key.device_id)
+            .bind(&key.event_id)
+            .bind(limit)
+            .fetch_all(pool)
+            .await?,
+        };
+
+    rows.iter().map(queried_event_from_row).collect()
+}
+
 /// One (UTC calendar day, `app_id`, `domain`) group's summed
 /// `duration_secs`, for an owner's own stats aggregation - M3's
 /// second read, on the same `JOIN` as [`select_own_in_range`].
@@ -225,4 +299,105 @@ pub async fn select_own_daily_group_totals(
     .await?;
 
     rows.iter().map(daily_group_total_from_row).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::{self, DbTarget};
+
+    /// Two accounts, two devices for the first and one for the second,
+    /// so both the ownership filter and the tie-break across devices
+    /// have something to get wrong.
+    async fn pool_with_devices() -> SqlitePool {
+        let pool = db::connect(&DbTarget::Memory).await.expect("connect");
+        db::migrate(&pool).await.expect("migrate");
+        for (user, name) in [("u1", "alice"), ("u2", "bob")] {
+            sqlx::query(
+                "INSERT INTO users (id, username, password_hash, role, created_at)
+                 VALUES (?1, ?2, 'placeholder-not-a-hash', 'user', 0)",
+            )
+            .bind(user)
+            .bind(name)
+            .execute(&pool)
+            .await
+            .expect("inserting a user must succeed");
+        }
+        for (device, user, hash) in [("d1", "u1", 1u8), ("d2", "u1", 2), ("d3", "u2", 3)] {
+            sqlx::query(
+                "INSERT INTO devices
+                     (id, user_id, name, platform, token_hash, created_at, last_seen_at)
+                 VALUES (?1, ?2, 'laptop', 'linux', ?3, 0, 0)",
+            )
+            .bind(device)
+            .bind(user)
+            .bind(vec![hash])
+            .execute(&pool)
+            .await
+            .expect("inserting a device must succeed");
+        }
+        pool
+    }
+
+    fn event(n: u32, start_ts: i64) -> ValidEvent {
+        ValidEvent {
+            event_id: format!("{n:032x}"),
+            start_ts,
+            duration_secs: 60,
+            app_id: "org.example.app".to_owned(),
+            label: None,
+            domain: None,
+        }
+    }
+
+    async fn all_pages(pool: &SqlitePool, user_id: &str, limit: i64) -> Vec<QueriedEvent> {
+        let mut out = Vec::new();
+        let mut after: Option<PageKey> = None;
+        loop {
+            let page = select_own_page_after(pool, user_id, after.as_ref(), limit)
+                .await
+                .expect("a page must read");
+            let Some(last) = page.last() else {
+                return out;
+            };
+            after = Some(PageKey::after(last));
+            out.extend(page);
+        }
+    }
+
+    /// Many events on one `start_ts`, split across two devices, read
+    /// back with a page size that lands mid-tie: every row exactly
+    /// once, in sort order, and none of the other account's.
+    #[tokio::test]
+    async fn pages_cover_every_own_event_once_across_ties() {
+        let pool = pool_with_devices().await;
+        let at = UnixTime::from_secs(0);
+        let d1: Vec<ValidEvent> = (0..7).map(|n| event(n, 1_000 + i64::from(n % 2))).collect();
+        let d2: Vec<ValidEvent> = (0..7).map(|n| event(n, 1_000)).collect();
+        let d3: Vec<ValidEvent> = (0..7).map(|n| event(n, 1_000)).collect();
+        insert_batch(&pool, "d1", &d1, at).await.unwrap();
+        insert_batch(&pool, "d2", &d2, at).await.unwrap();
+        insert_batch(&pool, "d3", &d3, at).await.unwrap();
+
+        for limit in [1, 3, 5, 14, 100] {
+            let events = all_pages(&pool, "u1", limit).await;
+            assert_eq!(events.len(), 14, "page size {limit}");
+            assert!(events.iter().all(|e| e.device_id != "d3"));
+            let keys: Vec<(i64, String, String)> = events
+                .iter()
+                .map(|e| (e.start_ts, e.device_id.clone(), e.event_id.clone()))
+                .collect();
+            let mut sorted = keys.clone();
+            sorted.sort();
+            sorted.dedup();
+            assert_eq!(keys, sorted, "page size {limit}: out of order or repeated");
+        }
+    }
+
+    #[tokio::test]
+    async fn an_account_with_no_events_has_an_empty_first_page() {
+        let pool = pool_with_devices().await;
+        let page = select_own_page_after(&pool, "u1", None, 10).await.unwrap();
+        assert!(page.is_empty());
+    }
 }
