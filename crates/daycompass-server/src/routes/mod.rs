@@ -31,6 +31,7 @@
 mod access;
 mod account;
 mod auth;
+mod categories;
 mod devices;
 mod events;
 mod health;
@@ -644,6 +645,45 @@ pub const INVENTORY: &[RouteSpec] = &[
         max_body_bytes: None,
         rate_limits: &[],
     },
+    // --- category rules -------------------------------------------------
+    //
+    // An account's own mapping from an event's app_id/domain to a
+    // category, applied at query time rather than stored on the
+    // event. Session-scoped only, same reasoning as the owner's own
+    // events read just above: an admin manages accounts and devices
+    // but must never read or shape another account's categorization,
+    // so there is no admin variant and no id parameter that could name
+    // another account.
+    RouteSpec {
+        method: "POST",
+        path: "/api/v1/category-rules",
+        access: Access::Session,
+        origin: OriginRule::Checked,
+        csrf: true,
+        sets_session_cookie: false,
+        max_body_bytes: None,
+        rate_limits: &[],
+    },
+    RouteSpec {
+        method: "GET",
+        path: "/api/v1/category-rules",
+        access: Access::Session,
+        origin: OriginRule::Checked,
+        csrf: false,
+        sets_session_cookie: false,
+        max_body_bytes: None,
+        rate_limits: &[],
+    },
+    RouteSpec {
+        method: "DELETE",
+        path: "/api/v1/category-rules/{id}",
+        access: Access::Session,
+        origin: OriginRule::Checked,
+        csrf: true,
+        sets_session_cookie: false,
+        max_body_bytes: None,
+        rate_limits: &[],
+    },
     // Lets a client detect clock skew, which is what makes the
     // validator's future-dating rules diagnosable from the outside.
     RouteSpec {
@@ -755,6 +795,13 @@ pub fn router(state: AppState) -> Router {
     table.add("POST", "/api/v1/pair", pairing::pair_device);
     table.add("POST", "/api/v1/events", events::ingest);
     table.add("GET", "/api/v1/events", events::list_own);
+    table.add("POST", "/api/v1/category-rules", categories::create_own);
+    table.add("GET", "/api/v1/category-rules", categories::list_own);
+    table.add(
+        "DELETE",
+        "/api/v1/category-rules/{id}",
+        categories::delete_own,
+    );
     table.add("GET", "/api/v1/device/me", events::device_me);
     table.add("GET", "/api/v1/devices", devices::list_own);
     table.add("PATCH", "/api/v1/devices/{id}", devices::rename_own);

@@ -112,6 +112,31 @@ pub enum ErrorKind {
     /// wider than the server allows in one request.
     EventRangeTooWide,
 
+    // Category rules.
+    /// The `kind` field named something other than `app_id` or
+    /// `domain`.
+    CategoryRuleKindUnknown,
+    /// An `app_id` pattern that was empty or only whitespace.
+    CategoryPatternBlank,
+    /// A pattern longer than its kind allows.
+    CategoryPatternLength,
+    /// A `domain` pattern not shaped like a bare hostname.
+    CategoryPatternMalformed,
+    /// A control character or text-direction override in the pattern.
+    CategoryPatternCharset,
+    /// The category label was blank once trimmed, or longer than
+    /// allowed.
+    CategoryLabelLength,
+    /// A control character or text-direction override in the category
+    /// label.
+    CategoryLabelCharset,
+    /// A rule with this account's chosen kind and pattern already
+    /// exists.
+    CategoryRuleDuplicate,
+    /// The account already holds the maximum number of category
+    /// rules.
+    CategoryRuleLimitReached,
+
     // Input policies. These describe public rules and never echo what
     // was sent.
     UsernameLength,
@@ -137,7 +162,14 @@ impl ErrorKind {
             | Self::DeviceNameCharset
             | Self::PlatformUnknown
             | Self::EventRangeInverted
-            | Self::EventRangeTooWide => StatusCode::BAD_REQUEST,
+            | Self::EventRangeTooWide
+            | Self::CategoryRuleKindUnknown
+            | Self::CategoryPatternBlank
+            | Self::CategoryPatternLength
+            | Self::CategoryPatternMalformed
+            | Self::CategoryPatternCharset
+            | Self::CategoryLabelLength
+            | Self::CategoryLabelCharset => StatusCode::BAD_REQUEST,
             Self::Unauthorized
             | Self::Unauthenticated
             | Self::InvalidCredentials
@@ -155,7 +187,9 @@ impl ErrorKind {
             | Self::LastAdminProtected
             | Self::PasswordChangeConflict
             | Self::DeviceLimitReached
-            | Self::PairingCodeLimitReached => StatusCode::CONFLICT,
+            | Self::PairingCodeLimitReached
+            | Self::CategoryRuleDuplicate
+            | Self::CategoryRuleLimitReached => StatusCode::CONFLICT,
             Self::MethodNotAllowed => StatusCode::METHOD_NOT_ALLOWED,
             Self::RequestTimeout => StatusCode::REQUEST_TIMEOUT,
             Self::PayloadTooLarge | Self::BatchTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
@@ -205,6 +239,14 @@ impl ErrorKind {
             Self::BatchTooLarge => "batch_too_large",
             Self::DeviceNameLength | Self::DeviceNameCharset => "invalid_device_name",
             Self::EventRangeInverted | Self::EventRangeTooWide => "invalid_event_range",
+            Self::CategoryRuleKindUnknown => "invalid_category_rule_kind",
+            Self::CategoryPatternBlank
+            | Self::CategoryPatternLength
+            | Self::CategoryPatternMalformed
+            | Self::CategoryPatternCharset => "invalid_category_pattern",
+            Self::CategoryLabelLength | Self::CategoryLabelCharset => "invalid_category_label",
+            Self::CategoryRuleDuplicate => "category_rule_duplicate",
+            Self::CategoryRuleLimitReached => "category_rule_limit_reached",
         }
     }
 
@@ -270,6 +312,25 @@ impl ErrorKind {
             Self::EventRangeTooWide => {
                 "the time range between start_ts and end_ts is wider than this server allows in one request"
             }
+            Self::CategoryRuleKindUnknown => "the kind must be either app_id or domain",
+            Self::CategoryPatternBlank => "the pattern must not be empty or only whitespace",
+            Self::CategoryPatternLength => {
+                "the pattern is longer than this server allows for its kind"
+            }
+            Self::CategoryPatternMalformed => {
+                "a domain pattern must be a bare hostname, not a URL"
+            }
+            Self::CategoryPatternCharset => {
+                "the pattern may not contain control or text-direction characters"
+            }
+            Self::CategoryLabelLength => "the category must be between 1 and 64 characters long",
+            Self::CategoryLabelCharset => {
+                "the category may not contain control or text-direction characters"
+            }
+            Self::CategoryRuleDuplicate => "a rule with this kind and pattern already exists",
+            Self::CategoryRuleLimitReached => {
+                "this account already has the maximum number of category rules"
+            }
         }
     }
 }
@@ -316,6 +377,15 @@ pub(crate) const ALL_ERROR_KINDS: &[ErrorKind] = &[
     ErrorKind::DeviceNameCharset,
     ErrorKind::EventRangeInverted,
     ErrorKind::EventRangeTooWide,
+    ErrorKind::CategoryRuleKindUnknown,
+    ErrorKind::CategoryPatternBlank,
+    ErrorKind::CategoryPatternLength,
+    ErrorKind::CategoryPatternMalformed,
+    ErrorKind::CategoryPatternCharset,
+    ErrorKind::CategoryLabelLength,
+    ErrorKind::CategoryLabelCharset,
+    ErrorKind::CategoryRuleDuplicate,
+    ErrorKind::CategoryRuleLimitReached,
 ];
 
 /// Compile-time proof that every code and message is a constant.
@@ -554,6 +624,26 @@ mod tests {
             message.contains(&crate::devices::name::MIN_CHARS.to_string())
                 && message.contains(&crate::devices::name::MAX_CHARS.to_string()),
             "the device name length message disagrees with the policy: {message}"
+        );
+
+        let message = ErrorKind::CategoryLabelLength.message();
+        assert!(
+            message.contains(&crate::categories::label::MIN_CHARS.to_string())
+                && message.contains(&crate::categories::label::MAX_CHARS.to_string()),
+            "the category label length message disagrees with the policy: {message}"
+        );
+    }
+
+    /// Unlike the category label, a pattern's length bound depends on
+    /// its kind (`app_id` or `domain`), so no single number here could
+    /// be correct for both - same reasoning as the batch cap and the
+    /// event range width below.
+    #[test]
+    fn the_category_pattern_length_message_states_no_number() {
+        let message = ErrorKind::CategoryPatternLength.message();
+        assert!(
+            !message.chars().any(|c| c.is_ascii_digit()),
+            "a number here would be correct for at most one kind: {message}"
         );
     }
 
