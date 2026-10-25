@@ -1,34 +1,36 @@
-//! Who may read an event back, and through which one route.
+//! Who may read an event back, and through which routes.
 //!
 //! M2 shipped with no read path for anyone - not an endpoint, not a
-//! service function, not a join. M3 adds exactly one:
-//! `GET /api/v1/events`, session-scoped to the caller's own account.
-//! This file's rule is narrower now than "nobody, ever" - it is
-//! *nobody else, and no other path* - but it is still a rule this file
-//! checks against the sources rather than trusting it to be
-//! remembered.
+//! service function, not a join. M3 adds exactly two:
+//! `GET /api/v1/events`, and `GET /api/v1/stats` on top of it, both
+//! session-scoped to the caller's own account. This file's rule is
+//! narrower now than "nobody, ever" - it is *nobody else, and no other
+//! path* - but it is still a rule this file checks against the
+//! sources rather than trusting it to be remembered.
 //!
 //! An admin still reaches zero event data, full stop: there is no
-//! admin variant of the route and no id parameter anywhere that could
-//! point it at another account. [`query::list_own`] only ever takes
-//! the caller's own id, resolved from the session the access layer
+//! admin variant of either route and no id parameter anywhere that
+//! could point one at another account. Neither [`query::list_own`]
+//! nor `stats::aggregate::daily_totals` ever takes anything but the
+//! caller's own id, resolved from the session the access layer
 //! already authenticated.
 //!
 //! Four checks, deliberately overlapping, because each one catches a
 //! different way the rule could be broken:
 //!
-//!   1. The route inventory has exactly two routes that touch events:
-//!      the write, and the owner's own read.
+//!   1. The route inventory has exactly the write and the two owner
+//!      reads it is supposed to, and both reads are session-scoped.
 //!   2. No source file outside `events/store.rs` mentions the `events`
-//!      table in SQL, and that one file's read is provably scoped by
-//!      the caller's own `user_id` rather than a bare, unscoped
+//!      table in SQL, and that one file's reads are provably scoped
+//!      by the caller's own `user_id` rather than a bare, unscoped
 //!      `SELECT`.
 //!   3. The responses an admin and an owner actually receive from
 //!      *other* routes have exactly the fields they are supposed to,
 //!      and no more.
-//!   4. The owner's route returns only the caller's own events, inside
-//!      the requested window, to a session - and nothing at all to an
-//!      anonymous caller or a device's bearer token.
+//!   4. The owner's own-events route returns only the caller's own
+//!      events, inside the requested window, to a session - and
+//!      nothing at all to an anonymous caller or a device's bearer
+//!      token.
 //!
 //! # A note for M4
 //!
@@ -37,7 +39,9 @@
 //! allowed list or the allowed verbs is a line in a diff that a
 //! reviewer sees and has to agree with. Deleting the test, or widening
 //! it to "anything under src/", is not the same thing and is not what
-//! it is for.
+//! it is for. Adding `GET /api/v1/stats` to [`STATS_ROUTES`] below, when
+//! that route shipped, is exactly the kind of deliberate, reviewed
+//! extension this note describes.
 
 mod common;
 
@@ -48,9 +52,16 @@ use axum::http::StatusCode;
 use common::{TestApp, TestRequest, GOOD_ORIGIN};
 use daycompass_server::routes::{Access, INVENTORY};
 
-/// The two routes allowed to touch events, and the direction each
-/// goes.
+/// The two routes whose own name contains "event": the write, and the
+/// owner's own raw read.
 const EVENT_ROUTES: &[(&str, &str)] = &[("POST", "/api/v1/events"), ("GET", "/api/v1/events")];
+
+/// The owner's aggregated read, kept separate from [`EVENT_ROUTES`]
+/// because its path does not contain "event" - the first assertion in
+/// [`the_inventory_has_exactly_the_write_and_the_owner_read`] filters
+/// on that substring, and folding this in would silently stop it from
+/// checking anything.
+const STATS_ROUTES: &[(&str, &str)] = &[("GET", "/api/v1/stats")];
 
 /// Files permitted to name the `events` table in SQL.
 ///
@@ -74,9 +85,9 @@ const SQL_VERBS: &[&str] = &[
     "table events",
 ];
 
-/// The inventory may contain exactly the write and the owner's own
-/// read, and the read must be session-scoped - never admin, never a
-/// device's bearer token.
+/// The inventory may contain exactly the write and the two owner
+/// reads, and both reads must be session-scoped - never admin, never
+/// a device's bearer token.
 #[test]
 fn the_inventory_has_exactly_the_write_and_the_owner_read() {
     let mut touching: Vec<(&str, &str)> = INVENTORY
@@ -93,19 +104,25 @@ fn the_inventory_has_exactly_the_write_and_the_owner_read() {
         "a route touching events appeared outside the write and the owner's own read"
     );
 
-    let read = daycompass_server::routes::spec_for("GET", "/api/v1/events")
-        .expect("the owner's read must be in the table");
-    assert_eq!(
-        read.access,
-        Access::Session,
-        "the owner's read must be session-scoped, never admin and never a device"
-    );
+    for (method, path) in EVENT_ROUTES.iter().chain(STATS_ROUTES) {
+        let spec = daycompass_server::routes::spec_for(method, path)
+            .unwrap_or_else(|| panic!("{method} {path} must be in the table"));
+        if *method == "GET" {
+            assert_eq!(
+                spec.access,
+                Access::Session,
+                "{method} {path} must be session-scoped, never admin and never a device"
+            );
+        }
+    }
 
     // And nothing may read events under another name. Any route on a
-    // path that is neither of the two above is a read by definition
-    // if it even looks like one.
+    // path that is none of the ones above is a read by definition if
+    // it even looks like one.
     for spec in INVENTORY {
-        if EVENT_ROUTES.contains(&(spec.method, spec.path)) {
+        if EVENT_ROUTES.contains(&(spec.method, spec.path))
+            || STATS_ROUTES.contains(&(spec.method, spec.path))
+        {
             continue;
         }
         assert!(

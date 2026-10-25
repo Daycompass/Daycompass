@@ -160,3 +160,69 @@ pub async fn select_own_in_range(
 
     rows.iter().map(queried_event_from_row).collect()
 }
+
+/// One (UTC calendar day, `app_id`, `domain`) group's summed
+/// `duration_secs`, for an owner's own stats aggregation - M3's
+/// second read, on the same `JOIN` as [`select_own_in_range`].
+///
+/// Grouping by `(app_id, domain)` here, in SQL, rather than handing
+/// back every row, is what keeps a wide window cheap: a year of one
+/// account's history collapses to one row per day per distinct app or
+/// site it used, not one row per event. [`crate::categories::resolve`]
+/// is what turns each group into a category, once this has already
+/// done the summing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DailyGroupTotal {
+    /// The Unix timestamp of this group's day's UTC midnight -
+    /// `(start_ts / 86_400) * 86_400`.
+    pub day_start_ts: i64,
+    pub app_id: String,
+    pub domain: Option<String>,
+    pub total_duration_secs: i64,
+}
+
+fn daily_group_total_from_row(
+    row: &sqlx::sqlite::SqliteRow,
+) -> Result<DailyGroupTotal, StoreError> {
+    Ok(DailyGroupTotal {
+        day_start_ts: row.try_get("day_start_ts")?,
+        app_id: row.try_get("app_id")?,
+        domain: row.try_get("domain")?,
+        total_duration_secs: row.try_get("total_duration_secs")?,
+    })
+}
+
+/// Sums `duration_secs` for the caller's own events inside
+/// `[start_ts, end_ts)`, grouped by UTC calendar day, `app_id` and
+/// `domain`.
+///
+/// Overlapping events are summed exactly as reported - two devices
+/// covering the same span, or one device reporting an app and a
+/// domain for the same span, are not merged or deduplicated here
+/// either, for the same reason [`select_own_in_range`] hands its rows
+/// back unmerged: deciding what an overlap means is a query-time
+/// choice this server has not made, not an oversight in this one
+/// query.
+pub async fn select_own_daily_group_totals(
+    pool: &SqlitePool,
+    user_id: &str,
+    start_ts: i64,
+    end_ts: i64,
+) -> Result<Vec<DailyGroupTotal>, StoreError> {
+    let rows = sqlx::query(
+        "SELECT (e.start_ts / 86400) * 86400 AS day_start_ts, e.app_id AS app_id,
+                e.domain AS domain, SUM(e.duration_secs) AS total_duration_secs
+         FROM events e
+         JOIN devices d ON d.id = e.device_id
+         WHERE d.user_id = ?1 AND e.start_ts >= ?2 AND e.start_ts < ?3
+         GROUP BY e.start_ts / 86400, e.app_id, e.domain
+         ORDER BY day_start_ts ASC",
+    )
+    .bind(user_id)
+    .bind(start_ts)
+    .bind(end_ts)
+    .fetch_all(pool)
+    .await?;
+
+    rows.iter().map(daily_group_total_from_row).collect()
+}
