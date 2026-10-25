@@ -33,7 +33,7 @@
     {% for rule in rules %}
     <li class="dc-list__row">
       <div class="dc-list__main">
-        <span class="dc-list__title">{{ rule.category }}</span>
+        <span class="dc-list__title"><span class="dc-swatch dc-swatch--c{{ rule.color }}" aria-hidden="true"></span>{{ rule.category }}</span>
         <span class="dc-caption">{{ rule.kind }}: {{ rule.pattern }}</span>
       </div>
       <div class="dc-list__actions">

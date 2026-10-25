@@ -12,6 +12,7 @@ use serde::Deserialize;
 
 use super::{render, render_fragment, Shell};
 use crate::auth::time::UnixTime;
+use crate::categories::palette;
 use crate::categories::service;
 use crate::categories::store::CategoryRuleRecord;
 use crate::error::{ApiError, ErrorKind};
@@ -36,6 +37,8 @@ struct RuleRow {
     kind: &'static str,
     pattern: String,
     category: String,
+    /// The category's colour slot, see `categories::palette`.
+    color: u32,
 }
 
 impl From<&CategoryRuleRecord> for RuleRow {
@@ -48,6 +51,7 @@ impl From<&CategoryRuleRecord> for RuleRow {
             },
             pattern: rule.pattern.clone(),
             category: rule.category.clone(),
+            color: palette::slot_for(&rule.category),
         }
     }
 }
