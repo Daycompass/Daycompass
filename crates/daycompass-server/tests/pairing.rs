@@ -74,6 +74,35 @@ async fn an_owner_mints_a_code_and_sees_it_once() {
         expires_at - server_time <= 600,
         "a code must not outlive ten minutes"
     );
+
+    // The same code as a pairing link, naming this server, for a QR code.
+    let uri = response.body["pairing_uri"].as_str().expect("a link");
+    assert_eq!(
+        uri,
+        format!("daycompass://pair?v=1&server=http%3A%2F%2F127.0.0.1%3A8080&code={bare}")
+    );
+}
+
+/// The code a client reads out of a scanned pairing link redeems
+/// exactly like the typed one.
+#[tokio::test]
+async fn the_code_in_a_pairing_link_pairs_a_device() {
+    let app = TestApp::new().await;
+    let (_credentials, session) = app.provisioned_admin().await;
+
+    let response = app
+        .send(
+            TestRequest::post("/api/v1/pairing-codes")
+                .origin(GOOD_ORIGIN)
+                .authenticated(&session),
+        )
+        .await;
+    assert_eq!(response.status, StatusCode::CREATED, "{:?}", response.body);
+    let uri = response.body["pairing_uri"].as_str().expect("a link");
+    let (_, code) = uri.rsplit_once("&code=").expect("a code parameter");
+
+    let device = app.redeem_pairing_code(code, "phone", "android").await;
+    assert!(!device.token.is_empty());
 }
 
 /// An ordinary user pairs their own devices; this is not an admin
