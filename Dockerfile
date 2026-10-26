@@ -1,7 +1,7 @@
 # Daycompass server: one binary, one container.
 #
 # Build:  podman build -t daycompass .     (or `docker build`)
-# Run:    see README.md, "Running in a container".
+# Run:    see docs/guide.md, "Running in a container".
 #
 # Both base images are pinned by digest, so a rebuild uses exactly the
 # same bases until Dependabot proposes newer ones (.github/dependabot.yml).
