@@ -173,9 +173,16 @@ sandboxed extension; as far as known, no supported path exists to
 sync per-app events to our own server without one. Revisit if that
 changes.
 
-Next steps, in order: decide the project's name, including a
-trademark check; add utoipa/OpenAPI with a CI drift check against a
-`wire-v1` tag; ship an Android client as the first end-to-end test.
+The name is decided: Daycompass. A search of TMview, GitHub, Docker
+Hub, crates.io and the web found no conflict. Still open, before the
+first client release: spelling variants ("Daycompas", "Day Compass")
+in DPMAregister, and the Google Play and App Store listings, which
+matter once a client is published. "Compass" is a crowded trademark
+word; if the project ever gains a commercial side, have someone with
+trademark experience look at the name.
+
+Next steps, in order: add utoipa/OpenAPI with a CI drift check against
+a `wire-v1` tag; ship an Android client as the first end-to-end test.
 
 Implement ONLY the milestone I name. Later items are context, not tasks.
 No UI, templates or later endpoints in advance. If something from a
