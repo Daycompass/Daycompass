@@ -166,7 +166,11 @@ The setup token is printed to the terminal.
 > token means for container logs, are in the
 > [operating guide](docs/guide.md). On a trusted home network without
 > TLS there is an explicit, weaker opt-out
-> (`DAYCOMPASS_INSECURE_COOKIES`), described there.
+> (`DAYCOMPASS_INSECURE_COOKIES`), described there. It only helps
+> browsers: native clients such as the Android app require HTTPS with a
+> publicly trusted certificate. For a home network without open ports,
+> see [HTTPS on a home network without open ports](docs/guide.md#https-on-a-home-network-without-open-ports)
+> and the example in [`deploy/caddy-duckdns/`](deploy/caddy-duckdns/).
 
 ## Privacy model
 
