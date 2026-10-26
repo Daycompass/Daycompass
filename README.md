@@ -1,405 +1,253 @@
+<div align="center">
+
+<img src="docs/images/logo.svg" alt="" width="96" height="96">
+
 # Daycompass
 
-Daycompass is an open-source, self-hosted screentime backend for students,
-built so schools and individuals can run their own instance instead of
-relying on a third-party service.
+**Screen time for students, on a server you own.**<br>
+Self-hosted, open source, and built so that nobody - not even the admin - can read someone else's data.
 
-This repository holds the backend only: the JSON API today and a web
-dashboard served by the same binary later. The clients (Android,
-Windows, macOS, Linux; iOS is not planned for now) live in separate
-repositories and sync to this server.
+[![CI](https://github.com/Daycompass/Daycompass/actions/workflows/ci.yml/badge.svg)](https://github.com/Daycompass/Daycompass/actions/workflows/ci.yml)
+[![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](LICENSE)
+![Rust](https://img.shields.io/badge/rust-1.95%2B-orange.svg)
+![Storage](https://img.shields.io/badge/storage-SQLite-lightgrey.svg)
+![Telemetry](https://img.shields.io/badge/telemetry-none-brightgreen.svg)
 
-## Status: early development
+[Quick start](#quick-start) · [Features](#features) · [Privacy model](#privacy-model) · [Configuration](#configuration) · [Docs](#documentation)
 
-The backend currently has configuration, SQLite storage with migrations,
-a hardened HTTP skeleton (`/healthz`), authentication (the first-admin
-setup flow, login, logout, sessions with CSRF protection, rate
-limiting), account management by invite (an admin creates a pending
-account or resets an existing one to pending, and the person redeems
-their own invite to choose a password), devices and pairing, event
-ingest, and an account reading its own events back within a time
-window. There are no category rules or dashboard yet. Expect breaking
-changes at any time.
+</div>
 
-## First start
+<br>
 
-On the very first start the database has no accounts, so there is no way
-to log in yet. The server notices this, generates a single-use **setup
-token**, and prints it to standard output:
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/images/overview-dark.png">
+    <img src="docs/images/overview-light.png" alt="The Daycompass dashboard: today's and this week's screen time, and a bar per category" width="760">
+  </picture>
+</p>
 
-```text
-Daycompass first-time setup: no admin account exists yet.
-Create one within 60 minutes by sending this token, a username and a
-password to POST http://127.0.0.1:8080/api/v1/setup
-Setup token: dcb_...
-This token is single use. It appears in this process's output, so treat
-these logs as sensitive until setup is complete.
+Daycompass is a screen time backend you run yourself. Client apps on a
+student's devices report which apps were in use and for how long; the
+server keeps it, sorts it into categories you define, and shows a
+dashboard of where the day went. There is no cloud service in the
+middle, no account with a vendor, and no data that leaves your server.
+
+> [!NOTE]
+> This repository is the **backend** only: the JSON API and the web
+> dashboard, served by one binary. The clients (Android first, then
+> Windows, macOS and Linux) live in separate repositories and sync to
+> this server. iOS is not planned.
+
+## Features
+
+- **One small binary, one container, one SQLite file.** No external
+  database, no queue, no cache to operate.
+- **Web dashboard built in.** Overview of today and the last seven days,
+  devices, category rules, account settings and admin pages. Server
+  rendered, with htmx served from the binary itself: no npm, no CDN, and
+  a strict Content-Security-Policy. Light and dark mode.
+- **Accounts by invite.** An admin creates an account; the person
+  redeems their own invite and chooses their own password. An admin never
+  sees or sets anyone's password.
+- **Device pairing.** Mint a short code, type it on the new device, done.
+  Devices have their own tokens and can be revoked at any time without
+  losing the events they already reported.
+- **Safe-to-retry sync.** Events carry a client-generated id, so a client
+  can resend a batch as often as it likes without double counting.
+- **Categories assigned at query time.** Rules map an app or a website to
+  a category and apply to everything already tracked, so changing a rule
+  never rewrites history.
+- **Per-account time zone.** A day starts and ends where the student
+  lives, including the days the clocks change.
+- **Your data, your call.** Download everything an account holds as one
+  JSON file, and optionally delete events after a number of days.
+- **Documented API.** An [OpenAPI spec](docs/openapi.json), a written
+  [wire format](docs/wire-format.md) for client authors, and a frozen v1
+  contract that CI checks against.
+
+<table>
+  <tr>
+    <td width="50%">
+      <picture>
+        <source media="(prefers-color-scheme: dark)" srcset="docs/images/categories-dark.png">
+        <img src="docs/images/categories-light.png" alt="Category rules: each rule maps an app or website to a coloured category">
+      </picture>
+    </td>
+    <td width="50%" valign="top">
+      <h3>Rules, not guesses</h3>
+      <p>Tell Daycompass once that <code>org.example.notes</code> is
+      <i>Study</i> and <code>video.example.com</code> is
+      <i>Entertainment</i>. Everything already tracked, and everything
+      that arrives later, is sorted by those rules the moment you look at
+      it.</p>
+      <p>Each category keeps one colour everywhere in the dashboard.</p>
+    </td>
+  </tr>
+</table>
+
+## How it fits together
+
+```mermaid
+flowchart LR
+    subgraph Devices["Client apps (separate repos)"]
+        A[Android]
+        W[Windows]
+        M[macOS]
+        L[Linux]
+    end
+    S["Daycompass server<br>one binary · SQLite"]
+    D["Web dashboard<br>(same binary)"]
+    A & W & M & L -- "events, over HTTPS" --> S
+    S --- D
+    P(["Student · parent · school admin"]) -- browser --> D
 ```
 
-Redeem it to create the first admin:
+## Quick start
+
+You need a container runtime (Podman or Docker). There is no prebuilt
+image yet, so build it from this repository:
 
 ```sh
-curl -X POST http://127.0.0.1:8080/api/v1/setup \
-  -H 'Content-Type: application/json' \
-  -d '{"setup_token":"<the token>","username":"<name>","password":"<password>"}'
-```
-
-Usernames are 3 to 32 characters from `a-z`, `0-9`, `_`, `.` and `-`,
-and are stored lowercase. Passwords are 12 to 128 characters with no
-composition rules.
-
-A few properties worth knowing:
-
-- **The token is printed once, to stdout, not through the log system.**
-  A log level cannot hide it and JSON log output cannot bury it.
-- **Every restart without an admin invalidates the previous token** and
-  prints a new one, so only the most recent line works.
-- **It expires after one hour** and can be redeemed only once.
-- **Once an admin exists, `POST /api/v1/setup` answers 404** for any
-  input - the same response as a route that does not exist. The setup
-  path is then dead code for the lifetime of the installation.
-
-### The setup token ends up in the container logs
-
-This is expected and accepted. Printing to stdout is what makes the
-token reachable with `docker logs` or `kubectl logs`, which is the only
-channel a fresh container reliably has. The exposure is bounded: the
-token is valid for one hour, is usable exactly once, and grants nothing
-but the creation of the first admin on an instance that has no accounts
-at all. After setup it cannot be redeemed again even if someone reads it
-later.
-
-If that trade-off is not acceptable for your deployment, complete setup
-promptly and rotate the log, or run the first start with log collection
-disabled.
-
-## Running in a container
-
-The repository's `Dockerfile` builds a small image (a distroless base,
-no shell, running as a non-root user). Both base images are pinned by
-digest.
-
-```sh
-podman build -t daycompass .        # or: docker build -t daycompass .
+git clone https://github.com/Daycompass/Daycompass.git
+cd Daycompass
+podman build -t daycompass .          # or: docker build -t daycompass .
 
 podman volume create daycompass-data
 podman run -d --name daycompass \
   -p 127.0.0.1:8080:8080 \
   -v daycompass-data:/data \
-  -e DAYCOMPASS_PUBLIC_URL=https://daycompass.example.com \
+  -e DAYCOMPASS_PUBLIC_URL=http://127.0.0.1:8080 \
   daycompass
 ```
 
-Then read the setup token from `podman logs daycompass` (see
-"First start" above).
+`DAYCOMPASS_PUBLIC_URL` is the address you open in the browser. The
+server checks the `Origin` of every state-changing request against it and refuses to start without
+it. The value above is for trying Daycompass on your own machine; for a
+real deployment set it to your HTTPS address instead, for example
+`https://daycompass.example.com`, and see the note on TLS below.
 
-- **`DAYCOMPASS_PUBLIC_URL` is required.** The image binds to
-  `0.0.0.0:8080` so the port can be published, and for any bind beyond
-  loopback the server refuses to start without knowing its public
-  origin. Set it to the URL people actually open.
-- **Keep `/data` on a volume.** It holds the SQLite database. A named
-  volume, as above, gets the right owner automatically. A bind mount
-  must be owned by uid `65532`, the image's user, or the server
-  refuses to start: `chown 65532:65532 /srv/daycompass` before the first
-  run.
-- **Configuration is environment variables only**, as everywhere else.
-  Every `DAYCOMPASS_*` variable can be passed with `-e`, or read from a
-  mounted file through its `_FILE` variant. Nothing is baked into the
-  image beyond the bind address and data directory above.
-- **Behind a reverse proxy**, publish the port to loopback only (as
-  above) and set `DAYCOMPASS_TRUSTED_PROXIES` - see "Behind a reverse
-  proxy" below.
-- **There is no `HEALTHCHECK`**: the image has no shell or `curl` to run
-  one with. Probe `GET /healthz` from your orchestrator instead.
-- The server handles `SIGTERM` itself, so `podman stop` / `docker stop`
-  shut it down cleanly.
+**First start.** A fresh instance has no accounts, so the server prints
+a single-use setup token to its output:
 
-## Authentication
+```sh
+podman logs daycompass
+```
 
-| Endpoint | Purpose |
+Open <http://127.0.0.1:8080/setup>, paste the token, and choose the first
+admin's username and password. From then on the setup page answers 404.
+The token is valid for one hour and can be used once.
+
+**Next:** open the dashboard, add an invite for each student under
+*Accounts*, create a few category rules, and pair a device from the
+*Devices* page once a client app is available.
+
+<details>
+<summary><b>Run from source instead</b></summary>
+
+<br>
+
+You need a Rust toolchain, version 1.95 or newer.
+
+```sh
+cargo run --release -p daycompass-server
+```
+
+By default it listens on `127.0.0.1:8080` and keeps its data in `./data`.
+The setup token is printed to the terminal.
+
+</details>
+
+> [!IMPORTANT]
+> The session cookie is `Secure` and uses the `__Host-` prefix, so
+> browsers only keep it over HTTPS (loopback addresses excepted). Put
+> the server **behind a TLS-terminating reverse proxy** and list that
+> proxy in `DAYCOMPASS_TRUSTED_PROXIES`. Publish the container port on
+> `127.0.0.1` only, as above. The details, including what the setup
+> token means for container logs, are in the
+> [operating guide](docs/guide.md).
+
+## Privacy model
+
+Daycompass is meant for students and for schools, so the promises are
+enforced in code and checked by tests, not left to policy.
+
+- **An admin manages accounts and devices, never data.** There is no
+  endpoint, and no parameter on any endpoint, that lets an admin read
+  another account's events or stats. A test fails if one appears.
+- **No telemetry, no outgoing requests.** The server never calls
+  anything. Nothing to opt out of.
+- **No browsing history.** Events record an app id and, for browsers, a
+  bare hostname. There is no column for a window title or a URL, and a
+  hostname field that carries a path is rejected.
+- **No secrets in storage or logs.** Passwords are hashed with Argon2id,
+  tokens are stored only as hashes, and logs name accounts by id rather
+  than by username.
+- **Security settings are environment-only.** Bind address, proxies,
+  rate limits, Argon2 cost and the public URL cannot be changed through
+  the API or the dashboard.
+- **Hardened by default.** Per-session CSRF tokens, `Origin` checks,
+  rate limits on login, pairing, invites, ingest and export, and a
+  Content-Security-Policy that allows scripts, styles and fonts from the
+  server itself and nothing else.
+
+> [!WARNING]
+> One honest limit: an admin can reset a student's password and, in
+> principle, redeem the new invite before the student does. Every reset
+> is written to the account's own log, but that does not prevent a
+> takeover. [`docs/design-decisions.md`](docs/design-decisions.md)
+> explains why the power exists and what it would take to close it.
+
+## Configuration
+
+Everything is configured through environment variables, and every
+variable also accepts a `_FILE` form that reads the value from a mounted
+secret. [`.env.example`](.env.example) lists all of them with
+explanations. The ones you are most likely to touch:
+
+| Variable | Default | What it does |
+| --- | --- | --- |
+| `DAYCOMPASS_PUBLIC_URL` | none | The origin people open, e.g. `https://daycompass.example.com`. **Required** unless the bind address is loopback. |
+| `DAYCOMPASS_BIND_ADDR` | `127.0.0.1:8080` | Address and port to listen on. The container image uses `0.0.0.0:8080`. |
+| `DAYCOMPASS_DATA_DIR` | `./data` | Where the SQLite database lives. Keep it on a volume. |
+| `DAYCOMPASS_TRUSTED_PROXIES` | empty | CIDRs of your reverse proxy, so the real client address is used for rate limits. |
+| `DAYCOMPASS_RETENTION_DAYS` | unset | Delete events older than this many days. Unset keeps events forever. |
+| `DAYCOMPASS_MAX_DEVICES_PER_USER` | `20` | Devices one account may pair. |
+| `DAYCOMPASS_INVITE_TTL_SECS` | `259200` (72 h) | How long an invite stays valid. |
+| `DAYCOMPASS_SESSION_IDLE_SECS` / `_ABSOLUTE_SECS` | 7 d / 30 d | Session lifetime, from last use and from login. |
+| `DAYCOMPASS_LOG` | `info` | `error`, `warn`, `info`, `debug` or `trace`. |
+
+## Documentation
+
+| | |
 | --- | --- |
-| `POST /api/v1/setup` | Redeem the setup token, create the first admin. 404 once one exists. |
-| `POST /api/v1/auth/login` | Sets the `__Host-dcs` session cookie, returns a CSRF token. |
-| `POST /api/v1/auth/logout` | Deletes the session server side and clears the cookie. |
-| `GET /api/v1/auth/me` | The current account, and the session's CSRF token. |
-| `POST /api/v1/auth/password` | Change your own password. |
+| [Operating guide](docs/guide.md) | First start, containers, reverse proxies, accounts, devices, the reasoning behind the non-obvious parts. |
+| [Wire format](docs/wire-format.md) | Every endpoint, request and response. The reference for client authors. |
+| [OpenAPI spec](docs/openapi.json) | Machine-readable API description. [`openapi-wire-v1.json`](docs/openapi-wire-v1.json) is the frozen v1 contract. |
+| [Design decisions](docs/design-decisions.md) | Why things are the way they are. |
+| [Security policy](SECURITY.md) | How to report a vulnerability privately. |
 
-Every state-changing request authenticated by the session cookie must
-send the CSRF token in an `X-CSRF-Token` header. The token is derived
-from the session, so a page reload or a second tab can recover it from
-`GET /api/v1/auth/me` rather than having to store it.
+## Status
 
-The session cookie is `Secure` and uses the `__Host-` prefix, which
-browsers only accept over HTTPS. **Run the server behind TLS**; over
-plain HTTP a browser will refuse to store the cookie at all. Command
-line clients are unaffected.
-
-If the server is reachable at anything other than a loopback address,
-`DAYCOMPASS_PUBLIC_URL` is required: it is what incoming `Origin`
-headers are checked against, and the server refuses to start without it.
-
-### Behind a reverse proxy
-
-`X-Forwarded-For` is ignored unless the connecting peer is listed in
-`DAYCOMPASS_TRUSTED_PROXIES` (a comma-separated list of CIDRs, empty by
-default). Set it to the addresses of your own proxies, or per-client
-rate limiting will count every request against the proxy instead.
-
-## Accounts
-
-| Endpoint | Purpose |
-| --- | --- |
-| `POST /api/v1/users` | Create a pending account: `username`, `role`. Answers with the account and an invite. Admin only. |
-| `GET /api/v1/users` | List accounts: `id`, `username`, `role`, `status`, `created_at`. Admin only. |
-| `PATCH /api/v1/users/{id}` | Change an account's `role`. Admin only. |
-| `DELETE /api/v1/users/{id}` | Delete an account and its sessions. Admin only. |
-| `POST /api/v1/users/{id}/password-reset` | Reset an account to pending, issuing a fresh invite. Admin only. |
-
-A password hash never leaves the server: the account endpoints select no
-such column in the first place.
-
-Usernames follow the same rules everywhere - trimmed, lowercased, 3 to
-32 characters of `a-z`, `0-9`, `_`, `.` and `-` - so `Alice` and `alice`
-are the same account, and creating the second one answers 409.
-
-Request bodies reject unknown fields. A stray or misspelled field is an
-error rather than something silently ignored.
-
-### Invite-based onboarding
-
-An admin never chooses, sees, or stores another account's password.
-Creating an account or resetting one's password both answer with an
-`invite: { token, expires_at }` instead - a one-time token, shown
-exactly once, that the admin hands over however accounts are normally
-communicated at that instance. The person redeems it themselves:
-
-| Endpoint | Purpose |
-| --- | --- |
-| `POST /api/v1/invites/redeem` | Redeem an invite token and set the account's first password. Public. |
-| `GET /api/v1/account/log` | Your own account's log of invites redeemed and password resets. Session. |
-
-`POST /api/v1/invites/redeem` takes `invite_token` and `new_password`
-(the full password policy applies, since this is a password being
-chosen) and answers `204 No Content` with no cookie - the account logs
-in normally afterwards through `POST /api/v1/auth/login`. An unknown,
-expired, already-used or malformed token all answer the same
-`invalid_invite_token`, same as a pending account's login fails
-exactly like a wrong password: neither tells an unauthenticated caller
-anything about which accounts exist or what state they are in.
-
-Invites expire after `DAYCOMPASS_INVITE_TTL_SECS` (72 hours by
-default - see `docs/design-decisions.md` for why).
-
-### What an admin can and cannot do
-
-An admin manages accounts. An admin **cannot** read another account's
-usage events or stats - not now that an owner can read their own back,
-and not once stats exist either.
-
-An admin *can* reset any account's password - and after doing so,
-could in principle redeem the new invite and log in as that account.
-That power is not hidden: every reset writes an entry to the account's
-own log (`GET /api/v1/account/log`), naming the acting admin and when
-it happened, and only the account holder can read their own log. See
-`docs/design-decisions.md` for why that power exists and why it is
-made visible rather than removed.
-
-Beyond a reset, there is still no endpoint for an admin to directly set
-someone else's password. `POST /api/v1/auth/password` takes no account
-parameter at all, so it can only ever change the caller's own.
-
-### The last admin
-
-The last remaining **active** admin can be neither deleted, demoted,
-nor reset; all three answer 409 `last_admin_protected`. The check and
-the write happen in one `BEGIN IMMEDIATE` transaction, so two admins
-removing each other at the same moment cannot leave the instance with
-none.
-
-A *pending* admin - one that has not yet redeemed its invite - never
-counts towards this: it cannot log in, so it is not an administrator
-anyone can currently rely on, and may be demoted or deleted freely even
-while it is the only other admin on the instance.
-
-Short of that, an admin may demote or delete **themselves**. A role is
-read from the database on every request and is never cached in a
-session, so such an admin loses administrative access on their very next
-request - no new login, and no waiting for a session to expire. The same
-is why demoting another admin takes effect immediately, and why deleting
-an account ends its sessions at once: the sessions are deleted with the
-row, so every cookie it handed out stops working.
-
-### Changing your own password
-
-`POST /api/v1/auth/password` takes `current_password` and
-`new_password`. The current password must be correct (403
-`invalid_current_password` otherwise - the session stays valid, so a
-client must not treat this as being logged out), and the new one must
-satisfy the password policy.
-
-On success, **every other session of that account is ended** and the one
-that made the request survives, so changing a password is a reliable way
-to sign other devices out without signing yourself out. The response
-says how many sessions that was.
-
-Two changes in flight at once leave exactly one in effect: the write
-applies only if the stored hash is still the one that was verified, and
-the other request is answered 409 `password_change_conflict`.
-
-The endpoint is rate limited **per session**, in front of the Argon2
-semaphore, because each attempt costs one verification plus one hash -
-the most expensive thing an authenticated caller can ask for. Every
-attempt counts, including successful ones. See
-`DAYCOMPASS_RATE_LIMIT_PW_CHANGE` in `.env.example`.
-
-Per session rather than per account on purpose: someone who has stolen
-a session cannot exhaust the budget the owner needs to lock them out.
-Logging in again yields a fresh session with its own budget, and
-changing the password there ends every other session including the
-stolen one. The cost of that choice is that the limit bounds Argon2 work
-per session rather than per account; opening more sessions means more
-budget, which the login limits bound in turn.
-
-## Devices and events
-
-A device is a client - a phone, a laptop - paired to one account. It
-authenticates with its own bearer token and reports what applications
-were in use for how long.
-
-The full request and response format is in
-[docs/wire-format.md](docs/wire-format.md), which is the reference for
-client repositories. This section is the shape of it and the reasoning
-behind the parts that are not obvious.
-
-| Endpoint | Purpose |
-| --- | --- |
-| `POST /api/v1/pairing-codes` | Mint a code for your own account. Session. |
-| `POST /api/v1/pair` | Redeem a code, receive a device token. Public. |
-| `POST /api/v1/events` | Report events. Device. |
-| `GET /api/v1/device/me` | Identity and the server's clock. Device. |
-| `GET /api/v1/events` | Your own events, within a time window. Session. |
-| `GET /api/v1/devices` | Your own devices. Session. |
-| `PATCH /api/v1/devices/{id}` | Rename your own device. Session. |
-| `POST /api/v1/devices/{id}/revoke` | Revoke your own device. Session. |
-| `GET /api/v1/admin/devices` | Every device, metadata only. Admin. |
-| `POST /api/v1/admin/devices/{id}/revoke` | Revoke any device. Admin. |
-
-### Pairing
-
-A logged-in person mints a ten-character code, reads it to the new
-device, and the device redeems it for a token. The code is single use,
-expires after ten minutes, and only its hash is stored. At most five
-live codes and twenty live devices per account; both are configurable.
-
-The code is short because somebody types it on a phone, which is a real
-trade-off and the reason the ten-minute expiry is not negotiable: a
-leaked hash is only worth cracking while the code is still redeemable.
-Ambiguous characters are left out of the alphabet, so `I`, `L`, `O` and
-`U` are never generated and the first three are folded onto the digits
-they are mistaken for.
-
-An unknown, expired, used and malformed code all produce the same
-answer. Hitting the device cap is reported differently, which is safe
-because it takes a valid code to get there - and that case leaves the
-code **unspent**, so revoking an old device and retrying the same code
-works.
-
-### Two kinds of caller
-
-The dashboard authenticates with a cookie; a device authenticates with
-`Authorization: Bearer`. They are not interchangeable, and the server
-refuses requests that are confused about which they are: a device route
-rejects any request carrying the session cookie, and a session route
-rejects any bearer credential.
-
-`POST /api/v1/pair`, `POST /api/v1/events` and `GET /api/v1/device/me`
-are exempt from the `Origin` check, because native clients send no
-`Origin` header. That is only safe because none of them has ambient
-cookie authority in either direction - they do not authenticate by
-cookie and they do not hand one out. The exemption is a named property
-of each route's entry in the route inventory rather than a per-route
-flag, and the inventory refuses to let it be attached to anything else.
-Login, in particular, cannot have it.
-
-### Reporting events
-
-A batch of up to 500 events, in a body of up to 512 KiB. Each event
-carries a client-generated id, and deduplication is per event on
-`(device, id)` - so **resending is always safe**, and a client never has
-to track what it has already delivered.
-
-The response is `200` with one result per event: accepted, duplicate, or
-rejected with a machine-readable reason. Only a malformed request fails
-as a whole. A client that could not get rid of one bad event would
-otherwise retry the same batch forever.
-
-Events carry no category. Categories are assigned at query time from
-rules, so recategorising does not rewrite history.
-
-Events record an application id, an optional label, and an optional
-**bare hostname** for browser activity. There is no column for a window
-title or a URL, and the hostname field rejects anything carrying a
-scheme, port, path or query - a screen time tool does not need a
-browsing history, so it does not store one.
-
-Overlapping events are kept as reported. One device reporting a
-foreground application and a browser domain at once is normal, as is
-two devices covering the same span; deciding what an overlap means is a
-query-time question.
-
-### Reading your own events back
-
-`GET /api/v1/events?start_ts=...&end_ts=...` returns the caller's own
-events across every device they own, inside that half-open window.
-Both parameters are required and bounded - a window wider than the
-server allows, or with the end not strictly after the start, is
-refused rather than silently clamped. A response wider than the
-server's row cap says so in a `truncated` flag instead of a cursor: a
-client that hits it narrows its own window and asks again, the same
-way an oversized batch is split on the way in.
-
-This is the first and, for now, only read path. There is still no
-category on an event and no stats endpoint - both are later work built
-on top of this read, not part of it.
-
-### Revoking
-
-Revoking keeps the device row and every event it reported - it is not a
-delete. The token stops working on the device's very next request,
-because the row is re-read every time and nothing is cached. Revoking
-twice is not an error.
-
-A revoked device is indistinguishable from an unknown one in the
-response, so neither can be used to probe the other.
-
-### What an admin can and cannot see here
-
-An admin can list every device on the instance and revoke any of them,
-and sees metadata only: id, owner, name, platform, and the three
-timestamps.
-
-An admin has **no way to read anyone's events** - not even their own
-account's, through this endpoint. There is no admin variant of
-`GET /api/v1/events` and no id parameter on it that could point it at
-another account; it always answers for the session that called it,
-whoever that is. That is checked rather than remembered: a test fails
-if a route touching events appears in the inventory outside the one
-write and the one owner-scoped read, if any file outside the events
-store queries the table without scoping by the caller's own user id,
-or if either device view grows a field.
-
-## Design decisions
-
-[docs/design-decisions.md](docs/design-decisions.md) records the
-reasoning behind a few choices that are not obvious from the code
-alone - starting with why an admin can reset a password but never
-choose one, and why that is made visible rather than removed.
-
-## License
-
-AGPL-3.0-only. See [LICENSE](LICENSE).
+The backend is feature-complete for a first set of clients: accounts,
+pairing, ingest, categories, stats, export, retention and the dashboard
+all work and are covered by tests. It has not had a stable release yet,
+so expect breaking changes until a client has shipped against it. The
+first client will be Android.
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md), in particular the rules on
-secrets and test data before opening a pull request.
+Issues and pull requests are welcome; please open an issue before a
+large change. Read [CONTRIBUTING.md](CONTRIBUTING.md) first, in
+particular the rules about secrets and test data. To build and test:
+
+```sh
+cargo fmt --check
+cargo clippy --all-targets --locked -- -D warnings
+cargo test --locked
+cargo deny check
+```
+
+## License
+
+[AGPL-3.0-only](LICENSE). If you run a modified Daycompass as a network
+service, you must offer its users the source of your changes.
