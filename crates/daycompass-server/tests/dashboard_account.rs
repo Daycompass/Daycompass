@@ -130,6 +130,11 @@ async fn a_pairing_code_from_the_page_pairs_a_device() {
     let end = start + response.text[start..].find('<').unwrap();
     let code = response.text[start..end].to_owned();
 
+    // The same code as a QR code, drawn inline: the CSP allows no
+    // `data:` image and no image route holds the code.
+    assert!(response.text.contains(r#"<svg class="dc-qr""#));
+    assert!(!response.text.contains("<img"));
+
     let device = app.redeem_pairing_code(&code, "tablet", "android").await;
     assert!(!device.token.is_empty());
     assert!(page(&app, "/devices", &admin).await.text.contains("tablet"));

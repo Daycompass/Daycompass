@@ -1,5 +1,6 @@
 //! `GET /devices` and its writes: the caller's own devices, renaming and
-//! revoking one, and creating a pairing code.
+//! revoking one, and creating a pairing code (shown as text and as a
+//! QR code).
 //!
 //! Every write answers with the re-rendered device list (or, for a new
 //! pairing code, the code itself), which htmx swaps into the page. The
@@ -13,10 +14,10 @@ use axum::response::{IntoResponse, Response};
 use axum::Form;
 use serde::Deserialize;
 
-use super::{format_utc, render, render_fragment, Shell};
+use super::{format_utc, qr, render, render_fragment, Shell};
 use crate::auth::time::UnixTime;
-use crate::devices::service;
 use crate::devices::store::{DeviceRecord, Scope};
+use crate::devices::{link, service};
 use crate::error::{ApiError, ErrorKind};
 use crate::routes::{devices, pairing, SessionContext};
 use crate::state::AppState;
@@ -58,11 +59,15 @@ impl From<&DeviceRecord> for DeviceRow {
     }
 }
 
-/// A freshly created pairing code, shown once.
+/// A freshly created pairing code, shown once: typed, or scanned as a
+/// QR code holding the pairing link.
 #[derive(Template)]
 #[template(path = "partials/pairing_code.html")]
 struct PairingCodeView {
     code: String,
+    /// Inline `<svg>` markup, or `None` in the impossible case that the
+    /// link does not fit a QR code; the typed code still works then.
+    qr: Option<String>,
     expires: String,
 }
 
@@ -145,10 +150,14 @@ pub async fn create_pairing_code(
         // The one place besides the JSON route that the plaintext leaves
         // the server: in this response, to the account that owns it,
         // which is `no-store` like every page.
-        Ok(created) => render_fragment(&PairingCodeView {
-            code: created.code.display().expose().to_owned(),
-            expires: format_utc(created.expires_at.as_secs()),
-        }),
+        Ok(created) => {
+            let uri = link::pairing_uri(state.public_url.as_str(), &created.code);
+            render_fragment(&PairingCodeView {
+                code: created.code.display().expose().to_owned(),
+                qr: qr::svg(uri.expose(), "QR code for pairing a device"),
+                expires: format_utc(created.expires_at.as_secs()),
+            })
+        }
         Err(err) => pairing::create_code_error(err).into_response(),
     }
 }

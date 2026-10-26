@@ -103,3 +103,7 @@ askama = { version = "~0.16", default-features = false, features = ["derive", "s
 # (absent in a minimal container image). Only the features named here:
 # no "logging", no "serde".
 jiff = { version = "~0.2", default-features = false, features = ["std", "tzdb-bundle-always"] }
+# QR codes for pairing a device from the dashboard. Nayuki's reference
+# encoder: no dependencies of its own, no rendering - the dashboard
+# draws the modules as inline SVG itself (routes::pages::qr).
+qrcodegen = { version = "~1.8" }

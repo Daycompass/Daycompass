@@ -387,4 +387,5 @@ select.dc-field__input { -webkit-appearance: none; appearance: none; cursor: poi
 .dc-tag { align-self: flex-start; font: 700 13px/18px var(--font-ui); padding: 2px var(--space-2); border-radius: var(--radius-sm); }
 .dc-tag--muted { background: var(--surface-sunken); color: var(--text-muted); }
 .dc-code { display: block; margin: var(--space-2) 0; font: 600 28px/32px var(--font-display); font-variant-numeric: tabular-nums; letter-spacing: 0.08em; overflow-wrap: anywhere; }
+.dc-qr { display: block; width: 100%; max-width: 240px; height: auto; margin: var(--space-2) 0; border-radius: var(--radius-sm); }
 .dc-side__section { padding: var(--space-4) var(--space-3) var(--space-1); }

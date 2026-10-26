@@ -581,6 +581,7 @@ Session auth, CSRF required. Mints a code for the calling account.
 ```json
 {
   "pairing_code": "4K7M9-QRT2V",
+  "pairing_uri": "daycompass://pair?v=1&server=https%3A%2F%2Fexample.com&code=4K7M9QRT2V",
   "expires_at": 1800000600,
   "server_time": 1800000000
 }
@@ -590,6 +591,42 @@ Session auth, CSRF required. Mints a code for the calling account.
 - Valid for 10 minutes, single use.
 - At most 5 live codes per account; a sixth returns `409`
   `pairing_code_limit_reached`.
+- `pairing_uri` is the same code as a [pairing link](#pairing-links-and-qr-codes),
+  the text the dashboard shows as a QR code. It is as secret as
+  `pairing_code` and shown once like it.
+
+### Pairing links and QR codes
+
+The dashboard's device page shows every new pairing code twice: as
+text to type, and as a QR code holding a pairing link. The link
+carries the server address too, so scanning it replaces typing both.
+
+```text
+daycompass://pair?v=1&server=https%3A%2F%2Fexample.com&code=4K7M9QRT2V
+```
+
+| Parameter | Meaning |
+| --- | --- |
+| `v` | Link format version. Currently `1`. **Refuse any other value**; do not guess at its fields. |
+| `server` | The server's `DAYCOMPASS_PUBLIC_URL`, percent-encoded: `http` or `https`, host, optional port, no path. Send API requests to `<server>/api/v1/…`. |
+| `code` | The pairing code in canonical form (no dash). Send it as `pairing_code` to [`POST /api/v1/pair`](#post-apiv1pair). |
+
+Every character outside RFC 3986's unreserved set is percent-encoded,
+in `server` as in any later parameter. Parse the query by name, not
+position, and ignore parameters you do not know - a later version-1
+link may add optional ones; anything a client must understand gets a
+new `v`.
+
+**A client must show the `server` host to the person and pair only
+after they confirm it.** The link comes from whoever printed the QR
+code; without that confirmation, anyone who can show a student a QR
+code can point their device at a server of their choosing. Treat a
+`server` whose scheme is `http` as a warning worth stating, not as an
+error - plain-HTTP LAN installs are supported.
+
+The link is a secret for as long as the code in it is: do not log it,
+store it, or put it in analytics or crash reports. Once paired, keep
+only `server` and the device token.
 
 <!-- route: POST /api/v1/pair -->
 ### `POST /api/v1/pair`

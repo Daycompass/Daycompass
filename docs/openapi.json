@@ -775,6 +775,10 @@
             "description": "Grouped for reading aloud: `XXXXX-XXXXX`. Shown once; the\nserver stores only a hash and cannot show it again.",
             "type": "string"
           },
+          "pairing_uri": {
+            "description": "The same code with this server's public URL, as the\n`daycompass://pair` link the dashboard shows as a QR code. Shown\nonce, like the code it contains.",
+            "type": "string"
+          },
           "server_time": {
             "description": "So a client can tell a person how long they have without\nhaving to trust its own clock against the server's.",
             "format": "int64",
@@ -783,6 +787,7 @@
         },
         "required": [
           "pairing_code",
+          "pairing_uri",
           "expires_at",
           "server_time"
         ],

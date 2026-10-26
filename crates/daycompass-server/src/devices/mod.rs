@@ -10,6 +10,7 @@
 //! | Topic | Module |
 //! | --- | --- |
 //! | Pairing code alphabet, why 50 bits is enough, input folding | [`code`] |
+//! | The pairing link a QR code carries, and why a client confirms its server | [`link`] |
 //! | The device name policy, and why it trims when `app_id` does not | [`name`] |
 //! | The closed platform set, mirrored by a CHECK constraint | [`platform`] |
 //! | Every SQL statement, and which ones take the write lock | [`store`] |
@@ -30,6 +31,7 @@
 //! than trusting the rule to be remembered.
 
 pub mod code;
+pub mod link;
 pub mod name;
 pub mod platform;
 pub mod service;

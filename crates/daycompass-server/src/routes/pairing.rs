@@ -26,6 +26,7 @@ use utoipa::ToSchema;
 
 use crate::auth::secret::SecretString;
 use crate::auth::time::UnixTime;
+use crate::devices::link;
 use crate::devices::name::DeviceNameError;
 use crate::devices::service::{self, CreateCodeError, PairError};
 use crate::error::{ApiError, ErrorKind};
@@ -37,6 +38,10 @@ struct NewCodeResponse {
     /// Grouped for reading aloud: `XXXXX-XXXXX`. Shown once; the
     /// server stores only a hash and cannot show it again.
     pairing_code: String,
+    /// The same code with this server's public URL, as the
+    /// `daycompass://pair` link the dashboard shows as a QR code. Shown
+    /// once, like the code it contains.
+    pairing_uri: String,
     expires_at: i64,
     /// So a client can tell a person how long they have without
     /// having to trust its own clock against the server's.
@@ -61,11 +66,13 @@ pub async fn create_code(State(state): State<AppState>, session: SessionContext)
     match service::create_pairing_code(&state.pool, user_id, now).await {
         Ok(created) => {
             let shown = created.code.display();
+            let uri = link::pairing_uri(state.public_url.as_str(), &created.code);
             (
                 StatusCode::CREATED,
                 Json(NewCodeResponse {
                     // The one place the plaintext leaves the server.
                     pairing_code: shown.expose().to_owned(),
+                    pairing_uri: uri.expose().to_owned(),
                     expires_at: created.expires_at.as_secs(),
                     server_time: now.as_secs(),
                 }),
