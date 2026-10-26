@@ -18,7 +18,6 @@ use axum::Form;
 use serde::Deserialize;
 
 use super::{redirect_after_post, render};
-use crate::auth::cookie;
 use crate::auth::secret::SecretString;
 use crate::routes::{auth, SessionContext};
 use crate::state::AppState;
@@ -50,7 +49,7 @@ pub async fn submit(
         Ok(outcome) => (
             [(
                 header::SET_COOKIE,
-                cookie::set(outcome.session.token.expose()),
+                state.cookie_mode.set(outcome.session.token.expose()),
             )],
             redirect_after_post(&headers, "/"),
         )
@@ -70,7 +69,7 @@ pub async fn log_out(
     }
 
     (
-        [(header::SET_COOKIE, cookie::clear())],
+        [(header::SET_COOKIE, state.cookie_mode.clear())],
         redirect_after_post(&headers, "/login"),
     )
         .into_response()

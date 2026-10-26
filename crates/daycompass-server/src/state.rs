@@ -10,6 +10,7 @@ use std::sync::Arc;
 use axum::extract::FromRef;
 use sqlx::SqlitePool;
 
+use crate::auth::cookie::CookieMode;
 use crate::auth::invite::InvitePolicy;
 use crate::auth::password::{HashError, Hasher};
 use crate::auth::session::SessionPolicy;
@@ -30,6 +31,8 @@ pub struct AppState {
     /// How long a freshly issued invite token remains redeemable.
     pub invite_policy: InvitePolicy,
     pub public_url: PublicUrl,
+    /// How the session cookie is issued and read.
+    pub cookie_mode: CookieMode,
     /// A hash of a random password that was discarded, verified against
     /// when a login names an account that does not exist, so that path
     /// costs the same as a real one. Built once at startup: doing it per
@@ -165,6 +168,7 @@ impl AppState {
                 ttl: config.invite_ttl,
             },
             public_url: config.public_url.clone(),
+            cookie_mode: config.cookie_mode,
             decoy_password_hash,
             trusted_proxies: config.trusted_proxies.clone(),
             limits: Limits::new(config),

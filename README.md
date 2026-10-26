@@ -164,7 +164,9 @@ The setup token is printed to the terminal.
 > proxy in `DAYCOMPASS_TRUSTED_PROXIES`. Publish the container port on
 > `127.0.0.1` only, as above. The details, including what the setup
 > token means for container logs, are in the
-> [operating guide](docs/guide.md).
+> [operating guide](docs/guide.md). On a trusted home network without
+> TLS there is an explicit, weaker opt-out
+> (`DAYCOMPASS_INSECURE_COOKIES`), described there.
 
 ## Privacy model
 

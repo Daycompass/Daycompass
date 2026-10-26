@@ -20,7 +20,6 @@ use axum::Json;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
-use crate::auth::cookie;
 use crate::auth::login::{self, LoginError, LoginOutcome};
 use crate::auth::password::{HashError, PasswordPolicyError};
 use crate::auth::secret::SecretString;
@@ -75,7 +74,7 @@ pub async fn log_in(State(state): State<AppState>, Json(request): Json<LoginRequ
                 StatusCode::OK,
                 [(
                     header::SET_COOKIE,
-                    cookie::set(outcome.session.token.expose()),
+                    state.cookie_mode.set(outcome.session.token.expose()),
                 )],
                 Json(body),
             )
@@ -183,7 +182,7 @@ pub async fn log_out(State(state): State<AppState>, session_context: SessionCont
     // the client from sending a token that can no longer work.
     (
         StatusCode::NO_CONTENT,
-        [(header::SET_COOKIE, cookie::clear())],
+        [(header::SET_COOKIE, state.cookie_mode.clear())],
     )
         .into_response()
 }

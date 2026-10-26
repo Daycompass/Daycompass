@@ -118,6 +118,21 @@ browsers only accept over HTTPS. **Run the server behind TLS**; over
 plain HTTP a browser will refuse to store the cookie at all. Command
 line clients are unaffected.
 
+#### Plain HTTP on a home network
+
+If the server is only reachable on a trusted LAN (for example a
+Raspberry Pi at `http://192.0.2.10:8080`) and you cannot or do not want
+to set up TLS, set `DAYCOMPASS_INSECURE_COOKIES=true` together with an
+`http://` `DAYCOMPASS_PUBLIC_URL`. The session cookie is then named
+`dcs` and loses `Secure` and the `__Host-` prefix, so browsers keep it
+over HTTP. It stays `HttpOnly` and `SameSite=Strict`.
+
+This is a real downgrade: anyone who can read the network traffic can
+take over a session, and a sibling host can shadow the cookie. The
+server refuses to start with this set and an `https://` public URL, and
+only the exact values `true` and `false` are accepted. Do not use it on
+anything reachable from the internet.
+
 If the server is reachable at anything other than a loopback address,
 `DAYCOMPASS_PUBLIC_URL` is required: it is what incoming `Origin`
 headers are checked against, and the server refuses to start without it.

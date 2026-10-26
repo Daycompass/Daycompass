@@ -186,7 +186,10 @@ target. Unknown fields are ignored (see [Conventions](#conventions)).
 
 Sets `Set-Cookie: __Host-dcs=…; Path=/; HttpOnly; Secure; SameSite=Strict`
 — no `Max-Age`: the server decides when a session ends, not the
-client's clock. Keep `csrf_token` in memory and send it back as
+client's clock. With the operator opt-in `DAYCOMPASS_INSECURE_COOKIES=true`
+(plain-HTTP LAN installs) the cookie is `dcs=…; Path=/; HttpOnly;
+SameSite=Strict` instead; a client should just keep whatever
+`Set-Cookie` it receives. Keep `csrf_token` in memory and send it back as
 `X-CSRF-Token` on every write this session makes.
 
 **Failures:**

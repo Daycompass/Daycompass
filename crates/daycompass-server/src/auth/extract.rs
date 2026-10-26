@@ -21,9 +21,10 @@ use axum::http::header;
 use axum::http::request::Parts;
 use axum::response::{IntoResponse, Response};
 
+use super::cookie::CookieMode;
 use super::store::{SessionRecord, UserRecord};
 use super::time::UnixTime;
-use super::{cookie, csrf, origin, session};
+use super::{csrf, origin, session};
 use crate::error::{ApiError, ErrorKind};
 use crate::state::AppState;
 
@@ -114,13 +115,13 @@ impl IntoResponse for AuthRejection {
 }
 
 /// The session token in the request's cookies, if there is one.
-fn presented_session_token(parts: &Parts) -> Option<&str> {
+fn presented_session_token(parts: &Parts, mode: CookieMode) -> Option<&str> {
     let cookies = parts
         .headers
         .get_all(header::COOKIE)
         .iter()
         .filter_map(|value| value.to_str().ok());
-    cookie::read(cookies)
+    mode.read(cookies)
 }
 
 /// Checks the `X-CSRF-Token` header against the session cookie.
@@ -134,8 +135,8 @@ fn presented_session_token(parts: &Parts) -> Option<&str> {
 /// Needs only the two values the client sent, so a forged request is
 /// refused without spending a database query on it, and the outcome
 /// still says nothing about whether the session is real.
-pub fn verify_csrf(parts: &Parts) -> Result<(), AuthRejection> {
-    let token = presented_session_token(parts).ok_or(AuthRejection::Unauthenticated)?;
+pub fn verify_csrf(parts: &Parts, mode: CookieMode) -> Result<(), AuthRejection> {
+    let token = presented_session_token(parts, mode).ok_or(AuthRejection::Unauthenticated)?;
     let presented = parts
         .headers
         .get(CSRF_HEADER)
@@ -217,14 +218,14 @@ impl FromRequestParts<AppState> for AuthSession {
         parts: &mut Parts,
         state: &AppState,
     ) -> Result<Self, Self::Rejection> {
-        let token = presented_session_token(parts)
+        let token = presented_session_token(parts, state.cookie_mode)
             .ok_or(AuthRejection::Unauthenticated)?
             .to_owned();
 
         // CSRF before the database lookup, for any method that is not
         // safe - whether or not a route's entry also demands it.
         if !origin::is_safe_method(parts.method.as_str()) {
-            verify_csrf(parts)?;
+            verify_csrf(parts, state.cookie_mode)?;
         }
 
         let resolved = session::resolve(&state.pool, &token, state.session_policy, UnixTime::now())
