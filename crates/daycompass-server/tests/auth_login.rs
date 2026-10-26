@@ -88,6 +88,39 @@ async fn the_session_cookie_has_exactly_the_specified_attributes() {
     assert!(!cookie.to_ascii_lowercase().contains("expires"));
 }
 
+/// The opt-in for plain-HTTP LAN installs: no `Secure`, no `__Host-`
+/// prefix, and the cookie it sets is the one the session routes read.
+#[tokio::test]
+async fn insecure_cookies_issue_a_plain_cookie_that_authenticates() {
+    let app = TestApp::with_vars(&[("DAYCOMPASS_INSECURE_COOKIES", "true")]).await;
+    let credentials = app.provision_admin().await;
+
+    let response = app
+        .send(
+            TestRequest::post("/api/v1/auth/login")
+                .origin(GOOD_ORIGIN)
+                .json(login_body(&credentials.username, &credentials.password)),
+        )
+        .await;
+    assert_eq!(response.status, StatusCode::OK);
+
+    let cookie = response.set_cookie().expect("a Set-Cookie header");
+    let (pair, attributes) = cookie.split_once("; ").expect("attributes must follow");
+    assert!(pair.starts_with("dcs=dcs_"), "unexpected cookie: {pair}");
+    assert_eq!(attributes, "Path=/; HttpOnly; SameSite=Strict");
+
+    let me = app
+        .send(TestRequest::get("/api/v1/auth/me").cookie(pair))
+        .await;
+    assert_eq!(me.status, StatusCode::OK);
+
+    // The strict spelling is not accepted in this mode.
+    let strict = app
+        .send(TestRequest::get("/api/v1/auth/me").cookie(&format!("__Host-{pair}")))
+        .await;
+    assert_eq!(strict.status, StatusCode::UNAUTHORIZED);
+}
+
 /// The central no-enumeration property, checked at the HTTP boundary:
 /// status, headers and body shape must be identical.
 #[tokio::test]

@@ -25,12 +25,14 @@ use std::time::Duration;
 
 use ipnet::IpNet;
 
+use crate::auth::cookie::CookieMode;
 use crate::auth::password::{HashingParams, ParamsError};
 
 const VAR_BIND_ADDR: &str = "DAYCOMPASS_BIND_ADDR";
 const VAR_DATA_DIR: &str = "DAYCOMPASS_DATA_DIR";
 const VAR_LOG: &str = "DAYCOMPASS_LOG";
 const VAR_PUBLIC_URL: &str = "DAYCOMPASS_PUBLIC_URL";
+const VAR_INSECURE_COOKIES: &str = "DAYCOMPASS_INSECURE_COOKIES";
 const VAR_TRUSTED_PROXIES: &str = "DAYCOMPASS_TRUSTED_PROXIES";
 const VAR_SESSION_IDLE: &str = "DAYCOMPASS_SESSION_IDLE_SECS";
 const VAR_SESSION_ABSOLUTE: &str = "DAYCOMPASS_SESSION_ABSOLUTE_SECS";
@@ -242,6 +244,10 @@ pub struct Config {
     /// Origin this instance is reached at, checked against the `Origin`
     /// header on state-changing requests.
     pub public_url: PublicUrl,
+    /// Whether the session cookie drops `Secure` and the `__Host-`
+    /// prefix so it works over plain HTTP. Off by default; only allowed
+    /// with an `http://` public URL.
+    pub cookie_mode: CookieMode,
     /// Peers allowed to speak for a client through `X-Forwarded-For`.
     pub trusted_proxies: TrustedProxies,
     pub session_idle_timeout: Duration,
@@ -516,6 +522,22 @@ impl Config {
             }
         };
 
+        // An explicit opt-in, and only the exact word `true`: a typo must
+        // not weaken the cookie. Refused with an `https://` public URL,
+        // where it could only be a mistake.
+        let cookie_mode = match resolve(source, VAR_INSECURE_COOKIES)?
+            .as_deref()
+            .map(str::trim)
+        {
+            None | Some("false") => CookieMode::Strict,
+            Some("true") if public_url.as_str().starts_with("http://") => CookieMode::Insecure,
+            Some(_) => {
+                return Err(ConfigError::Invalid {
+                    var: VAR_INSECURE_COOKIES,
+                })
+            }
+        };
+
         // Empty by default: with no trusted range, X-Forwarded-For is
         // ignored outright and the peer address is always the client.
         let trusted_proxies = match resolve(source, VAR_TRUSTED_PROXIES)? {
@@ -662,6 +684,7 @@ impl Config {
             data_dir,
             log_level,
             public_url,
+            cookie_mode,
             trusted_proxies,
             session_idle_timeout,
             session_absolute_timeout,
@@ -693,6 +716,8 @@ impl fmt::Debug for Config {
         // Every field is listed explicitly and is currently non-sensitive.
         // Do not switch this to `#[derive(Debug)]`: that would make a
         // future sensitive field show up here by accident.
+        // `cookie_mode` is left out on purpose: the blunt test below bans
+        // the word "cookie" from this output, and a flag is no loss.
         f.debug_struct("Config")
             .field("bind_addr", &self.bind_addr)
             .field("data_dir", &self.data_dir)
@@ -1201,6 +1226,44 @@ mod tests {
                 matches!(err, ConfigError::Required { var, .. } if var == VAR_PUBLIC_URL),
                 "{bind} produced {err:?}"
             );
+        }
+    }
+
+    #[test]
+    fn cookies_are_strict_unless_explicitly_relaxed() {
+        let config = Config::load(&FakeEnv::default()).unwrap();
+        assert_eq!(config.cookie_mode, CookieMode::Strict);
+
+        let env = FakeEnv::default().with(VAR_INSECURE_COOKIES, "false");
+        assert_eq!(Config::load(&env).unwrap().cookie_mode, CookieMode::Strict);
+    }
+
+    #[test]
+    fn insecure_cookies_need_an_http_public_url() {
+        let env = FakeEnv::default()
+            .with(VAR_BIND_ADDR, "0.0.0.0:8080")
+            .with(VAR_PUBLIC_URL, "http://192.0.2.10:8080")
+            .with(VAR_INSECURE_COOKIES, "true");
+        assert_eq!(
+            Config::load(&env).unwrap().cookie_mode,
+            CookieMode::Insecure
+        );
+
+        let env = FakeEnv::default()
+            .with(VAR_BIND_ADDR, "0.0.0.0:8080")
+            .with(VAR_PUBLIC_URL, "https://daycompass.example.com")
+            .with(VAR_INSECURE_COOKIES, "true");
+        let err = Config::load(&env).expect_err("TLS and insecure cookies contradict");
+        assert!(matches!(err, ConfigError::Invalid { var } if var == VAR_INSECURE_COOKIES));
+    }
+
+    /// Anything but the exact words is an error, never a silent "off" or
+    /// a silent "on".
+    #[test]
+    fn insecure_cookies_reject_anything_but_true_or_false() {
+        for value in ["1", "yes", "TRUE", "on", ""] {
+            let env = FakeEnv::default().with(VAR_INSECURE_COOKIES, value);
+            assert!(Config::load(&env).is_err(), "{value:?} must be rejected");
         }
     }
 

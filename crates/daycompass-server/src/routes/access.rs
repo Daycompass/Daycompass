@@ -128,7 +128,7 @@ pub async fn enforce_session_access(
     }
 
     if spec.csrf {
-        if let Err(rejection) = verify_csrf(&parts) {
+        if let Err(rejection) = verify_csrf(&parts, state.cookie_mode) {
             return rejection.into_response();
         }
     }
