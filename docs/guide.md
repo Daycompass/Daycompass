@@ -222,11 +222,20 @@ Pitfalls:
 - **Away from home the server is unreachable.** The name resolves to an
   address that only exists on your LAN. Devices that leave the network
   keep their events and sync them later, once they are back on it.
-- **Outbound traffic from Caddy.** Besides Let's Encrypt and DuckDNS, the
-  module asks `8.8.8.8:53` to check the DNS record. Set its `resolver`
-  option in the `Caddyfile` if that is not acceptable. The Daycompass
-  container itself makes no outgoing connections and has none available
-  in this setup.
+- **This recipe depends on third parties; Daycompass does not.** It is
+  optional and only exists because native clients refuse anything but a
+  publicly trusted certificate. Caddy contacts DuckDNS (to publish the
+  challenge record), Let's Encrypt (to issue and renew the certificate)
+  and, by default, `8.8.8.8:53` (to check the record; set the module's
+  `resolver` option in the `Caddyfile` to change that). If DuckDNS or
+  Let's Encrypt is down when the certificate comes up for renewal,
+  HTTPS eventually stops working. None of this carries any Daycompass
+  data: the Daycompass container has no route out in this setup, and
+  events, accounts and tokens never leave your network. The only thing
+  made public is the DNS name and the certificate (see above).
+  Browsers on the LAN do not need any of this: plain HTTP with
+  `DAYCOMPASS_INSECURE_COOKIES`, or your own TLS setup, keeps working
+  with no outside services.
 
 For a quick check from the host, `curl https://example.duckdns.org/healthz`
 should succeed without `-k`. If it needs `-k`, the certificate is not the
