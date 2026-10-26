@@ -59,6 +59,7 @@ pub mod devices;
 pub mod login;
 pub mod onboarding;
 pub mod overview;
+pub mod qr;
 
 use askama::Template;
 use axum::extract::Request;
