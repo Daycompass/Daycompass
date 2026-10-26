@@ -1,0 +1,9 @@
+# Caddy with the DuckDNS DNS-01 module compiled in. Both Caddy images are
+# pinned by digest, the module by tag (v0.5.0 is commit
+# 4ec390a9330122fa1ba10686ba221be0801df6ed; Go's checksum database
+# verifies the module contents at build time). Bump all three together.
+FROM docker.io/library/caddy:2.11.7-builder@sha256:420db7c0f6927c7e8140c666628915fb4a9141282fc5c344716ebf3879fe8f9b AS build
+RUN xcaddy build --with github.com/caddy-dns/duckdns@v0.5.0
+
+FROM docker.io/library/caddy:2.11.7@sha256:04913b1da43339a40ad1ea87827d70a576ac5aa6cf674c6e24fdca675887533a
+COPY --from=build /usr/bin/caddy /usr/bin/caddy

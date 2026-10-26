@@ -1,0 +1,51 @@
+# Daycompass behind Caddy with a publicly trusted certificate on a home
+# network. See "HTTPS on a home network without open ports" in
+# docs/guide.md. Copy example.env to .env and fill in the placeholders.
+services:
+  daycompass:
+    build:
+      context: ../..
+    image: daycompass:local
+    restart: unless-stopped
+    environment:
+      DAYCOMPASS_PUBLIC_URL: ${DAYCOMPASS_PUBLIC_URL:?set it in .env}
+      DAYCOMPASS_TRUSTED_PROXIES: ${DAYCOMPASS_TRUSTED_PROXIES:?set it in .env}
+    volumes:
+      - daycompass-data:/data
+    # No `ports:`. Only caddy can reach the server, over the internal
+    # network below, which also has no route to the outside.
+    networks:
+      - backend
+
+  caddy:
+    build:
+      context: .
+      dockerfile: Dockerfile.caddy
+    image: caddy-duckdns:local
+    restart: unless-stopped
+    environment:
+      DUCKDNS_SUBDOMAIN: ${DUCKDNS_SUBDOMAIN:?set it in .env}
+      DUCKDNS_TOKEN: ${DUCKDNS_TOKEN:?set it in .env}
+    ports:
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+    depends_on:
+      - daycompass
+    networks:
+      - backend
+      - edge
+
+networks:
+  # Keep the subnet in step with DAYCOMPASS_TRUSTED_PROXIES in .env.
+  backend:
+    internal: true
+    ipam:
+      config:
+        - subnet: 172.29.0.0/24
+  edge: {}
+
+volumes:
+  daycompass-data:
+  caddy-data:

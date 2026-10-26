@@ -1,0 +1,11 @@
+# The certificate comes from Let's Encrypt via the DNS-01 challenge, so
+# Caddy only needs outbound access: no port 80, no open ports on the router.
+{$DUCKDNS_SUBDOMAIN}.duckdns.org {
+	tls {
+		dns duckdns {env.DUCKDNS_TOKEN}
+	}
+
+	# Caddy adds the client's address to X-Forwarded-For; the server reads
+	# it because the compose network is in DAYCOMPASS_TRUSTED_PROXIES.
+	reverse_proxy daycompass:8080
+}

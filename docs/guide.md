@@ -133,6 +133,12 @@ server refuses to start with this set and an `https://` public URL, and
 only the exact values `true` and `false` are accepted. Do not use it on
 anything reachable from the internet.
 
+**This only helps browsers.** Native clients, the Android app included,
+require HTTPS with a publicly trusted certificate and will fail to pair
+with a plain-HTTP server with a TLS error. To use them on a home
+network, see
+[HTTPS on a home network without open ports](#https-on-a-home-network-without-open-ports).
+
 If the server is reachable at anything other than a loopback address,
 `DAYCOMPASS_PUBLIC_URL` is required: it is what incoming `Origin`
 headers are checked against, and the server refuses to start without it.
@@ -143,6 +149,97 @@ headers are checked against, and the server refuses to start without it.
 `DAYCOMPASS_TRUSTED_PROXIES` (a comma-separated list of CIDRs, empty by
 default). Set it to the addresses of your own proxies, or per-client
 rate limiting will count every request against the proxy instead.
+
+### HTTPS on a home network without open ports
+
+Native clients such as the Android app only talk HTTPS and only trust
+publicly trusted certificates, because the device token travels on every
+request. A self-signed certificate or plain HTTP will not pair. This
+recipe gets a real certificate for a server that only lives on your LAN,
+with no open ports, no VPN and no domain of your own:
+
+- a free [DuckDNS](https://www.duckdns.org) subdomain whose A record
+  points at the server's **private LAN address**;
+- [Caddy](https://caddyserver.com) as the TLS-terminating reverse proxy,
+  which proves ownership of the name to Let's Encrypt through the DNS-01
+  challenge (DNS records only, so nothing has to be reachable from the
+  internet).
+
+The example lives in `deploy/caddy-duckdns/`: a compose file with
+`daycompass` and `caddy`, a `Dockerfile.caddy` that builds Caddy with the
+[caddy-dns/duckdns](https://github.com/caddy-dns/duckdns) module (Caddy
+images and the module are pinned by version, the images also by digest),
+the `Caddyfile`, and `example.env`. The Daycompass port is never
+published on the host; it sits on an internal network that only Caddy
+can reach.
+
+1. **Create the subdomain.** Log in at duckdns.org, add a subdomain
+   (say `example`, giving `example.duckdns.org`) and set its IP to the
+   server's LAN address, for example `192.0.2.10`. Give the server a
+   fixed address or a DHCP reservation so this stays correct.
+2. **Copy the token.** It is shown at the top of the DuckDNS page. It can
+   change every record on your DuckDNS account, so treat it like a
+   password.
+3. **Configure.**
+
+   ```sh
+   cd deploy/caddy-duckdns
+   cp example.env .env
+   $EDITOR .env      # DUCKDNS_SUBDOMAIN, DUCKDNS_TOKEN, DAYCOMPASS_PUBLIC_URL
+   chmod 600 .env
+   ```
+
+   `DAYCOMPASS_PUBLIC_URL` must be `https://example.duckdns.org`.
+   `DAYCOMPASS_TRUSTED_PROXIES` is already the compose network, and
+   `DAYCOMPASS_INSECURE_COOKIES` stays unset. The `.env` file holds the
+   token: do not commit it, and do not paste it into issues or logs.
+4. **Start.** `docker compose up -d --build` (or `podman compose`). The
+   first start builds Caddy and requests the certificate, which can take a
+   minute. Follow it with `docker compose logs -f caddy`.
+5. **Check.** From a machine on the same network, open
+   `https://example.duckdns.org/healthz`. The browser should show a valid
+   lock and the JSON `{"status":"ok"}`. Then read the setup token from
+   `docker compose logs daycompass` and continue as in "First start".
+
+Pitfalls:
+
+- **Router DNS-rebind protection.** Many routers (a FritzBox, for one)
+  drop DNS answers that point a public name at a private address, so
+  the name does not resolve on your LAN even though it is correct. Check
+  with `dig example.duckdns.org` (or `nslookup`): no answer, or
+  `NXDOMAIN`, from the router means this. Add an exception for your
+  subdomain in the router: on a FritzBox, *Home Network > Network >
+  Network Settings > Additional Settings > DNS Rebind Protection*, then
+  add `example.duckdns.org` to the host names exempt from protection.
+  Other routers call it "rebind protection" or "stop DNS rebind
+  attacks"; the same exception works there. The certificate request is
+  not affected, only lookups from your own devices.
+- **The name is public.** Let's Encrypt publishes every certificate in
+  Certificate Transparency logs, and anyone can look up the A record, so
+  `example.duckdns.org` and your LAN address `192.0.2.10` become
+  visible. A private address cannot be reached from outside, but pick a
+  subdomain that does not give away who you are.
+- **Away from home the server is unreachable.** The name resolves to an
+  address that only exists on your LAN. Devices that leave the network
+  keep their events and sync them later, once they are back on it.
+- **This recipe depends on third parties; Daycompass does not.** It is
+  optional and only exists because native clients refuse anything but a
+  publicly trusted certificate. Caddy contacts DuckDNS (to publish the
+  challenge record), Let's Encrypt (to issue and renew the certificate)
+  and, by default, `8.8.8.8:53` (to check the record; set the module's
+  `resolver` option in the `Caddyfile` to change that). If DuckDNS or
+  Let's Encrypt is down when the certificate comes up for renewal,
+  HTTPS eventually stops working. None of this carries any Daycompass
+  data: the Daycompass container has no route out in this setup, and
+  events, accounts and tokens never leave your network. The only thing
+  made public is the DNS name and the certificate (see above).
+  Browsers on the LAN do not need any of this: plain HTTP with
+  `DAYCOMPASS_INSECURE_COOKIES`, or your own TLS setup, keeps working
+  with no outside services.
+
+For a quick check from the host, `curl https://example.duckdns.org/healthz`
+should succeed without `-k`. If it needs `-k`, the certificate is not the
+Let's Encrypt one and a native client will refuse it as well.
 
 ## Accounts
 
