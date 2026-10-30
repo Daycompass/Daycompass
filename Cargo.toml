@@ -71,7 +71,7 @@ zeroize = { version = "~1.9" }
 # graph via sqlx, so this adds no second version of the crate.
 base64 = { version = "~0.23" }
 # UUID v7 identifiers (time-ordered, so they index well in SQLite).
-uuid = { version = "~1.28", features = ["v7"] }
+uuid = { version = "~1.29", features = ["v7"] }
 # 32 random bytes straight from the OS CSPRNG. Already in the graph via
 # uuid; declared directly because token generation depends on it.
 getrandom = { version = "~0.4" }
