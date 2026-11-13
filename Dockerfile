@@ -13,7 +13,7 @@
 # the compiler. CI enforces the match (scripts/check-dockerfile-toolchain.sh)
 # and builds and starts this image on every pull request. Debian trixie, the same release as the runtime image
 # below, so the binary links against the glibc it will run with.
-FROM docker.io/library/rust:1.99.0-slim-trixie@sha256:2752b332db73fdbb7dc576f06c82ed1f312005784ef913d7e04a28f5f55dc581 AS build
+FROM docker.io/library/rust:1.99.1-slim-trixie@sha256:f6c4a35d21dbb3c89d7a8d056c193e94fc09037f2b58dd858b09c39a47dd02d7 AS build
 
 WORKDIR /src
 COPY Cargo.toml Cargo.lock ./
