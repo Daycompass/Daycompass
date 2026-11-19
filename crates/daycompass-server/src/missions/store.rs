@@ -420,15 +420,16 @@ pub async fn live_task(
     row.as_ref().map(task_from_row).transpose()
 }
 
-/// The live tasks planned for `day`, in their order: by position, ties
-/// (two devices that picked the same key offline) by id.
+/// The live tasks planned for `day` (`None`: the backlog), in their
+/// order: by position, ties (two devices that picked the same key
+/// offline) by id.
 pub async fn tasks_of_day(
     conn: &mut SqliteConnection,
     user_id: &str,
-    day: &str,
+    day: Option<&str>,
 ) -> Result<Vec<Task>, StoreError> {
     let rows = sqlx::query(
-        "SELECT * FROM tasks WHERE user_id = ?1 AND day = ?2 AND deleted = 0
+        "SELECT * FROM tasks WHERE user_id = ?1 AND day IS ?2 AND deleted = 0
          ORDER BY position, id",
     )
     .bind(user_id)

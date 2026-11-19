@@ -65,18 +65,18 @@ struct TodayContent {
 }
 
 /// A filter link.
-struct Chip {
-    href: String,
-    title: String,
-    colour: Option<i64>,
-    current: bool,
+pub(super) struct Chip {
+    pub(super) href: String,
+    pub(super) title: String,
+    pub(super) colour: Option<i64>,
+    pub(super) current: bool,
 }
 
 /// A mission the add form offers.
-struct Choice {
-    id: String,
-    title: String,
-    selected: bool,
+pub(super) struct Choice {
+    pub(super) id: String,
+    pub(super) title: String,
+    pub(super) selected: bool,
 }
 
 struct TaskCard {
@@ -94,9 +94,9 @@ struct TaskCard {
 }
 
 /// The ids a move puts the task between; empty for an end.
-struct Neighbours {
-    after: String,
-    before: String,
+pub(super) struct Neighbours {
+    pub(super) after: String,
+    pub(super) before: String,
 }
 
 struct Timeline {
@@ -272,26 +272,32 @@ fn build(
 /// the list it is shown in.
 fn with_neighbours(cards: &mut [TaskCard]) {
     let ids: Vec<String> = cards.iter().map(|card| card.id.clone()).collect();
+    for (index, card) in cards.iter_mut().enumerate() {
+        (card.up, card.down) = up_and_down(&ids, index);
+    }
+}
+
+/// The moves one place up and one place down for the task at `index`
+/// of a list of task ids.
+pub(super) fn up_and_down(
+    ids: &[String],
+    index: usize,
+) -> (Option<Neighbours>, Option<Neighbours>) {
     let id_at = |index: Option<usize>| {
         index
             .and_then(|index| ids.get(index))
             .cloned()
             .unwrap_or_default()
     };
-    for (index, card) in cards.iter_mut().enumerate() {
-        if index > 0 {
-            card.up = Some(Neighbours {
-                after: id_at(index.checked_sub(2)),
-                before: ids[index - 1].clone(),
-            });
-        }
-        if index + 1 < ids.len() {
-            card.down = Some(Neighbours {
-                after: ids[index + 1].clone(),
-                before: id_at(Some(index + 2)),
-            });
-        }
-    }
+    let up = (index > 0).then(|| Neighbours {
+        after: id_at(index.checked_sub(2)),
+        before: ids[index - 1].clone(),
+    });
+    let down = (index + 1 < ids.len()).then(|| Neighbours {
+        after: ids[index + 1].clone(),
+        before: id_at(Some(index + 2)),
+    });
+    (up, down)
 }
 
 fn timeline_of(
@@ -415,7 +421,7 @@ pub async fn add(
     let saved = service::add_task(
         &state.pool,
         user_id,
-        &day.date,
+        Some(&day.date),
         form.title,
         mission,
         place,
@@ -467,6 +473,7 @@ pub async fn move_task(
         &state.pool,
         user_id,
         &form.task,
+        None,
         neighbour(&form.after).as_deref(),
         neighbour(&form.before).as_deref(),
         UnixTime::now(),
