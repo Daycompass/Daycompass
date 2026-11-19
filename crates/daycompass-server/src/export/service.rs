@@ -8,8 +8,8 @@ use futures_util::stream::{self, Stream, StreamExt};
 use sqlx::SqlitePool;
 
 use super::format::{
-    self, Account, AccountLogEntry, CategoryRule, Device, Event, Head, Mission, Review, Task,
-    TimeEntry,
+    self, Account, AccountLogEntry, CategoryRule, Device, Event, Head, Mission, Review, Settings,
+    Task, TimeEntry,
 };
 use crate::auth::account_log;
 use crate::auth::store::{StoreError, UserRecord};
@@ -17,7 +17,9 @@ use crate::auth::time::UnixTime;
 use crate::categories::service as categories;
 use crate::devices::service as devices;
 use crate::events::store::{self as events, PageKey};
+use crate::missions::screen_time;
 use crate::missions::store as missions;
+use crate::timezone;
 
 /// Events read per query.
 ///
@@ -42,7 +44,7 @@ const TAIL: &[u8] = b"],\"complete\":true}";
 #[error("the export was aborted")]
 pub struct Aborted;
 
-/// Reads `user`'s account, devices, rules, log, missions and reviews, and returns the
+/// Reads `user`'s account, settings, devices, rules, log, missions and reviews, and returns the
 /// whole document as a stream of byte chunks.
 ///
 /// Fails before anything is sent if one of the up-front reads fails,
@@ -60,6 +62,8 @@ pub async fn export_own(
     let devices = devices::list_own_devices(pool, &user.id).await?;
     let rules = categories::list_own_rules(pool, &user.id).await?;
     let log = account_log::list_all_for_user(pool, &user.id).await?;
+    let timezone = timezone::get_for_user(pool, &user.id).await?;
+    let screen_time = screen_time::settings(pool, &user.id).await?;
     // shortcut: read whole like the other small sections, not paged
     // like events; page them too if accounts reach many thousand
     // time entries.
@@ -68,6 +72,8 @@ pub async fn export_own(
     let tasks = missions::tasks_after(&mut conn, &user.id, 0, -1, true).await?;
     let entries = missions::time_entries_after(&mut conn, &user.id, 0, -1, true).await?;
     let reviews = missions::reviews_after(&mut conn, &user.id, 0, -1, true).await?;
+    let north_star = missions::north_star(&mut conn, &user.id).await?;
+    let review_day = missions::review_day(&mut conn, &user.id).await?;
     drop(conn);
 
     let head = Head {
@@ -75,6 +81,13 @@ pub async fn export_own(
         format_version: format::FORMAT_VERSION,
         exported_at: now.as_secs(),
         account: Account::from(user),
+        settings: Settings {
+            timezone: timezone.as_str().to_owned(),
+            north_star,
+            review_day,
+            screen_time_in_missions: screen_time.enabled,
+            distraction_categories: screen_time.distraction,
+        },
         devices: devices.iter().map(Device::from).collect(),
         category_rules: rules.iter().map(CategoryRule::from).collect(),
         account_log: log.iter().map(AccountLogEntry::from).collect(),

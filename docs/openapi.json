@@ -452,6 +452,9 @@
             },
             "type": "array"
           },
+          "settings": {
+            "$ref": "#/components/schemas/Settings"
+          },
           "tasks": {
             "items": {
               "$ref": "#/components/schemas/Task"
@@ -470,6 +473,7 @@
           "format_version",
           "exported_at",
           "account",
+          "settings",
           "devices",
           "category_rules",
           "account_log",
@@ -1292,6 +1296,43 @@
         },
         "required": [
           "timezone"
+        ],
+        "type": "object"
+      },
+      "Settings": {
+        "properties": {
+          "distraction_categories": {
+            "description": "The categories counted as distraction, sorted.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "north_star": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "review_day": {
+            "description": "The weekday Today asks for a review on, 1 (Monday) to 7.",
+            "format": "int32",
+            "type": "integer"
+          },
+          "screen_time_in_missions": {
+            "description": "Whether the Missions pages show screen time.",
+            "type": "boolean"
+          },
+          "timezone": {
+            "description": "An IANA name; `UTC` until one is picked.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "timezone",
+          "review_day",
+          "screen_time_in_missions",
+          "distraction_categories"
         ],
         "type": "object"
       },

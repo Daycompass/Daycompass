@@ -1504,7 +1504,8 @@ resolve that either.
 
 Session auth, no CSRF (a `GET`). Everything the caller's own account
 holds, as one JSON document meant to be saved to a file: the account,
-its devices, its category rules, its full account log, and **every**
+its settings, its devices, its category rules, its full account log,
+its missions, and **every**
 event any of its devices ever reported — no time window, no row cap.
 There is no admin variant and no id parameter — same reasoning as
 `GET /api/v1/events`. An admin calling it gets the admin's own data.
@@ -1521,13 +1522,20 @@ filename="daycompass-export.json"` and `Cache-Control: no-store`:
 ```json
 {
   "format": "daycompass-export",
-  "format_version": 3,
+  "format_version": 4,
   "exported_at": 1800000000,
   "account": {
     "id": "0190a0b2-0000-7000-8000-000000000001",
     "username": "alice",
     "role": "user",
     "created_at": 1790000000
+  },
+  "settings": {
+    "timezone": "Europe/Berlin",
+    "north_star": "Finish school with time left for music",
+    "review_day": 7,
+    "screen_time_in_missions": true,
+    "distraction_categories": ["Social", "Video"]
   },
   "devices": [
     {
@@ -1623,6 +1631,11 @@ filename="daycompass-export.json"` and `Cache-Control: no-store`:
   part of the document. `label` and `domain` are
   omitted when absent. Ordered by `start_ts`, then `device_id`, then
   `event_id`, all ascending.
+- `settings` is what the account set on the dashboard: its time zone
+  (as [`GET /api/v1/account/timezone`](#get-apiv1accounttimezone)),
+  its North Star (`null` for none), the review day (ISO weekday, 1 =
+  Monday to 7 = Sunday), whether the Missions pages show screen time,
+  and the categories it counts as distraction.
 - `missions`, `tasks`, `time_entries` and `reviews` carry the fields
   of [`POST /api/v1/missions/sync`](#post-apiv1missionssync) without
   `deleted`: deleted records are not exported.
@@ -1630,7 +1643,7 @@ filename="daycompass-export.json"` and `Cache-Control: no-store`:
   document, nor any session, invite or pairing-code data.
 - `format_version` changes whenever the document's shape does. Version
   2 added `missions`, `tasks` and `time_entries`; version 3 added
-  `reviews`.
+  `reviews`; version 4 added `settings`.
 
 **Accept an export only if it parses and ends with `"complete": true`.**
 The body is streamed: the status line is sent before the events are
