@@ -162,6 +162,35 @@ impl Fixture {
             .to_owned()
     }
 
+    /// A mission belonging to `caller`, for the `/missions/{id}/...`
+    /// page routes - owner-scoped like a category rule, so the target
+    /// has to be this caller's own for the same reason.
+    async fn disposable_mission(&self, caller: Caller) -> String {
+        let owner = match caller {
+            Caller::Admin => &self.admin,
+            Caller::Anonymous | Caller::User | Caller::Device => &self.user,
+        };
+        let title = format!(
+            "Probe {}",
+            common::random_secret()[..8].to_ascii_lowercase()
+        );
+        let response = self
+            .app
+            .send(
+                TestRequest::post("/missions/manage")
+                    .origin(GOOD_ORIGIN)
+                    .authenticated(owner)
+                    .form(&[("title", title.as_str()), ("colour", "0")]),
+            )
+            .await;
+        assert_eq!(response.status, StatusCode::OK, "{}", response.text);
+        sqlx::query_scalar("SELECT id FROM missions WHERE title = ?1")
+            .bind(&title)
+            .fetch_one(&self.app.pool)
+            .await
+            .expect("the created mission")
+    }
+
     /// Sends `spec`'s request as `caller`, with a matching `Origin` and,
     /// where there is a session, its CSRF token.
     async fn call(&self, spec: &RouteSpec, caller: Caller, target_id: &str) -> TestResponse {
@@ -230,6 +259,12 @@ impl Fixture {
                 ("current_password", self.password_of(caller)),
                 ("new_password", common::random_secret()),
             ]),
+            ("POST", "/missions/manage" | "/missions/{id}/edit") => Some(vec![
+                ("title", "Probe".to_owned()),
+                ("colour", "1".to_owned()),
+            ]),
+            ("POST", "/missions/{id}/archive") => Some(vec![("archived", "true".to_owned())]),
+            ("POST", "/missions/north-star") => Some(vec![("north_star", "Probe".to_owned())]),
             _ => None,
         }
     }
@@ -296,6 +331,8 @@ impl Fixture {
             self.disposable_device(caller).await
         } else if spec.path.contains("/category-rules/{id}") {
             self.disposable_category_rule(caller).await
+        } else if spec.path.contains("/missions/{id}") {
+            self.disposable_mission(caller).await
         } else {
             self.disposable_account().await
         }

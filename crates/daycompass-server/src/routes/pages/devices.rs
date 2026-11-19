@@ -87,7 +87,7 @@ async fn own_list(state: &AppState, session: &SessionContext) -> Result<DeviceLi
 pub async fn page(State(state): State<AppState>, session: SessionContext) -> Response {
     match own_list(&state, &session).await {
         Ok(list) => render(&DevicesPage {
-            shell: Shell::for_session(session.auth(), "devices"),
+            shell: Shell::load(&state.pool, session.auth(), "devices").await,
             list,
         }),
         Err(error) => error.into_response(),

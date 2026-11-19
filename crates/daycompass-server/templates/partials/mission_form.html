@@ -1,0 +1,40 @@
+{#- The create and the edit form; `form` holds the starting values.
+    Answers replace #missions, so a saved form leaves the page. #}
+<form class="dc-stack" method="post" action="{{ form.action }}" hx-post="{{ form.action }}" hx-target="#missions" hx-swap="outerHTML" hx-disabled-elt="find button">
+  <div class="dc-field">
+    <label class="dc-field__label" for="{{ form.prefix }}-title">Title</label>
+    <input class="dc-field__input" id="{{ form.prefix }}-title" name="title" type="text" maxlength="100" value="{{ form.title }}" placeholder="Maths A-levels" required>
+  </div>
+  <fieldset class="dc-field dc-colours">
+    <legend class="dc-field__label">Colour</legend>
+    <div class="dc-colours__options">
+      {% for colour in form.colours %}
+      <label class="dc-colours__option"><input type="radio" name="colour" value="{{ colour.slot }}"{% if colour.checked %} checked{% endif %}><span class="dc-swatch dc-swatch--c{{ colour.slot }}" aria-hidden="true"></span>{{ colour.name }}</label>
+      {% endfor %}
+    </div>
+  </fieldset>
+  <div class="dc-field">
+    <label class="dc-field__label" for="{{ form.prefix }}-goal">Weekly goal in hours</label>
+    <input class="dc-field__input dc-field__input--sm" id="{{ form.prefix }}-goal" name="weekly_goal_hours" type="number" min="0" max="168" step="any" inputmode="decimal" value="{{ form.goal_hours }}" aria-describedby="{{ form.prefix }}-goal-help">
+    <span class="dc-field__help" id="{{ form.prefix }}-goal-help">Empty for no goal.</span>
+  </div>
+  <div class="dc-field">
+    <label class="dc-field__label" for="{{ form.prefix }}-description">Description</label>
+    <textarea class="dc-field__input dc-field__input--area" id="{{ form.prefix }}-description" name="description" maxlength="2000" rows="3">{{ form.description }}</textarea>
+  </div>
+  <div class="dc-field">
+    <label class="dc-field__label" for="{{ form.prefix }}-why">Why it matters to you</label>
+    <textarea class="dc-field__input dc-field__input--area" id="{{ form.prefix }}-why" name="why" maxlength="2000" rows="3">{{ form.why }}</textarea>
+  </div>
+  <div class="dc-inline-form">
+    <div class="dc-field">
+      <label class="dc-field__label" for="{{ form.prefix }}-starts">Starts on</label>
+      <input class="dc-field__input dc-field__input--sm" id="{{ form.prefix }}-starts" name="starts_on" type="date" value="{{ form.starts_on }}">
+    </div>
+    <div class="dc-field">
+      <label class="dc-field__label" for="{{ form.prefix }}-ends">Ends on</label>
+      <input class="dc-field__input dc-field__input--sm" id="{{ form.prefix }}-ends" name="ends_on" type="date" value="{{ form.ends_on }}">
+    </div>
+  </div>
+  <div><button class="dc-btn dc-btn--primary" type="submit"><span class="dc-spin" aria-hidden="true"></span>{{ form.submit }}</button></div>
+</form>

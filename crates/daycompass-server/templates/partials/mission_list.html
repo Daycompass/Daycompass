@@ -1,0 +1,52 @@
+{% import "macros.html" as icons -%}
+{#- Swapped in whole after every create, edit or archive, the new-mission
+    form with it, so a saved form is left empty and every edit form
+    closed. #}
+<div id="missions" class="dc-stack dc-stack--lg">
+  {% if active > hint_above %}
+  <div class="dc-banner dc-banner--info">{% call icons::icon("info") %}{% endcall %}<div><b>{{ active }} active missions</b>Most people get further with three or fewer at a time. Archiving one keeps its history.</div></div>
+  {% endif %}
+  {% if missions.is_empty() %}
+  <section class="dc-card dc-empty">
+    <h2 class="dc-heading-2">No missions yet</h2>
+    <p class="dc-muted">A mission is a goal you put hours into, like a subject or a project. Add your first one below.</p>
+  </section>
+  {% else %}
+  <div class="dc-grid">
+    {% for mission in missions %}
+    <article class="dc-card dc-stack">
+      <header class="dc-mission__head">
+        <span class="dc-swatch dc-swatch--c{{ mission.colour }}" aria-hidden="true"></span>
+        <h2 class="dc-heading-3">{{ mission.title }}</h2>
+        {% if mission.archived %}<span class="dc-tag dc-tag--muted">Archived</span>{% endif %}
+      </header>
+      {% if let Some(period) = mission.period %}<span class="dc-caption">{{ period }}</span>{% endif %}
+      {% if let Some(description) = mission.description %}<p class="dc-mission__text">{{ description }}</p>{% endif %}
+      {% if let Some(why) = mission.why %}<p class="dc-mission__text dc-muted"><b>Why:</b> {{ why }}</p>{% endif %}
+      <div class="dc-bars__row">
+        <span class="dc-bars__name">This week</span>
+        <span class="dc-bars__value">{{ mission.week }}{% if mission.goal_secs > 0 %} of {{ mission.goal }}{% endif %}</span>
+        {% if mission.goal_secs > 0 %}<progress class="dc-bar dc-bar--c{{ mission.colour }}" value="{{ mission.week_secs }}" max="{{ mission.goal_secs }}" aria-label="This week: {{ mission.week }} of {{ mission.goal }}"></progress>{% endif %}
+      </div>
+      <span class="dc-caption">{{ mission.total }} in total</span>
+      <div class="dc-list__actions">
+        {% if mission.archived %}
+        <button class="dc-btn dc-btn--neutral dc-btn--sm" type="button" hx-post="/missions/{{ mission.id }}/archive" hx-vals='{"archived": "false"}' hx-target="#missions" hx-swap="outerHTML">Unarchive</button>
+        {% else %}
+        <button class="dc-btn dc-btn--neutral dc-btn--sm" type="button" hx-post="/missions/{{ mission.id }}/archive" hx-vals='{"archived": "true"}' hx-target="#missions" hx-swap="outerHTML">Archive</button>
+        {% endif %}
+      </div>
+      <details class="dc-details">
+        <summary class="dc-details__summary">Edit</summary>
+        {% let form = mission.form %}{% include "partials/mission_form.html" %}
+      </details>
+    </article>
+    {% endfor %}
+  </div>
+  <p class="dc-caption">Weeks run Monday to Sunday in {{ zone }}.</p>
+  {% endif %}
+  <section class="dc-card dc-stack">
+    <h2 class="dc-heading-3">New mission</h2>
+    {% let form = new_form %}{% include "partials/mission_form.html" %}
+  </section>
+</div>

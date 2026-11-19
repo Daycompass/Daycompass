@@ -1,4 +1,4 @@
-//! `GET /static/{name}` - the dashboard's stylesheet, fonts, script and
+//! `GET /static/{name}` - the dashboard's stylesheet, fonts, scripts and
 //! favicon, compiled into the binary.
 //!
 //! A fixed table, looked up by exact name. Nothing is read from disk at
@@ -52,6 +52,11 @@ const ASSETS: &[Asset] = &[
         HTMX,
         "text/javascript; charset=utf-8",
         "vendor/htmx-2.0.11.min.js"
+    ),
+    asset!(
+        "daycompass.js",
+        "text/javascript; charset=utf-8",
+        "daycompass.js"
     ),
     asset!(
         "Fredoka-Variable.woff2",

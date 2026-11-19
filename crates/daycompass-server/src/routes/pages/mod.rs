@@ -9,9 +9,13 @@
 //!
 //! # What the browser runs
 //!
-//! One script, `htmx`, served from this binary. The Content-Security-
-//! Policy (in [`crate::middleware`]) allows scripts, styles, fonts and
-//! images from this origin only, and no inline script or style at all.
+//! Two scripts, both served from this binary: `htmx`, and
+//! `assets/daycompass.js`, first-party vanilla JavaScript that ticks
+//! live timers and does nothing else - it reads a `data-dc-elapsed`
+//! attribute and changes text, never the DOM's structure, and makes no
+//! requests. The Content-Security-Policy (in [`crate::middleware`])
+//! allows scripts, styles, fonts and images from this origin only, and
+//! no inline script or style at all; neither script needed it changed.
 //! htmx is configured accordingly from a `<meta name="htmx-config">`
 //! tag in the layout - no `eval`, no inline indicator styles, no
 //! history snapshots (which would copy pages, CSRF token included, into
@@ -57,6 +61,7 @@ pub mod assets;
 pub mod categories;
 pub mod devices;
 pub mod login;
+pub mod missions;
 pub mod onboarding;
 pub mod overview;
 pub mod qr;
@@ -250,23 +255,77 @@ pub struct Shell {
     pub username: String,
     /// Put into `hx-headers` on `<body>`, which is how htmx sends it.
     pub csrf_token: String,
-    /// Which navigation item is the current page: `overview`, `devices`,
-    /// `categories`, `account`, `admin-accounts` or `admin-devices`.
+    /// Which navigation item is the current page: `overview`,
+    /// `missions`, `devices`, `account`, `admin-accounts` or
+    /// `admin-devices`.
     pub current: &'static str,
     /// Whether to show the admin links. Read from the account row this
     /// request resolved, like every role check; the admin routes check
     /// it again for themselves, so this decides visibility only.
     pub is_admin: bool,
+    /// The account's running timer, shown on every page.
+    pub timer: Option<TimerPill>,
+}
+
+pub struct TimerPill {
+    pub task_title: String,
+    /// A palette slot, or `None` for a task under no mission.
+    pub colour: Option<i64>,
+    /// At render time. `daycompass.js` counts on from there.
+    pub elapsed_secs: i64,
+}
+
+impl TimerPill {
+    pub fn elapsed(&self) -> String {
+        format_clock(self.elapsed_secs)
+    }
 }
 
 impl Shell {
-    pub fn for_session(auth: &crate::auth::extract::AuthSession, current: &'static str) -> Self {
+    pub async fn load(
+        pool: &sqlx::SqlitePool,
+        auth: &crate::auth::extract::AuthSession,
+        current: &'static str,
+    ) -> Self {
+        // The pill is an extra on every page, so a failed read leaves
+        // it out rather than failing the page.
+        let timer = match crate::missions::service::running_timer(pool, &auth.user.id).await {
+            Ok(timer) => timer,
+            Err(err) => {
+                tracing::error!(error = %err, "reading the running timer failed");
+                None
+            }
+        };
+        let now = crate::auth::time::UnixTime::now().as_secs();
         Self {
             username: auth.user.username.as_str().to_owned(),
             csrf_token: auth.csrf_token(),
             current,
             is_admin: auth.user.role.is_admin(),
+            timer: timer.map(|timer| TimerPill {
+                task_title: timer.task_title,
+                colour: timer.colour,
+                elapsed_secs: (now - timer.start_ts).max(0),
+            }),
         }
+    }
+}
+
+/// `1:05:09` - a running timer's elapsed time, the same format
+/// `assets/daycompass.js` ticks it in.
+pub fn format_clock(secs: i64) -> String {
+    let secs = secs.max(0);
+    format!("{}:{:02}:{:02}", secs / 3600, secs / 60 % 60, secs % 60)
+}
+
+/// `2h 14m` - a tracked duration, rounded down to the minute.
+pub fn format_duration(secs: i64) -> String {
+    let minutes = secs.max(0) / 60;
+    let (hours, minutes) = (minutes / 60, minutes % 60);
+    if hours > 0 {
+        format!("{hours}h {minutes}m")
+    } else {
+        format!("{minutes}m")
     }
 }
 
@@ -305,5 +364,13 @@ mod tests {
         assert_eq!(format_utc(951_782_400), "2000-02-29 00:00 UTC");
         assert_eq!(format_utc(1_792_946_549), "2026-10-25 16:42 UTC");
         assert_eq!(format_utc(-1), "1969-12-31 23:59 UTC");
+    }
+
+    #[test]
+    fn a_timer_reads_hours_minutes_seconds() {
+        assert_eq!(format_clock(0), "0:00:00");
+        assert_eq!(format_clock(3909), "1:05:09");
+        assert_eq!(format_clock(36 * 3600), "36:00:00");
+        assert_eq!(format_clock(-5), "0:00:00");
     }
 }

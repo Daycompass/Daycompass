@@ -358,3 +358,38 @@ running entry impossible if that logic ever misses a path.
 The sync route has its own per-device rate limit instead of sharing
 the ingest bucket, so a client that syncs missions after every edit
 cannot crowd out its own screen time reporting.
+
+## How the Missions tab writes, and why it has a script of its own
+
+The dashboard's missions pages (`/missions/manage` so far) do not write
+to the missions tables directly. A form becomes a mission record, and
+`missions::sync::apply_own` applies it under exactly the rules a
+device's push gets: the same validation, last write wins, a new rev that
+every device then pulls. An edit's `updated_at` is the server's clock,
+or the stored one if that is later, so a device clock running ahead
+within the allowed skew cannot make an edit made after it lose. If a
+device does write in the instant between the page reading a mission and
+saving it, the newer version wins as it would between two devices, and
+the page shows the winner.
+
+Weeks on the page are ISO weeks, Monday to Sunday, in the account's
+time zone. Tracked time counts entries of live tasks only, and a
+running timer counts up to now.
+
+The North Star is `users.north_star`, one line of at most 200
+characters, set from the dashboard only. It is not synced to devices
+and not in the export yet.
+
+`assets/daycompass.js` is the first script of the project's own. A
+running timer is shown in the app layout on every page, and a clock
+that stands still is wrong after a second, so something has to tick.
+It is a few lines of vanilla JavaScript served from the binary like
+htmx, so the CSP did not change: still `'self'` only, no inline script.
+It counts on from the elapsed seconds the server rendered, using only
+how much time passed on the device, so a device clock that is off does
+not show a wrong time. It changes text and nothing else; without
+JavaScript the page shows the time as of loading.
+
+Categories moved from the main navigation to a link on the account
+page, so the phone's bottom bar keeps four entries: Overview, Missions,
+Devices, Account.

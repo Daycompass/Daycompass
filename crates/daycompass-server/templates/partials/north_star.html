@@ -1,0 +1,14 @@
+{#- Swapped in whole after a save. #}
+<section id="north-star" class="dc-card dc-stack">
+  <span class="dc-overline">North Star</span>
+  {% if let Some(text) = text %}
+  <p class="dc-heading-2 dc-north-star">{{ text }}</p>
+  {% else %}
+  <p class="dc-muted">One line for what all your missions are for, kept above them as a reminder.</p>
+  {% endif %}
+  <form class="dc-inline-form" method="post" action="/missions/north-star" hx-post="/missions/north-star" hx-target="#north-star" hx-swap="outerHTML" hx-disabled-elt="find button">
+    <label class="dc-visually-hidden" for="north_star">North Star</label>
+    <input class="dc-field__input dc-field__input--sm dc-north-star__input" id="north_star" name="north_star" type="text" maxlength="200" value="{% if let Some(text) = text %}{{ text }}{% endif %}" placeholder="Finish school with time left for music">
+    <button class="dc-btn dc-btn--neutral dc-btn--sm" type="submit"><span class="dc-spin" aria-hidden="true"></span>Save</button>
+  </form>
+</section>

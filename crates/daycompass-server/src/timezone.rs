@@ -81,6 +81,22 @@ impl TimeZoneName {
             Err(_) => ts,
         }
     }
+
+    /// The local midnights that start the ISO week (Monday to Sunday)
+    /// `ts` falls in, and the week after it.
+    pub fn week_bounds(&self, ts: i64) -> (i64, i64) {
+        const DAY: i64 = 24 * 60 * 60;
+        let days_since_monday = Timestamp::from_second(ts)
+            .ok()
+            .zip(TimeZone::get(&self.0).ok())
+            .map_or(0, |(instant, zone)| {
+                i64::from(instant.to_zoned(zone).weekday().to_monday_zero_offset())
+            });
+        // Aim at noon, so a day of 23 or 25 hours in between still lands
+        // on the right one.
+        let start = self.day_start(self.day_start(ts) - days_since_monday * DAY + DAY / 2);
+        (start, self.day_start(start + 7 * DAY + DAY / 2))
+    }
 }
 
 /// Every name the bundled database knows, sorted - what a form offers
@@ -167,6 +183,24 @@ mod tests {
         let after = spring + 23 * 3600;
         assert_eq!(berlin.day_start(after + 60), after);
         assert_eq!(berlin.day_start(after - 60), spring);
+    }
+
+    #[test]
+    fn a_week_runs_from_monday_midnight_to_the_next() {
+        // 1970-01-01 was a Thursday.
+        let utc = TimeZoneName::utc();
+        assert_eq!(utc.week_bounds(0), (-3 * 86_400, 4 * 86_400));
+        assert_eq!(utc.week_bounds(4 * 86_400), (4 * 86_400, 11 * 86_400));
+
+        // The week of 2026-03-29, the spring-forward Sunday: Monday
+        // 2026-03-23 00:00 CET to Monday 2026-03-30 00:00 CEST, an hour
+        // short of seven days.
+        let berlin = TimeZoneName::parse("Europe/Berlin").unwrap();
+        let monday = 1_774_220_400;
+        let next = monday + 7 * 86_400 - 3600;
+        assert_eq!(berlin.week_bounds(monday), (monday, next));
+        assert_eq!(berlin.week_bounds(next - 1), (monday, next));
+        assert_eq!(berlin.week_bounds(next).0, next);
     }
 
     #[test]

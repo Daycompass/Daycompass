@@ -72,7 +72,8 @@ async fn own_list(state: &AppState, session: &SessionContext) -> Result<RuleList
 pub async fn page(State(state): State<AppState>, session: SessionContext) -> Response {
     match own_list(&state, &session).await {
         Ok(list) => render(&CategoriesPage {
-            shell: Shell::for_session(session.auth(), "categories"),
+            // Reached from the account page, so the navigation stays there.
+            shell: Shell::load(&state.pool, session.auth(), "account").await,
             list,
         }),
         Err(error) => error.into_response(),

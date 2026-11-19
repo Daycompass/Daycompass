@@ -93,7 +93,7 @@ pub async fn page(State(state): State<AppState>, session: SessionContext) -> Res
     };
 
     render(&AccountPage {
-        shell: Shell::for_session(auth, "account"),
+        shell: Shell::load(&state.pool, auth, "account").await,
         is_admin: auth.user.role.is_admin(),
         form: PasswordForm { changed: None },
         timezone_form,

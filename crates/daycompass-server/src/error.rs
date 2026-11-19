@@ -203,6 +203,14 @@ pub enum ErrorKind {
     /// The sync cursor is negative or ahead of anything this account
     /// has issued. The device must start over from 0.
     SyncCursorInvalid,
+
+    // Missions on the dashboard. One code per form rather than per
+    // field: the form's own constraints catch most mistakes before
+    // they are sent.
+    /// A mission form broke one of the rules in
+    /// `missions::validate::mission`.
+    MissionInvalid,
+    NorthStarInvalid,
 }
 
 impl ErrorKind {
@@ -229,7 +237,9 @@ impl ErrorKind {
             | Self::StatsRangeInverted
             | Self::StatsRangeTooWide
             | Self::TimeZoneUnknown
-            | Self::SyncCursorInvalid => StatusCode::BAD_REQUEST,
+            | Self::SyncCursorInvalid
+            | Self::MissionInvalid
+            | Self::NorthStarInvalid => StatusCode::BAD_REQUEST,
             Self::Unauthorized
             | Self::Unauthenticated
             | Self::InvalidCredentials
@@ -310,6 +320,8 @@ impl ErrorKind {
             Self::StatsRangeInverted | Self::StatsRangeTooWide => "invalid_stats_range",
             Self::TimeZoneUnknown => "invalid_timezone",
             Self::SyncCursorInvalid => "invalid_sync_cursor",
+            Self::MissionInvalid => "invalid_mission",
+            Self::NorthStarInvalid => "invalid_north_star",
         }
     }
 
@@ -400,6 +412,13 @@ impl ErrorKind {
             }
             Self::TimeZoneUnknown => "the time zone must be an IANA name such as Europe/Berlin",
             Self::SyncCursorInvalid => "the sync cursor is not valid; start over from 0",
+            Self::MissionInvalid => {
+                "a mission needs a title of up to 100 characters, texts of up to 2000, \
+                 a weekly goal of at most 168 hours, and an end date no earlier than its start"
+            }
+            Self::NorthStarInvalid => {
+                "the North Star must be one line of at most 200 characters"
+            }
         }
     }
 }
@@ -459,6 +478,8 @@ pub(crate) const ALL_ERROR_KINDS: &[ErrorKind] = &[
     ErrorKind::StatsRangeTooWide,
     ErrorKind::TimeZoneUnknown,
     ErrorKind::SyncCursorInvalid,
+    ErrorKind::MissionInvalid,
+    ErrorKind::NorthStarInvalid,
 ];
 
 /// Compile-time proof that every code and message is a constant.

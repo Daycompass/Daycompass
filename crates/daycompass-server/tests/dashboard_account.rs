@@ -343,6 +343,7 @@ async fn every_page_renders_without_inline_script_or_style() {
     for path in [
         "/",
         "/devices",
+        "/missions/manage",
         "/category-rules",
         "/account",
         "/admin/users",
@@ -352,8 +353,9 @@ async fn every_page_renders_without_inline_script_or_style() {
         assert!(!text.contains(" style="), "{path} has an inline style");
         assert!(!text.contains("<style"), "{path} has a <style>");
         let scripts: Vec<_> = text.match_indices("<script").collect();
-        assert_eq!(scripts.len(), 1, "{path}: exactly the htmx script");
+        assert_eq!(scripts.len(), 2, "{path}: exactly htmx and our own");
         assert!(text.contains(r#"<script src="/static/htmx-2.0.11.min.js" defer>"#));
+        assert!(text.contains(r#"<script src="/static/daycompass.js" defer>"#));
         assert!(
             !text.contains(" onclick=") && !text.contains(" onload="),
             "{path}"
