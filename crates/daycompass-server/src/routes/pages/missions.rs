@@ -288,7 +288,10 @@ async fn answer(
         Ok(SaveOutcome::Saved) => list_fragment(state, session).await,
         // One answer for "no such mission" and "not yours", as on the API.
         Ok(SaveOutcome::NotFound) => ApiError::of(ErrorKind::NotFound).into_response(),
-        Ok(SaveOutcome::Invalid(_)) => ApiError::of(ErrorKind::MissionInvalid).into_response(),
+        // A mission has no position, so `NoRoom` cannot happen here.
+        Ok(SaveOutcome::Invalid(_) | SaveOutcome::NoRoom) => {
+            ApiError::of(ErrorKind::MissionInvalid).into_response()
+        }
         Err(err) => internal(&err, "saving a mission").into_response(),
     }
 }

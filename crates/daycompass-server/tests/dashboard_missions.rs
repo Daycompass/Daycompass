@@ -380,18 +380,32 @@ async fn missions_are_in_the_navigation_and_categories_on_the_account_page() {
     let (_credentials, admin) = app.provisioned_admin().await;
 
     let overview = page(&app, "/", &admin).await.text;
-    assert!(overview.contains(r#"href="/missions/manage""#));
+    assert!(overview.contains(r#"href="/missions/today""#));
     assert!(!overview.contains(r#"href="/category-rules""#));
     assert!(page(&app, "/account", &admin)
         .await
         .text
         .contains(r#"href="/category-rules""#));
 
-    let missions = page(&app, "/missions/manage", &admin).await.text;
-    // The sidebar, the bottom bar and the Missions sub-navigation.
+    // The sidebar and the bottom bar lead to Today; the sub-navigation
+    // marks the page itself.
+    let manage = page(&app, "/missions/manage", &admin).await.text;
     assert_eq!(
-        missions
+        manage
+            .matches(r#"href="/missions/today" aria-current="page""#)
+            .count(),
+        2
+    );
+    assert_eq!(
+        manage
             .matches(r#"href="/missions/manage" aria-current="page""#)
+            .count(),
+        1
+    );
+    let today = page(&app, "/missions/today", &admin).await.text;
+    assert_eq!(
+        today
+            .matches(r#"href="/missions/today" aria-current="page""#)
             .count(),
         3
     );

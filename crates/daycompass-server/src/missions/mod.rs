@@ -10,6 +10,7 @@
 //! | The three record types, every per-record rule, the closed set of refusal reasons | [`validate`] |
 //! | Every SQL statement that names `missions`, `tasks` or `time_entries` | [`store`] |
 //! | Last write wins, tombstones, the running timer, the cursor | [`sync`] |
+//! | Keys that put a task between two others | [`position`] |
 //! | The dashboard's reads and writes, the North Star | [`service`] |
 //!
 //! # The sync model
@@ -34,6 +35,7 @@
 //! keyed to the device's owner, and has no id parameter that could name
 //! another account. No admin route reads these tables.
 
+pub mod position;
 pub mod service;
 pub mod store;
 pub mod sync;

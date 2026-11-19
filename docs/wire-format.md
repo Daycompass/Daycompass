@@ -1003,7 +1003,7 @@ back in `changes`.
 | `title` | 1–200 characters after trimming, one line. |
 | `notes` | Optional, up to 4000 characters. Newlines allowed. |
 | `day` | Optional `YYYY-MM-DD` in the account's time zone. `null` means the backlog. |
-| `position` | 1–64 characters of `0-9A-Za-z`: a fractional index key. Tasks of one day sort by it, bytewise. |
+| `position` | 1–64 characters of `0-9A-Za-z`: a fractional index key. Tasks of one day sort by it, bytewise. The dashboard writes keys of the `fractional-indexing` scheme (`generateKeyBetween`, base 62, first key `a0`); use the same, so either side can insert between keys the other made. |
 | `done_at` | Optional Unix seconds, at most 300 s in the future. `null` while open. |
 
 **Time entries:**

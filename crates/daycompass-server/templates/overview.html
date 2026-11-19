@@ -5,6 +5,15 @@
   <span class="dc-overline">Overview</span>
   <h1 class="dc-heading-1">Your week</h1>
 </header>
+{% if let Some(hours) = mission_hours %}
+<section class="dc-card dc-stack dc-mission-hours">
+  <h2 class="dc-stat__label">Mission hours today</h2>
+  <p class="dc-stat__value dc-stat__value--lg">{{ hours.today }}</p>
+  <p class="dc-caption">{{ hours.week }}{% if hours.goal_secs > 0 %} of {{ hours.goal }}{% endif %} this week</p>
+  {% if hours.goal_secs > 0 %}<progress class="dc-bar" value="{{ hours.week_secs }}" max="{{ hours.goal_secs }}" aria-label="This week: {{ hours.week }} of {{ hours.goal }}"></progress>{% endif %}
+  <div><a class="dc-btn dc-btn--neutral dc-btn--sm" href="/missions/today">Open Missions</a></div>
+</section>
+{% endif %}
 {% if categories.is_empty() %}
 <section class="dc-card dc-empty">
   {% include "partials/pip_sleepy.html" %}

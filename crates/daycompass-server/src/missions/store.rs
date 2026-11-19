@@ -328,25 +328,25 @@ pub async fn live_mission(
     row.as_ref().map(mission_from_row).transpose()
 }
 
-/// Tracked time per mission: inside `[week_start, week_end)` and in
-/// all. A running entry counts up to `now`. Entries of deleted tasks,
-/// and of tasks under no mission, count nowhere.
+/// Tracked time per mission: inside `[start, end)` (a day or a week)
+/// and in all. A running entry counts up to `now`. Entries of deleted
+/// tasks, and of tasks under no mission, count nowhere.
 pub struct MissionTime {
     pub mission_id: String,
-    pub week_secs: i64,
+    pub window_secs: i64,
     pub total_secs: i64,
 }
 
 pub async fn mission_times(
     conn: &mut SqliteConnection,
     user_id: &str,
-    week_start: i64,
-    week_end: i64,
+    start: i64,
+    end: i64,
     now: i64,
 ) -> Result<Vec<MissionTime>, StoreError> {
     let rows = sqlx::query(
         "SELECT t.mission_id AS mission_id,
-             SUM(MAX(0, MIN(COALESCE(e.end_ts, ?4), ?3) - MAX(e.start_ts, ?2))) AS week_secs,
+             SUM(MAX(0, MIN(COALESCE(e.end_ts, ?4), ?3) - MAX(e.start_ts, ?2))) AS window_secs,
              SUM(MAX(0, COALESCE(e.end_ts, ?4) - e.start_ts)) AS total_secs
          FROM time_entries e
          JOIN tasks t ON t.user_id = e.user_id AND t.id = e.task_id
@@ -355,8 +355,8 @@ pub async fn mission_times(
          GROUP BY t.mission_id",
     )
     .bind(user_id)
-    .bind(week_start)
-    .bind(week_end)
+    .bind(start)
+    .bind(end)
     .bind(now)
     .fetch_all(conn)
     .await?;
@@ -364,7 +364,7 @@ pub async fn mission_times(
         .map(|row| {
             Ok(MissionTime {
                 mission_id: row.try_get("mission_id")?,
-                week_secs: row.try_get("week_secs")?,
+                window_secs: row.try_get("window_secs")?,
                 total_secs: row.try_get("total_secs")?,
             })
         })
@@ -373,6 +373,7 @@ pub async fn mission_times(
 
 /// The account's running timer, with what the app layout shows of it.
 pub struct RunningTimer {
+    pub task_id: String,
     pub start_ts: i64,
     pub task_title: String,
     /// `None`: the task is under no mission, or its mission is gone.
@@ -384,7 +385,8 @@ pub async fn running_timer(
     user_id: &str,
 ) -> Result<Option<RunningTimer>, StoreError> {
     let row = sqlx::query(
-        "SELECT e.start_ts AS start_ts, t.title AS title, m.colour AS colour
+        "SELECT e.task_id AS task_id, e.start_ts AS start_ts, t.title AS title,
+             m.colour AS colour
          FROM time_entries e
          JOIN tasks t ON t.user_id = e.user_id AND t.id = e.task_id AND t.deleted = 0
          LEFT JOIN missions m
@@ -396,12 +398,130 @@ pub async fn running_timer(
     .await?;
     row.map(|row| {
         Ok(RunningTimer {
+            task_id: row.try_get("task_id")?,
             start_ts: row.try_get("start_ts")?,
             task_title: row.try_get("title")?,
             colour: row.try_get("colour")?,
         })
     })
     .transpose()
+}
+
+pub async fn live_task(
+    conn: &mut SqliteConnection,
+    user_id: &str,
+    id: &str,
+) -> Result<Option<Task>, StoreError> {
+    let row = sqlx::query("SELECT * FROM tasks WHERE user_id = ?1 AND id = ?2 AND deleted = 0")
+        .bind(user_id)
+        .bind(id)
+        .fetch_optional(conn)
+        .await?;
+    row.as_ref().map(task_from_row).transpose()
+}
+
+/// The live tasks planned for `day`, in their order: by position, ties
+/// (two devices that picked the same key offline) by id.
+pub async fn tasks_of_day(
+    conn: &mut SqliteConnection,
+    user_id: &str,
+    day: &str,
+) -> Result<Vec<Task>, StoreError> {
+    let rows = sqlx::query(
+        "SELECT * FROM tasks WHERE user_id = ?1 AND day = ?2 AND deleted = 0
+         ORDER BY position, id",
+    )
+    .bind(user_id)
+    .bind(day)
+    .fetch_all(conn)
+    .await?;
+    rows.iter().map(task_from_row).collect()
+}
+
+/// All tracked time per task planned for `day`, whenever it was
+/// tracked. A running entry counts up to `now`.
+pub async fn task_times(
+    conn: &mut SqliteConnection,
+    user_id: &str,
+    day: &str,
+    now: i64,
+) -> Result<Vec<(String, i64)>, StoreError> {
+    let rows = sqlx::query(
+        "SELECT e.task_id AS task_id, SUM(MAX(0, COALESCE(e.end_ts, ?3) - e.start_ts)) AS secs
+         FROM time_entries e
+         JOIN tasks t ON t.user_id = e.user_id AND t.id = e.task_id
+         WHERE e.user_id = ?1 AND e.deleted = 0 AND t.deleted = 0 AND t.day = ?2
+         GROUP BY e.task_id",
+    )
+    .bind(user_id)
+    .bind(day)
+    .bind(now)
+    .fetch_all(conn)
+    .await?;
+    rows.iter()
+        .map(|row| Ok((row.try_get("task_id")?, row.try_get("secs")?)))
+        .collect()
+}
+
+/// The account's running time entry, whole.
+pub async fn live_running_entry(
+    conn: &mut SqliteConnection,
+    user_id: &str,
+) -> Result<Option<TimeEntry>, StoreError> {
+    let row = sqlx::query(
+        "SELECT * FROM time_entries WHERE user_id = ?1 AND end_ts IS NULL AND deleted = 0",
+    )
+    .bind(user_id)
+    .fetch_optional(conn)
+    .await?;
+    row.as_ref().map(entry_from_row).transpose()
+}
+
+/// A time entry with what a timeline shows of it.
+pub struct TrackedEntry {
+    pub start_ts: i64,
+    /// `None` while it runs.
+    pub end_ts: Option<i64>,
+    pub task_title: String,
+    pub colour: Option<i64>,
+}
+
+/// Live entries of live tasks that overlap `[start, end)`, oldest first.
+/// A running entry reaches up to `now`.
+pub async fn entries_overlapping(
+    conn: &mut SqliteConnection,
+    user_id: &str,
+    start: i64,
+    end: i64,
+    now: i64,
+) -> Result<Vec<TrackedEntry>, StoreError> {
+    let rows = sqlx::query(
+        "SELECT e.start_ts AS start_ts, e.end_ts AS end_ts, t.title AS title,
+             m.colour AS colour
+         FROM time_entries e
+         JOIN tasks t ON t.user_id = e.user_id AND t.id = e.task_id AND t.deleted = 0
+         LEFT JOIN missions m
+             ON m.user_id = t.user_id AND m.id = t.mission_id AND m.deleted = 0
+         WHERE e.user_id = ?1 AND e.deleted = 0
+             AND e.start_ts < ?3 AND COALESCE(e.end_ts, ?4) > ?2
+         ORDER BY e.start_ts",
+    )
+    .bind(user_id)
+    .bind(start)
+    .bind(end)
+    .bind(now)
+    .fetch_all(conn)
+    .await?;
+    rows.iter()
+        .map(|row| {
+            Ok(TrackedEntry {
+                start_ts: row.try_get("start_ts")?,
+                end_ts: row.try_get("end_ts")?,
+                task_title: row.try_get("title")?,
+                colour: row.try_get("colour")?,
+            })
+        })
+        .collect()
 }
 
 pub async fn north_star(
@@ -438,23 +558,22 @@ pub async fn tasks_after(
 ) -> Result<Vec<(i64, Task)>, StoreError> {
     let rows = select_after(conn, Kind::Task, user_id, after, limit, live_only).await?;
     rows.iter()
-        .map(|row| {
-            Ok((
-                row.try_get("rev")?,
-                Task {
-                    id: row.try_get("id")?,
-                    mission_id: row.try_get("mission_id")?,
-                    title: row.try_get("title")?,
-                    notes: row.try_get("notes")?,
-                    day: row.try_get("day")?,
-                    position: row.try_get("position")?,
-                    done_at: row.try_get("done_at")?,
-                    deleted: row.try_get("deleted")?,
-                    updated_at: row.try_get("updated_at")?,
-                },
-            ))
-        })
+        .map(|row| Ok((row.try_get("rev")?, task_from_row(row)?)))
         .collect()
+}
+
+fn task_from_row(row: &SqliteRow) -> Result<Task, StoreError> {
+    Ok(Task {
+        id: row.try_get("id")?,
+        mission_id: row.try_get("mission_id")?,
+        title: row.try_get("title")?,
+        notes: row.try_get("notes")?,
+        day: row.try_get("day")?,
+        position: row.try_get("position")?,
+        done_at: row.try_get("done_at")?,
+        deleted: row.try_get("deleted")?,
+        updated_at: row.try_get("updated_at")?,
+    })
 }
 
 pub async fn time_entries_after(
@@ -466,20 +585,19 @@ pub async fn time_entries_after(
 ) -> Result<Vec<(i64, TimeEntry)>, StoreError> {
     let rows = select_after(conn, Kind::TimeEntry, user_id, after, limit, live_only).await?;
     rows.iter()
-        .map(|row| {
-            Ok((
-                row.try_get("rev")?,
-                TimeEntry {
-                    id: row.try_get("id")?,
-                    task_id: row.try_get("task_id")?,
-                    start_ts: row.try_get("start_ts")?,
-                    end_ts: row.try_get("end_ts")?,
-                    deleted: row.try_get("deleted")?,
-                    updated_at: row.try_get("updated_at")?,
-                },
-            ))
-        })
+        .map(|row| Ok((row.try_get("rev")?, entry_from_row(row)?)))
         .collect()
+}
+
+fn entry_from_row(row: &SqliteRow) -> Result<TimeEntry, StoreError> {
+    Ok(TimeEntry {
+        id: row.try_get("id")?,
+        task_id: row.try_get("task_id")?,
+        start_ts: row.try_get("start_ts")?,
+        end_ts: row.try_get("end_ts")?,
+        deleted: row.try_get("deleted")?,
+        updated_at: row.try_get("updated_at")?,
+    })
 }
 
 async fn select_after(

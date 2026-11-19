@@ -82,6 +82,32 @@ impl TimeZoneName {
         }
     }
 
+    /// The local midnight that starts the day `ts` falls in, and the
+    /// next one.
+    pub fn day_bounds(&self, ts: i64) -> (i64, i64) {
+        const DAY: i64 = 24 * 60 * 60;
+        let start = self.day_start(ts);
+        // Noon of the next day, for the same reason as in `week_bounds`.
+        (start, self.day_start(start + DAY + DAY / 2))
+    }
+
+    fn zoned(&self, ts: i64) -> Option<jiff::Zoned> {
+        let zone = TimeZone::get(&self.0).ok()?;
+        Some(Timestamp::from_second(ts).ok()?.to_zoned(zone))
+    }
+
+    /// The calendar date `ts` falls on here.
+    pub fn date(&self, ts: i64) -> Option<jiff::civil::Date> {
+        self.zoned(ts).map(|zoned| zoned.date())
+    }
+
+    /// `09:05` - the local wall-clock time of `ts`.
+    pub fn clock(&self, ts: i64) -> String {
+        self.zoned(ts)
+            .map(|zoned| zoned.strftime("%H:%M").to_string())
+            .unwrap_or_default()
+    }
+
     /// The local midnights that start the ISO week (Monday to Sunday)
     /// `ts` falls in, and the week after it.
     pub fn week_bounds(&self, ts: i64) -> (i64, i64) {
@@ -201,6 +227,22 @@ mod tests {
         assert_eq!(berlin.week_bounds(monday), (monday, next));
         assert_eq!(berlin.week_bounds(next - 1), (monday, next));
         assert_eq!(berlin.week_bounds(next).0, next);
+    }
+
+    #[test]
+    fn dates_clocks_and_day_bounds_are_local() {
+        let berlin = TimeZoneName::parse("Europe/Berlin").unwrap();
+        // 2026-03-28 23:30 UTC is already 2026-03-29 00:30 CET.
+        let ts = 1_774_740_600;
+        assert_eq!(berlin.date(ts).unwrap().to_string(), "2026-03-29");
+        assert_eq!(berlin.clock(ts), "00:30");
+        // The spring-forward day is 23 hours long.
+        let (start, end) = berlin.day_bounds(ts);
+        assert_eq!((start, end - start), (ts - 1800, 23 * 3600));
+        assert_eq!(
+            TimeZoneName::utc().day_bounds(86_400 + 5),
+            (86_400, 2 * 86_400)
+        );
     }
 
     #[test]

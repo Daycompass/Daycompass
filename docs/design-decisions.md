@@ -380,15 +380,42 @@ The North Star is `users.north_star`, one line of at most 200
 characters, set from the dashboard only. It is not synced to devices
 and not in the export yet.
 
+The Today page (`/missions/today`) works the same way. Starting a
+timer writes a new running entry, and the sync rules end whatever ran
+before, on any device - one timer per account, as for devices.
+Stopping writes the end, at least a second after the start because
+the sync rules refuse an end at the start. Marking a task done also
+stops its timer. Tasks are never moved to a new day on their own: open
+tasks left on yesterday are offered with one "Move to today" button.
+
+New positions are fractional index keys of the `fractional-indexing`
+scheme (`generateKeyBetween`, base 62), the same as the `a0` in the
+wire-format examples, so a client using one of those packages can
+insert between keys the dashboard made. The wire format still accepts
+any `0-9A-Za-z` key; a key outside the scheme is never rewritten, but
+the dashboard cannot place a task next to it and says so
+(`task_order_conflict`), as it does for two tasks with the same key -
+two devices that added a task at the same place offline.
+
+"Mission hours" count time on tasks under a live mission; the week's
+goal is the sum of the weekly goals of the missions that are not
+archived. The timeline shows tracked time only, of every task, in
+the account's time zone.
+
 `assets/daycompass.js` is the first script of the project's own. A
 running timer is shown in the app layout on every page, and a clock
 that stands still is wrong after a second, so something has to tick.
-It is a few lines of vanilla JavaScript served from the binary like
-htmx, so the CSP did not change: still `'self'` only, no inline script.
-It counts on from the elapsed seconds the server rendered, using only
-how much time passed on the device, so a device clock that is off does
-not show a wrong time. It changes text and nothing else; without
-JavaScript the page shows the time as of loading.
+It is vanilla JavaScript served from the binary like htmx, so the CSP
+did not change: still `'self'` only, no inline script. It counts on
+from the elapsed seconds the server rendered, using only how much time
+passed on the device, so a device clock that is off does not show a
+wrong time. It also grows the timeline's running block, keeps a
+`<details>` that was opened by hand open across htmx swaps, and does
+drag and drop of tasks. A drop makes no request of its own: it fills
+in a form and submits it, and htmx sends that like any other write,
+with the CSRF header. Every write it can make has a button too (up and
+down), so nothing needs a mouse, and without JavaScript the pages
+still show everything as of loading.
 
 Categories moved from the main navigation to a link on the account
 page, so the phone's bottom bar keeps four entries: Overview, Missions,

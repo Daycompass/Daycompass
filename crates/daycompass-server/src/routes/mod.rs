@@ -1172,6 +1172,86 @@ pub const INVENTORY: &[RouteSpec] = &[
         max_body_bytes: None,
         rate_limits: &[],
     },
+    // The caller's own tasks for today, and their timer. Same shape as
+    // the missions routes above: an `{id}` or a `task` field only ever
+    // names one of the caller's own tasks.
+    RouteSpec {
+        method: "GET",
+        path: "/missions/today",
+        surface: Surface::Page,
+        access: Access::Session,
+        origin: OriginRule::Checked,
+        csrf: false,
+        sets_session_cookie: false,
+        max_body_bytes: None,
+        rate_limits: &[],
+    },
+    RouteSpec {
+        method: "POST",
+        path: "/missions/today/tasks",
+        surface: Surface::Page,
+        access: Access::Session,
+        origin: OriginRule::Required,
+        csrf: true,
+        sets_session_cookie: false,
+        max_body_bytes: None,
+        rate_limits: &[],
+    },
+    RouteSpec {
+        method: "POST",
+        path: "/missions/today/carry-over",
+        surface: Surface::Page,
+        access: Access::Session,
+        origin: OriginRule::Required,
+        csrf: true,
+        sets_session_cookie: false,
+        max_body_bytes: None,
+        rate_limits: &[],
+    },
+    RouteSpec {
+        method: "POST",
+        path: "/missions/tasks/move",
+        surface: Surface::Page,
+        access: Access::Session,
+        origin: OriginRule::Required,
+        csrf: true,
+        sets_session_cookie: false,
+        max_body_bytes: None,
+        rate_limits: &[],
+    },
+    RouteSpec {
+        method: "POST",
+        path: "/missions/tasks/{id}/start",
+        surface: Surface::Page,
+        access: Access::Session,
+        origin: OriginRule::Required,
+        csrf: true,
+        sets_session_cookie: false,
+        max_body_bytes: None,
+        rate_limits: &[],
+    },
+    RouteSpec {
+        method: "POST",
+        path: "/missions/tasks/{id}/stop",
+        surface: Surface::Page,
+        access: Access::Session,
+        origin: OriginRule::Required,
+        csrf: true,
+        sets_session_cookie: false,
+        max_body_bytes: None,
+        rate_limits: &[],
+    },
+    RouteSpec {
+        method: "POST",
+        path: "/missions/tasks/{id}/done",
+        surface: Surface::Page,
+        access: Access::Session,
+        origin: OriginRule::Required,
+        csrf: true,
+        sets_session_cookie: false,
+        max_body_bytes: None,
+        rate_limits: &[],
+    },
     // The caller's own account: password change, account log, and a
     // link to `GET /api/v1/export` (not a page route of its own).
     RouteSpec {
@@ -1429,6 +1509,17 @@ pub fn router(state: AppState) -> Router {
         "/missions/north-star",
         pages::missions::set_north_star,
     );
+    table.add("GET", "/missions/today", pages::today::page);
+    table.add("POST", "/missions/today/tasks", pages::today::add);
+    table.add(
+        "POST",
+        "/missions/today/carry-over",
+        pages::today::carry_over,
+    );
+    table.add("POST", "/missions/tasks/move", pages::today::move_task);
+    table.add("POST", "/missions/tasks/{id}/start", pages::today::start);
+    table.add("POST", "/missions/tasks/{id}/stop", pages::today::stop);
+    table.add("POST", "/missions/tasks/{id}/done", pages::today::done);
     table.add("GET", "/account", pages::account::page);
     table.add("POST", "/account/password", pages::account::change_password);
     table.add("POST", "/account/timezone", pages::account::change_timezone);
