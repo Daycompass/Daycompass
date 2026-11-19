@@ -1041,8 +1041,8 @@ Ordered `start_ts, device_id, event_id` ascending. `label`, `domain`
 and `category` are all omitted when the event has none — same
 optionality as `label`/`domain` have on the way in. `category` is
 never stored on the row: it is resolved from the caller's own
-[category rules](#category-rules-session-auth) at the moment this
-route answers, so creating, editing or deleting a rule changes what
+[category rules](#category-rules-session-auth), or the server's
+built-in categories, at the moment this route answers, so creating, editing or deleting a rule changes what
 the *next* call to this route reports, never anything already
 returned.
 
@@ -1077,8 +1077,16 @@ A rule matches on exactly one of two fields, named by `kind`:
 
 When an event matches both an `app_id` rule and one or more `domain`
 rules, the `app_id` rule wins. Among domain rules, the longest (most
-specific) matching pattern wins. An event matching no rule has no
-`category` at all, not a sentinel value.
+specific) matching pattern wins.
+
+When none of the caller's own rules match, the server falls back to
+its **built-in categories**: a fixed list of well-known Android
+package names (for example `com.whatsapp` → `Communication`), matched
+exactly by `app_id`. They are not rules: they never appear in
+`GET /api/v1/category-rules` and are not stored. The caller's own
+rules always win, so an `app_id` rule on the same package overrides a
+built-in category. An event matching neither has no `category` at
+all, not a sentinel value.
 
 <!-- route: POST /api/v1/category-rules -->
 ### `POST /api/v1/category-rules`
@@ -1212,8 +1220,8 @@ GET /api/v1/stats?start_ts=1799990000&end_ts=1800000000
 ```
 
 Each entry is one (day, category) total. `category` is omitted when
-it is the total for events that matched no rule — not a sentinel
-string. **Sparse:** a day or category with nothing in it has no entry
+it is the total for events that matched no rule and no built-in
+category — not a sentinel string. **Sparse:** a day or category with nothing in it has no entry
 at all, there is no zero-filled row. Ordered `day_start_ts` ascending,
 then `category` ascending with the no-category entry last within its
 day.
@@ -1308,8 +1316,9 @@ filename="daycompass-export.json"` and `Cache-Control: no-store`:
   is complete here, oldest entry first — not capped at the newest 200.
 - `events` carry the same fields as
   [`GET /api/v1/events`](#get-apiv1events) **except `category`**:
-  events are exported exactly as reported, and the rules that assign
-  categories are exported next to them. `label` and `domain` are
+  events are exported exactly as reported, and the account's own rules
+  are exported next to them. The server's built-in categories are not
+  part of the document. `label` and `domain` are
   omitted when absent. Ordered by `start_ts`, then `device_id`, then
   `event_id`, all ascending.
 - No password, token or hash of either appears anywhere in the

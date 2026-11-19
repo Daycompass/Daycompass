@@ -455,7 +455,8 @@ client that hits it narrows its own window and asks again, the same
 way an oversized batch is split on the way in.
 
 Events still carry no category. Categories come from your own rules at
-query time, and `GET /api/v1/stats` sums a day's totals per category;
+query time, with built-in categories for well-known Android apps as a
+fallback your own rules always override, and `GET /api/v1/stats` sums a day's totals per category;
 both are documented in [wire-format.md](wire-format.md).
 
 ### Revoking

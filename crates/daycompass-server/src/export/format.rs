@@ -7,8 +7,9 @@
 //!
 //! What is never in here: password hashes, token hashes, sessions,
 //! invites, pairing codes - and no `category` on an event. Events carry
-//! none (`CLAUDE.md`); the rules are exported next to them, so a
-//! category can be derived again from the file alone.
+//! none (`CLAUDE.md`); the account's own rules are exported next to
+//! them. The built-in fallback (`categories::builtin`) is code, not
+//! account data, and is not part of the document.
 
 use serde::Serialize;
 use utoipa::ToSchema;
