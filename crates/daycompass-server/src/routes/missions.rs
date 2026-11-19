@@ -1,5 +1,5 @@
-//! `POST /api/v1/missions/sync` - a device pushes its mission, task
-//! and time-entry edits and pulls everything after its cursor.
+//! `POST /api/v1/missions/sync` - a device pushes its mission, task,
+//! time-entry and review edits and pulls everything after its cursor.
 //!
 //! `Access::Device`, like ingest: bearer token only, attached from the
 //! route inventory. The handler is a thin adapter over
@@ -21,7 +21,7 @@ use crate::auth::device::DeviceContext;
 use crate::auth::time::UnixTime;
 use crate::error::{ApiError, ErrorKind};
 use crate::missions::sync::{self, Changes, Outcome, SyncError, MAX_BATCH_RECORDS};
-use crate::missions::validate::{Mission, Task, TimeEntry};
+use crate::missions::validate::{Mission, Review, ReviewGoal, Task, TimeEntry};
 use crate::state::AppState;
 
 /// A mission, the same shape both ways.
@@ -182,6 +182,79 @@ impl From<TimeEntry> for TimeEntryRecord {
     }
 }
 
+/// A weekly review, the same shape both ways. Keyed by `week_start`:
+/// one week has one review, whichever device writes it.
+#[derive(Deserialize, Serialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ReviewRecord {
+    /// The week's Monday, `YYYY-MM-DD`, in the account's time zone.
+    week_start: String,
+    #[serde(default)]
+    went_well: Option<String>,
+    /// What went badly, and why.
+    #[serde(default)]
+    went_badly: Option<String>,
+    /// What changes next week.
+    #[serde(default)]
+    change_next: Option<String>,
+    /// The weekly goals the week is measured against, taken when the
+    /// review is first written.
+    #[serde(default)]
+    goals: Vec<ReviewGoalRecord>,
+    deleted: bool,
+    updated_at: i64,
+}
+
+#[derive(Deserialize, Serialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ReviewGoalRecord {
+    mission_id: String,
+    /// 0 means no goal.
+    weekly_goal_secs: i64,
+}
+
+impl From<ReviewRecord> for Review {
+    fn from(r: ReviewRecord) -> Self {
+        Self {
+            week_start: r.week_start,
+            went_well: r.went_well,
+            went_badly: r.went_badly,
+            change_next: r.change_next,
+            goals: r
+                .goals
+                .into_iter()
+                .map(|g| ReviewGoal {
+                    mission_id: g.mission_id,
+                    weekly_goal_secs: g.weekly_goal_secs,
+                })
+                .collect(),
+            deleted: r.deleted,
+            updated_at: r.updated_at,
+        }
+    }
+}
+
+impl From<Review> for ReviewRecord {
+    fn from(r: Review) -> Self {
+        Self {
+            week_start: r.week_start,
+            went_well: r.went_well,
+            went_badly: r.went_badly,
+            change_next: r.change_next,
+            goals: r
+                .goals
+                .into_iter()
+                .map(|g| ReviewGoalRecord {
+                    mission_id: g.mission_id,
+                    weekly_goal_secs: g.weekly_goal_secs,
+                })
+                .collect(),
+            deleted: r.deleted,
+            updated_at: r.updated_at,
+        }
+    }
+}
+
 #[derive(Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct SyncRequest {
@@ -193,6 +266,8 @@ pub struct SyncRequest {
     tasks: Vec<TaskRecord>,
     #[serde(default)]
     time_entries: Vec<TimeEntryRecord>,
+    #[serde(default)]
+    reviews: Vec<ReviewRecord>,
 }
 
 /// What one pushed record did, by its position in its array.
@@ -212,6 +287,7 @@ struct SyncResults {
     missions: Vec<RecordResult>,
     tasks: Vec<RecordResult>,
     time_entries: Vec<RecordResult>,
+    reviews: Vec<RecordResult>,
 }
 
 #[derive(Serialize, ToSchema)]
@@ -219,6 +295,7 @@ struct SyncChanges {
     missions: Vec<MissionRecord>,
     tasks: Vec<TaskRecord>,
     time_entries: Vec<TimeEntryRecord>,
+    reviews: Vec<ReviewRecord>,
 }
 
 #[derive(Serialize, ToSchema)]
@@ -263,16 +340,15 @@ pub async fn sync(
     device: DeviceContext,
     Json(request): Json<SyncRequest>,
 ) -> Response {
-    if request.missions.len() + request.tasks.len() + request.time_entries.len() > MAX_BATCH_RECORDS
-    {
-        return ApiError::of(ErrorKind::BatchTooLarge).into_response();
-    }
-
     let push = Changes {
         missions: request.missions.into_iter().map(Into::into).collect(),
         tasks: request.tasks.into_iter().map(Into::into).collect(),
         time_entries: request.time_entries.into_iter().map(Into::into).collect(),
+        reviews: request.reviews.into_iter().map(Into::into).collect(),
     };
+    if push.len() > MAX_BATCH_RECORDS {
+        return ApiError::of(ErrorKind::BatchTooLarge).into_response();
+    }
     let now = UnixTime::now();
     let user_id = &device.device().user_id;
 
@@ -284,6 +360,7 @@ pub async fn sync(
                     missions: results(&synced.report.missions),
                     tasks: results(&synced.report.tasks),
                     time_entries: results(&synced.report.time_entries),
+                    reviews: results(&synced.report.reviews),
                 },
                 changes: SyncChanges {
                     missions: synced
@@ -299,6 +376,7 @@ pub async fn sync(
                         .into_iter()
                         .map(Into::into)
                         .collect(),
+                    reviews: synced.changes.reviews.into_iter().map(Into::into).collect(),
                 },
                 cursor: synced.cursor,
                 has_more: synced.has_more,

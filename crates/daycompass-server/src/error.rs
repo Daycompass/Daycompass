@@ -221,6 +221,9 @@ pub enum ErrorKind {
     TimeEntryInvalid,
     /// The time entry still runs: it can only be stopped.
     TimeEntryRunning,
+    /// A review form broke the rules in `missions::validate::review`, or
+    /// named a week, a goal or a review day that cannot be.
+    ReviewInvalid,
 }
 
 impl ErrorKind {
@@ -251,7 +254,8 @@ impl ErrorKind {
             | Self::MissionInvalid
             | Self::NorthStarInvalid
             | Self::TaskInvalid
-            | Self::TimeEntryInvalid => StatusCode::BAD_REQUEST,
+            | Self::TimeEntryInvalid
+            | Self::ReviewInvalid => StatusCode::BAD_REQUEST,
             Self::Unauthorized
             | Self::Unauthenticated
             | Self::InvalidCredentials
@@ -340,6 +344,7 @@ impl ErrorKind {
             Self::TaskOrderConflict => "task_order_conflict",
             Self::TimeEntryInvalid => "invalid_time_entry",
             Self::TimeEntryRunning => "time_entry_running",
+            Self::ReviewInvalid => "invalid_review",
         }
     }
 
@@ -445,6 +450,9 @@ impl ErrorKind {
                 "time needs a task, a start and an end after it, neither of them in the future"
             }
             Self::TimeEntryRunning => "this time is still being tracked; stop the timer first",
+            Self::ReviewInvalid => {
+                "a review answer may have up to 2000 characters, and a weekly goal at most 168 hours"
+            }
         }
     }
 }
@@ -510,6 +518,7 @@ pub(crate) const ALL_ERROR_KINDS: &[ErrorKind] = &[
     ErrorKind::TaskOrderConflict,
     ErrorKind::TimeEntryInvalid,
     ErrorKind::TimeEntryRunning,
+    ErrorKind::ReviewInvalid,
 ];
 
 /// Compile-time proof that every code and message is a constant.

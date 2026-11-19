@@ -73,6 +73,7 @@ pub mod onboarding;
 pub mod overview;
 pub mod plan;
 pub mod qr;
+pub mod review;
 pub mod today;
 
 use askama::Template;

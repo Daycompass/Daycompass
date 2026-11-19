@@ -907,10 +907,10 @@ sync interval.
 
 ## Missions sync (device auth)
 
-Missions are an account's own goals, the tasks under them and the time
-tracked on those tasks. A device keeps its own copy, edits it offline,
-and syncs it with this one route: each call pushes local edits and
-pulls everyone else's.
+Missions are an account's own goals, the tasks under them, the time
+tracked on those tasks and the weekly reviews of it. A device keeps its
+own copy, edits it offline, and syncs it with this one route: each call
+pushes local edits and pulls everyone else's.
 
 <!-- route: POST /api/v1/missions/sync -->
 ### `POST /api/v1/missions/sync`
@@ -958,20 +958,34 @@ page of everything changed after `cursor`.
       "deleted": false,
       "updated_at": 1799999400
     }
+  ],
+  "reviews": [
+    {
+      "week_start": "2026-11-16",
+      "went_well": "Exercises every day",
+      "went_badly": null,
+      "change_next": "Start before lunch",
+      "goals": [
+        { "mission_id": "00000000000000000000000000000001", "weekly_goal_secs": 36000 }
+      ],
+      "deleted": false,
+      "updated_at": 1800000000
+    }
   ]
 }
 ```
 
-`missions`, `tasks` and `time_entries` may each be omitted. A pull
-without pushing is `{ "cursor": 41 }`. The same record shapes come
-back in `changes`.
+`missions`, `tasks`, `time_entries` and `reviews` may each be omitted.
+A pull without pushing is `{ "cursor": 41 }`. The same record shapes
+come back in `changes`. A device that does not know `reviews` yet may
+ignore them in `changes`.
 
 **Limits on the request as a whole** — these fail the whole call:
 
 | Limit | Status | Code |
 | --- | --- | --- |
 | Body over 512 KiB | 413 | `payload_too_large` |
-| More than 500 records, all three arrays together | 413 | `batch_too_large` |
+| More than 500 records, all four arrays together | 413 | `batch_too_large` |
 | `cursor` negative, or ahead of anything this account was given | 400 | `invalid_sync_cursor` |
 | Malformed JSON, a missing or unknown field | 400 | `bad_request` |
 | Missing/wrong `Content-Type` | 415 | `unsupported_media_type` |
@@ -980,7 +994,7 @@ back in `changes`.
 
 | Field | Rule |
 | --- | --- |
-| `id` | Client-generated, **32 lowercase hex characters** (a dashed UUID is accepted and normalized, same as `event_id`). Unique within the account. |
+| `id` | Client-generated, **32 lowercase hex characters** (a dashed UUID is accepted and normalized, same as `event_id`). Unique within the account. A review has `week_start` instead. |
 | `deleted` | `true` makes the record a tombstone; see below. |
 | `updated_at` | Your clock at the last edit, Unix seconds. At most 300 s in the future. |
 
@@ -1014,8 +1028,17 @@ back in `changes`.
 | `start_ts` | Unix seconds, at most 300 s in the future. |
 | `end_ts` | `null` while the timer runs. Otherwise after `start_ts`, at most 300 s in the future. |
 
+**Reviews:**
+
+| Field | Rule |
+| --- | --- |
+| `week_start` | Required, the key: the Monday of the reviewed ISO week, `YYYY-MM-DD` in the account's time zone. One week has one review — two devices that review the same week write the same record, and last write wins between them. |
+| `went_well`, `went_badly`, `change_next` | Optional, up to 2000 characters each. Newlines allowed. `""` is stored as `null`. |
+| `goals` | Optional, at most 100 entries of `{ "mission_id", "weekly_goal_secs" }`: the weekly goals the week is measured against, so a goal changed later does not change how this week reads. A mission not listed had no goal. Each `mission_id` must name a mission of this account, at most once; `weekly_goal_secs` is 0–604800. Take it when the review is first written, and keep it on later edits. |
+
 No string may contain a control character (except a newline in
-`description`, `why` and `notes`) or a bidirectional override.
+`description`, `why`, `notes` and a review's three answers) or a
+bidirectional override.
 
 **`200 OK`** — always, if the request itself was well formed:
 
@@ -1053,19 +1076,21 @@ offset in the array you sent, and your ids are not echoed back.
 | `id_malformed` | `id` is not 32 hex characters or a canonical UUID. |
 | `updated_at_in_future` | More than 300 s ahead of `server_time`. |
 | `title_length` | Blank, or over the maximum. |
-| `text_length` | `description`, `why` or `notes` over its maximum. |
+| `text_length` | `description`, `why`, `notes` or a review answer over its maximum. |
 | `forbidden_character` | A control character or bidi override. |
 | `colour_out_of_range` | Not 0–7. |
-| `weekly_goal_out_of_range` | Not 0–604800. |
-| `date_malformed` | Not a real `YYYY-MM-DD` date. |
+| `weekly_goal_out_of_range` | A mission's or a review goal's `weekly_goal_secs` is not 0–604800. |
+| `date_malformed` | Not a real `YYYY-MM-DD` date (a review's `week_start` included). |
 | `period_inverted` | `ends_on` before `starts_on`. |
-| `mission_unknown` | `mission_id` names no mission of this account. |
+| `mission_unknown` | `mission_id` (a task's, or one in a review's `goals`) names no mission of this account. |
 | `task_unknown` | `task_id` names no task of this account. |
 | `position_malformed` | Empty, over 64 characters, or not `0-9A-Za-z`. |
 | `done_at_in_future` | More than 300 s ahead. |
 | `start_ts_in_future` | More than 300 s ahead. |
 | `end_ts_in_future` | More than 300 s ahead. |
 | `end_ts_not_after_start` | `end_ts` is not after `start_ts`. |
+| `week_start_not_monday` | A review's `week_start` is a date, but not a Monday. |
+| `goals_malformed` | A review lists more than 100 goals, or one mission twice. |
 
 ### How to sync
 
@@ -1100,11 +1125,11 @@ startup.
 
 To delete, send the record with `deleted: true` and a new
 `updated_at`. Other devices receive it in `changes` and should delete
-their copy. A tombstone keeps only its id, `updated_at`, its numbers
-and references: titles, `description`, `why` and `notes` come back
-empty (`""` / `null`) and are gone from the server. Only `id` and
-`updated_at` are checked on a tombstone, so you may send one back
-exactly as you received it.
+their copy. A tombstone keeps only its id (a review: its `week_start`),
+`updated_at`, its numbers and references: titles, `description`,
+`why`, `notes` and a review's answers come back empty (`""` / `null`)
+and are gone from the server. Only the id and `updated_at` are checked
+on a tombstone, so you may send one back exactly as you received it.
 
 A later edit (newer `updated_at`) of a deleted record brings it back.
 Deleting a mission does not delete its tasks, and deleting a task
@@ -1496,7 +1521,7 @@ filename="daycompass-export.json"` and `Cache-Control: no-store`:
 ```json
 {
   "format": "daycompass-export",
-  "format_version": 2,
+  "format_version": 3,
   "exported_at": 1800000000,
   "account": {
     "id": "0190a0b2-0000-7000-8000-000000000001",
@@ -1561,6 +1586,18 @@ filename="daycompass-export.json"` and `Cache-Control: no-store`:
       "updated_at": 1799003600
     }
   ],
+  "reviews": [
+    {
+      "week_start": "2026-11-16",
+      "went_well": "Exercises every day",
+      "went_badly": null,
+      "change_next": "Start before lunch",
+      "goals": [
+        { "mission_id": "00000000000000000000000000000001", "weekly_goal_secs": 36000 }
+      ],
+      "updated_at": 1799500000
+    }
+  ],
   "events": [
     {
       "device_id": "0190a0b2-0000-7000-8000-000000000002",
@@ -1586,13 +1623,14 @@ filename="daycompass-export.json"` and `Cache-Control: no-store`:
   part of the document. `label` and `domain` are
   omitted when absent. Ordered by `start_ts`, then `device_id`, then
   `event_id`, all ascending.
-- `missions`, `tasks` and `time_entries` carry the fields of
-  [`POST /api/v1/missions/sync`](#post-apiv1missionssync) without
+- `missions`, `tasks`, `time_entries` and `reviews` carry the fields
+  of [`POST /api/v1/missions/sync`](#post-apiv1missionssync) without
   `deleted`: deleted records are not exported.
 - No password, token or hash of either appears anywhere in the
   document, nor any session, invite or pairing-code data.
 - `format_version` changes whenever the document's shape does. Version
-  2 added `missions`, `tasks` and `time_entries`.
+  2 added `missions`, `tasks` and `time_entries`; version 3 added
+  `reviews`.
 
 **Accept an export only if it parses and ends with `"complete": true`.**
 The body is streamed: the status line is sent before the events are

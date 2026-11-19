@@ -469,3 +469,42 @@ entry can only be stopped, not corrected or deleted - its end is not
 known yet, and a device may still be counting it. The tasks offered are
 the week's, the backlog's, and any other task the week's entries are
 on. Entries may overlap; nothing checks for it, as on a device.
+
+## Why a weekly review is keyed by its week, and keeps a goal snapshot
+
+A review (`reviews`, migration `0010_reviews.sql`) is synced like the
+three missions tables: last write wins on `updated_at`, a tombstone
+keeps no text, and every write takes the next `users.missions_rev`.
+It differs in its key. A week has one review, so the key is
+`(user_id, week_start)` - the week's Monday in the account's time zone
+- rather than a client-generated id. Two devices that review the same
+week offline write the same record, and last write wins between them;
+with client ids they would leave two reviews of one week and every
+client would have to pick one.
+
+Weekly goals live on the missions and change over time, so a review
+keeps the goals its week is measured against: a JSON array of
+`{mission_id, weekly_goal_secs}` in `reviews.goals`, ids and numbers
+only, so a deleted mission's title still goes with the mission. The
+dashboard takes it from the active missions with a goal when the
+review is first written, and keeps it on later edits. Setting next
+week's goals from the review page writes the review first if there is
+none yet, in the same push, so the snapshot holds the goals the week
+had, not the new ones. A JSON column rather than a child table keeps a
+review one record, one row, one upsert; the CHECK makes sure it is a
+JSON array, and the application checks each entry (ids of this
+account's missions, at most once, a goal in range, at most 100).
+
+The page (`/missions/review?week=`) shows Mission Hours per day, each
+mission against its goal (the snapshot once there is a review, today's
+goals before), the share of Mission Hours in all tracked time, and the
+tasks done that week. The same numbers download as Markdown
+(`/missions/review/markdown`); a PNG would need image rendering for
+little gain, so there is none.
+
+The review day (`users.review_day`, ISO 1-7, Sunday by default) is a
+dashboard setting, not synced: it only decides when Today shows a
+reminder. On that day Today links to the review until the week has
+one. On a Monday the week has only begun, so a Monday review day asks
+about the week before. There is no push notification - there is no
+outgoing channel to send one through.

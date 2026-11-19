@@ -34,11 +34,11 @@
 use sqlx::{SqliteConnection, SqlitePool};
 
 use super::store::{self, Kind};
-use super::validate::{self, Mission, RejectReason, Task, TimeEntry};
+use super::validate::{self, Mission, RejectReason, Review, Task, TimeEntry};
 use crate::auth::store::StoreError;
 use crate::auth::time::UnixTime;
 
-/// The most records one push may carry, all three kinds together.
+/// The most records one push may carry, all four kinds together.
 pub const MAX_BATCH_RECORDS: usize = 500;
 
 /// The largest a sync body may be. Attached to the route from its
@@ -49,17 +49,18 @@ pub const MAX_BODY_BYTES: usize = 512 * 1024;
 /// The most records one pull returns.
 pub const PAGE_RECORDS: usize = 500;
 
-/// Records of all three kinds, pushed or pulled.
+/// Records of all four kinds, pushed or pulled.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Changes {
     pub missions: Vec<Mission>,
     pub tasks: Vec<Task>,
     pub time_entries: Vec<TimeEntry>,
+    pub reviews: Vec<Review>,
 }
 
 impl Changes {
     pub fn len(&self) -> usize {
-        self.missions.len() + self.tasks.len() + self.time_entries.len()
+        self.missions.len() + self.tasks.len() + self.time_entries.len() + self.reviews.len()
     }
 
     pub fn is_empty(&self) -> bool {
@@ -100,6 +101,7 @@ pub struct Report {
     pub missions: Vec<Outcome>,
     pub tasks: Vec<Outcome>,
     pub time_entries: Vec<Outcome>,
+    pub reviews: Vec<Outcome>,
 }
 
 #[derive(Debug)]
@@ -161,7 +163,8 @@ pub async fn sync(
         .missions
         .iter()
         .chain(&report.tasks)
-        .chain(&report.time_entries);
+        .chain(&report.time_entries)
+        .chain(&report.reviews);
     let (mut applied, mut stale, mut rejected) = (0, 0, 0);
     for outcome in all {
         match outcome {
@@ -211,8 +214,8 @@ fn next(rev: &mut i64) -> i64 {
     *rev
 }
 
-/// Missions first, then tasks, then time entries, so a record may
-/// reference one pushed earlier in the same request.
+/// Missions first, then tasks, then time entries, then reviews, so a
+/// record may reference one pushed earlier in the same request.
 async fn apply_changes(
     conn: &mut SqliteConnection,
     user_id: &str,
@@ -315,7 +318,51 @@ async fn apply_changes(
         report.time_entries.push(outcome);
     }
 
+    for raw in &push.reviews {
+        let outcome = match validate::review(raw, now) {
+            Err(reason) => Outcome::Rejected(reason),
+            Ok(review) => {
+                match settle(
+                    conn,
+                    Kind::Review,
+                    user_id,
+                    &review.week_start,
+                    review.updated_at,
+                    review.deleted,
+                    rev,
+                )
+                .await?
+                {
+                    Some(outcome) => outcome,
+                    None if !goals_reference_missions(conn, user_id, &review).await? => {
+                        Outcome::Rejected(RejectReason::MissionUnknown)
+                    }
+                    None => {
+                        store::upsert_review(conn, user_id, &review, next(rev)).await?;
+                        Outcome::Applied
+                    }
+                }
+            }
+        };
+        report.reviews.push(outcome);
+    }
+
     Ok(report)
+}
+
+/// Whether every goal of a review names a mission of this account,
+/// tombstones included, as for a task's mission.
+async fn goals_reference_missions(
+    conn: &mut SqliteConnection,
+    user_id: &str,
+    review: &Review,
+) -> Result<bool, StoreError> {
+    for goal in &review.goals {
+        if !references(conn, Kind::Mission, user_id, Some(&goal.mission_id)).await? {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }
 
 /// Last write wins and tombstones, the same for every kind. Returns
@@ -408,12 +455,14 @@ async fn changes_since(
     let missions = store::missions_after(conn, user_id, cursor, limit, false).await?;
     let tasks = store::tasks_after(conn, user_id, cursor, limit, false).await?;
     let entries = store::time_entries_after(conn, user_id, cursor, limit, false).await?;
+    let reviews = store::reviews_after(conn, user_id, cursor, limit, false).await?;
 
     let mut revs: Vec<i64> = missions
         .iter()
         .map(|(rev, _)| *rev)
         .chain(tasks.iter().map(|(rev, _)| *rev))
         .chain(entries.iter().map(|(rev, _)| *rev))
+        .chain(reviews.iter().map(|(rev, _)| *rev))
         .collect();
     let (last, next_cursor, has_more) = if revs.len() > PAGE_RECORDS {
         revs.sort_unstable();
@@ -427,6 +476,7 @@ async fn changes_since(
         missions: up_to(missions, last),
         tasks: up_to(tasks, last),
         time_entries: up_to(entries, last),
+        reviews: up_to(reviews, last),
     };
     Ok((changes, next_cursor, has_more))
 }

@@ -1,0 +1,15 @@
+{% import "macros.html" as icons -%}
+{#- Swapped in whole after a save. #}
+<form id="review-day" class="dc-stack" method="post" action="/account/review-day" hx-post="/account/review-day" hx-target="#review-day" hx-swap="outerHTML" hx-disabled-elt="find button">
+  {% if saved %}
+  <div class="dc-banner dc-banner--success" role="status">{% call icons::icon("check") %}{% endcall %}<div><b>Review day saved.</b></div></div>
+  {% endif %}
+  <div class="dc-field">
+    <label class="dc-field__label" for="review_day">Review day</label>
+    <select class="dc-field__input dc-field__input--sm" id="review_day" name="day" aria-describedby="review_day-help">
+      {% for day in days %}<option value="{{ day.0 }}"{% if day.0 == current %} selected{% endif %}>{{ day.1 }}</option>{% endfor %}
+    </select>
+    <span class="dc-field__help" id="review_day-help">On this day, Today reminds you to review the week until it is reviewed. On a Monday, it asks about the week before.</span>
+  </div>
+  <div><button class="dc-btn dc-btn--neutral" type="submit"><span class="dc-spin" aria-hidden="true"></span>Save review day</button></div>
+</form>

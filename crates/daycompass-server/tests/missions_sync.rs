@@ -36,6 +36,23 @@ fn entry(n: u32, task: u32, start_ts: i64, end_ts: Option<i64>, updated_at: i64)
     })
 }
 
+fn review(week_start: &str, went_well: &str, goals: Value, updated_at: i64) -> Value {
+    json!({
+        "week_start": week_start, "went_well": went_well, "goals": goals,
+        "deleted": false, "updated_at": updated_at,
+    })
+}
+
+/// The review of `week_start` in this response's changes.
+fn changed_review<'a>(body: &'a Value, week_start: &str) -> &'a Value {
+    body["changes"]["reviews"]
+        .as_array()
+        .expect("changes")
+        .iter()
+        .find(|r| r["week_start"] == week_start)
+        .unwrap_or_else(|| panic!("{week_start} not in review changes: {body:?}"))
+}
+
 /// One sync, which must succeed.
 async fn sync(app: &TestApp, device: &Device, body: Value) -> Value {
     let response = send_sync(app, device, body).await;
@@ -480,7 +497,8 @@ async fn deleting_the_account_deletes_its_missions_and_export_carries_them() {
         &laptop,
         json!({ "cursor": 0, "missions": [mission(1, "Maths", now), gone.clone()],
         "tasks": [task(3, Some(1), now)],
-        "time_entries": [entry(4, 3, now - 60, None, now)] }),
+        "time_entries": [entry(4, 3, now - 60, None, now)],
+        "reviews": [review("2026-11-16", "Exercises", json!([]), now)] }),
     )
     .await;
     gone["deleted"] = json!(true);
@@ -499,6 +517,8 @@ async fn deleting_the_account_deletes_its_missions_and_export_carries_them() {
     assert_eq!(missions[0]["title"], "Maths");
     assert_eq!(export.body["tasks"][0]["mission_id"], id(1));
     assert_eq!(export.body["time_entries"][0]["end_ts"], Value::Null);
+    assert_eq!(export.body["reviews"][0]["week_start"], "2026-11-16");
+    assert_eq!(export.body["reviews"][0]["went_well"], "Exercises");
 
     let deleted = app
         .send(
@@ -512,8 +532,105 @@ async fn deleting_the_account_deletes_its_missions_and_export_carries_them() {
         "SELECT COUNT(*) FROM missions",
         "SELECT COUNT(*) FROM tasks",
         "SELECT COUNT(*) FROM time_entries",
+        "SELECT COUNT(*) FROM reviews",
     ] {
         let count: i64 = sqlx::query_scalar(sql).fetch_one(&app.pool).await.unwrap();
         assert_eq!(count, 0, "{sql}");
     }
+}
+
+/// A review is keyed by its week: two devices reviewing the same week
+/// write one record, the newer edit wins, a delete takes the text, and
+/// its goals may name only the account's own missions.
+#[tokio::test]
+async fn a_week_has_one_review_whichever_device_writes_it() {
+    let app = TestApp::new().await;
+    let (admin, _, laptop, phone) = two_devices(&app).await;
+    let now = server_time(&app, &laptop).await;
+    let goals = json!([{ "mission_id": id(1), "weekly_goal_secs": 36000 }]);
+
+    let body = sync(
+        &app,
+        &laptop,
+        json!({ "cursor": 0, "missions": [mission(1, "Maths", now)],
+                "reviews": [review("2026-11-16", "laptop", goals.clone(), now - 10)] }),
+    )
+    .await;
+    assert_eq!(statuses(&body, "reviews"), ["applied"]);
+
+    let body = sync(
+        &app,
+        &phone,
+        json!({ "cursor": 0, "reviews": [review("2026-11-16", "phone", json!([]), now - 20)] }),
+    )
+    .await;
+    assert_eq!(statuses(&body, "reviews"), ["stale"]);
+    let winner = changed_review(&body, "2026-11-16");
+    assert_eq!(winner["went_well"], "laptop");
+    assert_eq!(winner["goals"], goals);
+
+    let body = sync(
+        &app,
+        &phone,
+        json!({ "cursor": 0, "reviews": [review("2026-11-16", "phone", goals.clone(), now)] }),
+    )
+    .await;
+    assert_eq!(statuses(&body, "reviews"), ["applied"]);
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM reviews")
+        .fetch_one(&app.pool)
+        .await
+        .unwrap();
+    assert_eq!(count, 1, "one week, one review");
+
+    let mut gone = review("2026-11-16", "phone", goals, now);
+    gone["deleted"] = json!(true);
+    sync(&app, &phone, json!({ "cursor": 0, "reviews": [gone] })).await;
+    let body = sync(&app, &laptop, json!({ "cursor": 0 })).await;
+    let tombstone = changed_review(&body, "2026-11-16");
+    assert_eq!(tombstone["deleted"], true);
+    assert_eq!(
+        tombstone["went_well"],
+        Value::Null,
+        "a tombstone keeps no text"
+    );
+
+    let body = sync(
+        &app,
+        &laptop,
+        json!({ "cursor": 0, "reviews": [
+            review("2026-11-17", "", json!([]), now),
+            review("2026-11-23", "", json!([{ "mission_id": id(9), "weekly_goal_secs": 0 }]), now),
+            review("2026-11-30", "", json!([
+                { "mission_id": id(1), "weekly_goal_secs": 0 },
+                { "mission_id": id(1), "weekly_goal_secs": 60 },
+            ]), now),
+        ] }),
+    )
+    .await;
+    assert_eq!(
+        statuses(&body, "reviews"),
+        [
+            "rejected:week_start_not_monday",
+            "rejected:mission_unknown",
+            "rejected:goals_malformed",
+        ]
+    );
+
+    // Another account's mission is no mission of this one.
+    let (_, credentials) = app.create_account(&admin, "dave", "user").await;
+    let dave = app.log_in(&credentials).await;
+    let dave_device = app.pair_device(&dave, "tablet", "android").await;
+    let body = sync(
+        &app,
+        &dave_device,
+        json!({ "cursor": 0, "reviews": [review("2026-11-16", "dave",
+            json!([{ "mission_id": id(1), "weekly_goal_secs": 0 }]), now)] }),
+    )
+    .await;
+    assert_eq!(statuses(&body, "reviews"), ["rejected:mission_unknown"]);
+    assert_eq!(
+        body["changes"]["reviews"],
+        json!([]),
+        "and sees none of carol's"
+    );
 }

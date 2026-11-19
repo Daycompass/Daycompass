@@ -8,7 +8,8 @@ use futures_util::stream::{self, Stream, StreamExt};
 use sqlx::SqlitePool;
 
 use super::format::{
-    self, Account, AccountLogEntry, CategoryRule, Device, Event, Head, Mission, Task, TimeEntry,
+    self, Account, AccountLogEntry, CategoryRule, Device, Event, Head, Mission, Review, Task,
+    TimeEntry,
 };
 use crate::auth::account_log;
 use crate::auth::store::{StoreError, UserRecord};
@@ -41,7 +42,7 @@ const TAIL: &[u8] = b"],\"complete\":true}";
 #[error("the export was aborted")]
 pub struct Aborted;
 
-/// Reads `user`'s account, devices, rules, log and missions, and returns the
+/// Reads `user`'s account, devices, rules, log, missions and reviews, and returns the
 /// whole document as a stream of byte chunks.
 ///
 /// Fails before anything is sent if one of the up-front reads fails,
@@ -66,6 +67,7 @@ pub async fn export_own(
     let own_missions = missions::missions_after(&mut conn, &user.id, 0, -1, true).await?;
     let tasks = missions::tasks_after(&mut conn, &user.id, 0, -1, true).await?;
     let entries = missions::time_entries_after(&mut conn, &user.id, 0, -1, true).await?;
+    let reviews = missions::reviews_after(&mut conn, &user.id, 0, -1, true).await?;
     drop(conn);
 
     let head = Head {
@@ -85,6 +87,7 @@ pub async fn export_own(
             .into_iter()
             .map(|(_, e)| TimeEntry::from(e))
             .collect(),
+        reviews: reviews.into_iter().map(|(_, r)| Review::from(r)).collect(),
     };
 
     let head = open_events_array(&head);

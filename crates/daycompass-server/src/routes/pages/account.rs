@@ -1,6 +1,6 @@
-//! `GET /account` and `POST /account/password`: the caller's own
-//! account - changing the password, reading the account log, and the
-//! link to the export.
+//! `GET /account` and its writes: the caller's own account - changing
+//! the password, the time zone and the review day, reading the account
+//! log, and the link to the export.
 //!
 //! The export is a plain link to `GET /api/v1/export`, not a page route
 //! of its own: that route is already a same-origin `GET` authenticated
@@ -21,6 +21,7 @@ use super::{format_utc, render, render_fragment, Shell};
 use crate::auth::account_log::{self, LogKind};
 use crate::auth::secret::SecretString;
 use crate::error::{ApiError, ErrorKind};
+use crate::missions::service as missions;
 use crate::routes::{account, auth, SessionContext};
 use crate::state::AppState;
 use crate::timezone::{self, TimeZoneName};
@@ -32,6 +33,7 @@ struct AccountPage {
     is_admin: bool,
     form: PasswordForm,
     timezone_form: String,
+    review_day_form: ReviewDayForm,
     log: Vec<LogRow>,
 }
 
@@ -57,6 +59,34 @@ impl TimeZoneForm {
         Self {
             current: zone.as_str().to_owned(),
             names: timezone::available_names(),
+            saved,
+        }
+    }
+}
+
+/// The review day form on its own: the page's, and a save's answer.
+#[derive(Template)]
+#[template(path = "partials/review_day_form.html")]
+struct ReviewDayForm {
+    /// 1 (Monday) to 7.
+    current: i8,
+    days: [(i8, &'static str); 7],
+    saved: bool,
+}
+
+impl ReviewDayForm {
+    fn new(current: i8, saved: bool) -> Self {
+        Self {
+            current,
+            days: [
+                (1, "Monday"),
+                (2, "Tuesday"),
+                (3, "Wednesday"),
+                (4, "Thursday"),
+                (5, "Friday"),
+                (6, "Saturday"),
+                (7, "Sunday"),
+            ],
             saved,
         }
     }
@@ -92,11 +122,20 @@ pub async fn page(State(state): State<AppState>, session: SessionContext) -> Res
         }
     };
 
+    let review_day = match missions::review_day(&state.pool, &auth.user.id).await {
+        Ok(day) => day,
+        Err(err) => {
+            tracing::error!(error = %err, "reading the review day failed");
+            return ApiError::of(ErrorKind::InternalError).into_response();
+        }
+    };
+
     render(&AccountPage {
         shell: Shell::load(&state.pool, auth, "account").await,
         is_admin: auth.user.role.is_admin(),
         form: PasswordForm { changed: None },
         timezone_form,
+        review_day_form: ReviewDayForm::new(review_day, false),
         log: entries
             .iter()
             .map(|entry| LogRow {
@@ -149,5 +188,25 @@ pub async fn change_timezone(
     match account::change_timezone(&state, &session, &form.timezone).await {
         Ok(zone) => render_fragment(&TimeZoneForm::new(&zone, true)),
         Err(error) => error.into_response(),
+    }
+}
+
+#[derive(Deserialize)]
+pub struct ReviewDayInput {
+    day: i8,
+}
+
+pub async fn change_review_day(
+    State(state): State<AppState>,
+    session: SessionContext,
+    Form(form): Form<ReviewDayInput>,
+) -> Response {
+    match missions::set_review_day(&state.pool, &session.auth().user.id, form.day).await {
+        Ok(true) => render_fragment(&ReviewDayForm::new(form.day, true)),
+        Ok(false) => ApiError::of(ErrorKind::ReviewInvalid).into_response(),
+        Err(err) => {
+            tracing::error!(error = %err, "saving the review day failed");
+            ApiError::of(ErrorKind::InternalError).into_response()
+        }
     }
 }

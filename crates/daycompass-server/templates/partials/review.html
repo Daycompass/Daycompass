@@ -1,0 +1,116 @@
+{% import "macros.html" as icons -%}
+{#- Swapped in whole after every write. `query` carries the week along. #}
+<div id="review" class="dc-stack dc-stack--lg">
+  <div class="dc-list__actions">
+    <a class="dc-btn dc-btn--neutral dc-btn--sm" href="/missions/review{{ previous }}" aria-label="Previous week">{% call icons::icon("left") %}{% endcall %}</a>
+    <a class="dc-btn dc-btn--neutral dc-btn--sm" href="/missions/review">This week</a>
+    <a class="dc-btn dc-btn--neutral dc-btn--sm" href="/missions/review{{ next }}" aria-label="Next week">{% call icons::icon("right") %}{% endcall %}</a>
+  </div>
+  {% if saved %}
+  <div class="dc-banner dc-banner--success" role="status">{% call icons::icon("check") %}{% endcall %}<div><b>Review saved.</b></div></div>
+  {% endif %}
+  <div class="dc-grid">
+    <section class="dc-card">
+      <h2 class="dc-stat__label">Mission hours</h2>
+      <p class="dc-stat__value">{{ mission_total }}</p>
+    </section>
+    <section class="dc-card">
+      <h2 class="dc-stat__label">Share of tracked time</h2>
+      <p class="dc-stat__value">{% if let Some(share) = share %}{{ share }}%{% else %}–{% endif %}</p>
+      <p class="dc-caption">{{ tracked_total }} tracked in all, on tasks with or without a mission.</p>
+    </section>
+  </div>
+  <section class="dc-card dc-stack">
+    <h2 class="dc-heading-3">Mission hours per day</h2>
+    <ul class="dc-bars">
+      {% for day in days %}
+      <li class="dc-bars__row">
+        <span class="dc-bars__name">{{ day.name }}</span>
+        <span class="dc-bars__value">{{ day.duration }}</span>
+        <progress class="dc-bar" value="{{ day.secs }}" max="{{ day_max }}" aria-label="{{ day.name }}: {{ day.duration }}"></progress>
+      </li>
+      {% endfor %}
+    </ul>
+    <p class="dc-caption">Days are counted in {{ zone }}. <a href="/">Screen time is on the overview.</a></p>
+  </section>
+  <section class="dc-card dc-stack">
+    <h2 class="dc-heading-3">Missions against their goals</h2>
+    {% if missions.is_empty() %}
+    <p class="dc-muted">No mission had a goal or tracked time this week.</p>
+    {% else %}
+    <ul class="dc-bars">
+      {% for row in missions %}
+      <li class="dc-bars__row">
+        <span class="dc-bars__name"><span class="dc-swatch dc-swatch--c{{ row.colour }}" aria-hidden="true"></span> {{ row.title }}</span>
+        <span class="dc-bars__value">{{ row.actual }}{% if row.goal_secs > 0 %} of {{ row.goal }}{% endif %}</span>
+        {% if row.goal_secs > 0 %}<progress class="dc-bar dc-bar--c{{ row.colour }}" value="{{ row.actual_secs }}" max="{{ row.goal_secs }}" aria-label="{{ row.title }}: {{ row.actual }} of {{ row.goal }}"></progress>{% endif %}
+      </li>
+      {% endfor %}
+    </ul>
+    <p class="dc-caption">{% if snapshot %}Goals as they were when this week was first reviewed.{% else %}Today's goals: the week keeps them once it is reviewed.{% endif %}</p>
+    {% endif %}
+  </section>
+  <section class="dc-card dc-stack">
+    <h2 class="dc-heading-3">Done</h2>
+    {% if done.is_empty() %}
+    <p class="dc-muted">No task was marked done this week.</p>
+    {% else %}
+    <ul class="dc-list">
+      {% for row in done %}
+      <li class="dc-list__row"><span>{% if let Some(mission) = row.mission %}<span class="dc-swatch dc-swatch--c{{ mission.1 }}" aria-hidden="true"></span> {% endif %}{{ row.title }}{% if let Some(mission) = row.mission %} <span class="dc-caption">{{ mission.0 }}</span>{% endif %}</span><span class="dc-caption">{{ row.day }}</span></li>
+      {% endfor %}
+    </ul>
+    {% endif %}
+  </section>
+  <section class="dc-card dc-stack">
+    <h2 class="dc-heading-3">Looking back</h2>
+    <form class="dc-stack" method="post" action="/missions/review{{ query }}" hx-post="/missions/review{{ query }}" hx-target="#review" hx-swap="outerHTML" hx-disabled-elt="find button">
+      <div class="dc-field">
+        <label class="dc-field__label" for="review-well">What went well?</label>
+        <textarea class="dc-field__input dc-field__input--area" id="review-well" name="went_well" maxlength="2000" rows="3">{{ went_well }}</textarea>
+      </div>
+      <div class="dc-field">
+        <label class="dc-field__label" for="review-badly">What went badly, and why?</label>
+        <textarea class="dc-field__input dc-field__input--area" id="review-badly" name="went_badly" maxlength="2000" rows="3">{{ went_badly }}</textarea>
+      </div>
+      <div class="dc-field">
+        <label class="dc-field__label" for="review-change">What changes next week?</label>
+        <textarea class="dc-field__input dc-field__input--area" id="review-change" name="change_next" maxlength="2000" rows="3">{{ change_next }}</textarea>
+      </div>
+      <div class="dc-list__actions">
+        <button class="dc-btn dc-btn--primary" type="submit"><span class="dc-spin" aria-hidden="true"></span>Save review</button>
+        <a class="dc-btn dc-btn--neutral" href="/missions/review/markdown{{ query }}" download>Download as Markdown</a>
+      </div>
+    </form>
+  </section>
+  <section class="dc-card dc-stack">
+    <h2 class="dc-heading-3">Next week's goals</h2>
+    {% if goals.is_empty() %}
+    <p class="dc-muted">No active missions. <a href="/missions/manage">Add one</a> to set a goal.</p>
+    {% else %}
+    <p class="dc-muted">Each mission's weekly goal from now on. This week's review keeps the goals it was measured against.</p>
+    <form class="dc-stack" method="post" action="/missions/review/goals{{ query }}" hx-post="/missions/review/goals{{ query }}" hx-target="#review" hx-swap="outerHTML" hx-disabled-elt="find button">
+      {% for goal in goals %}
+      <div class="dc-field">
+        <label class="dc-field__label" for="goal-{{ goal.id }}"><span class="dc-swatch dc-swatch--c{{ goal.colour }}" aria-hidden="true"></span> {{ goal.title }}, hours</label>
+        <input class="dc-field__input dc-field__input--sm" id="goal-{{ goal.id }}" name="goal_{{ goal.id }}" type="number" min="0" max="168" step="any" inputmode="decimal" value="{{ goal.hours }}">
+      </div>
+      {% endfor %}
+      <p class="dc-caption">Empty for no goal.</p>
+      <div><button class="dc-btn dc-btn--primary" type="submit"><span class="dc-spin" aria-hidden="true"></span>Save goals</button></div>
+    </form>
+    {% endif %}
+  </section>
+  <section class="dc-card dc-stack">
+    <h2 class="dc-heading-3">Earlier reviews</h2>
+    {% if history.is_empty() %}
+    <p class="dc-muted">No week reviewed yet.</p>
+    {% else %}
+    <ul class="dc-list">
+      {% for row in history %}
+      <li class="dc-list__row"><a href="{{ row.href }}"{% if row.current %} aria-current="page"{% endif %}>{{ row.label }}</a></li>
+      {% endfor %}
+    </ul>
+    {% endif %}
+  </section>
+</div>

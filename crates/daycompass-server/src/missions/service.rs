@@ -1,18 +1,22 @@
 //! Missions as the dashboard reads and writes them: the account's own
 //! missions with their tracked time, the day's tasks and their timer,
-//! the North Star.
+//! the weekly review, the North Star.
 //!
 //! Every write goes through [`sync::apply_own`], so a mission edited in
 //! the browser obeys the same rules as one pushed by a device - same
 //! validation, last write wins, a new rev that devices then pull.
 //! Nothing here knows about forms or HTML.
 
+use jiff::civil::Date;
+use jiff::ToSpan;
 use sqlx::SqlitePool;
 
 use super::position::key_between;
-use super::store::{self, RunningTimer, TrackedEntry};
+use super::store::{self, Kind, RunningTimer, TrackedEntry};
 use super::sync::{self, Changes, Outcome};
-use super::validate::{self, Mission, RejectReason, Task, TimeEntry};
+use super::validate::{
+    self, Mission, RejectReason, Review, ReviewGoal, Task, TimeEntry, MAX_REVIEW_GOALS,
+};
 use crate::auth::store::{new_id, StoreError};
 use crate::auth::time::UnixTime;
 
@@ -167,6 +171,7 @@ async fn write(
         .iter()
         .chain(&report.tasks)
         .chain(&report.time_entries)
+        .chain(&report.reviews)
         .find_map(|outcome| match outcome {
             Outcome::Rejected(reason) => Some(*reason),
             _ => None,
@@ -734,6 +739,283 @@ pub async fn stop_entry(
     write(pool, user_id, entries(ended(entry, now)), now).await
 }
 
+/// Seconds of `entry` inside `[start, end)`; a running entry runs to
+/// `now`.
+pub fn clipped(entry: &TrackedEntry, (start, end): (i64, i64), now: i64) -> i64 {
+    (entry.end_ts.unwrap_or(now).min(end) - entry.start_ts.max(start)).max(0)
+}
+
+/// One mission's week: tracked time against its goal.
+pub struct MissionWeek {
+    pub mission: Mission,
+    pub actual_secs: i64,
+    pub goal_secs: i64,
+}
+
+/// Everything the review of one week shows.
+pub struct ReviewData {
+    /// Mission Hours per day of the week.
+    pub day_secs: Vec<i64>,
+    pub mission_secs: i64,
+    /// All tracked time, on tasks with a mission or without.
+    pub tracked_secs: i64,
+    /// Live missions with a goal or tracked time this week, by title.
+    /// The goal is the review's snapshot, or today's goal before there
+    /// is a review.
+    pub missions: Vec<MissionWeek>,
+    /// Tasks done this week, in the order they were done, each with
+    /// its live mission.
+    pub done: Vec<(Task, Option<Mission>)>,
+    pub review: Option<Review>,
+    /// Missions that are not archived, by title: the goals the next
+    /// week starts with.
+    pub active: Vec<Mission>,
+    /// Weeks with a review, newest first.
+    pub history: Vec<String>,
+}
+
+/// The review of the week starting `week_start`. `days` are the
+/// week's seven `[start, end)` bounds, Unix seconds.
+pub async fn review_of(
+    pool: &SqlitePool,
+    user_id: &str,
+    week_start: &str,
+    days: &[(i64, i64)],
+    now: UnixTime,
+) -> Result<ReviewData, StoreError> {
+    let week = (days[0].0, days[days.len() - 1].1);
+    let mut conn = pool.acquire().await?;
+    let missions = missions_by_title(&mut conn, user_id).await?;
+    let entries =
+        store::entries_overlapping(&mut conn, user_id, week.0, week.1, now.as_secs()).await?;
+    let done = store::tasks_done_between(&mut conn, user_id, week.0, week.1).await?;
+    let review = store::live_review(&mut conn, user_id, week_start).await?;
+    let history = store::reviewed_weeks(&mut conn, user_id).await?;
+    drop(conn);
+
+    let now = now.as_secs();
+    let on_missions = || entries.iter().filter(|entry| entry.mission_id.is_some());
+    let day_secs = days
+        .iter()
+        .map(|&day| on_missions().map(|entry| clipped(entry, day, now)).sum())
+        .collect();
+    let goals = review
+        .as_ref()
+        .map_or_else(|| goals_of(&missions), |review| review.goals.clone());
+    let weeks = missions
+        .iter()
+        .map(|mission| MissionWeek {
+            actual_secs: on_missions()
+                .filter(|entry| entry.mission_id.as_deref() == Some(&mission.id))
+                .map(|entry| clipped(entry, week, now))
+                .sum(),
+            goal_secs: goals
+                .iter()
+                .find(|goal| goal.mission_id == mission.id)
+                .map_or(0, |goal| goal.weekly_goal_secs),
+            mission: mission.clone(),
+        })
+        .filter(|week| week.actual_secs > 0 || week.goal_secs > 0)
+        .collect();
+
+    Ok(ReviewData {
+        mission_secs: on_missions().map(|entry| clipped(entry, week, now)).sum(),
+        tracked_secs: entries.iter().map(|entry| clipped(entry, week, now)).sum(),
+        day_secs,
+        missions: weeks,
+        done: done
+            .into_iter()
+            .map(|task| {
+                let mission = missions
+                    .iter()
+                    .find(|mission| task.mission_id.as_deref() == Some(&mission.id))
+                    .cloned();
+                (task, mission)
+            })
+            .collect(),
+        review,
+        active: missions
+            .into_iter()
+            .filter(|mission| !mission.archived)
+            .collect(),
+        history,
+    })
+}
+
+/// Today's goals, as a review keeps them: the active missions that
+/// have one. A mission left out had no goal.
+fn goals_of(missions: &[Mission]) -> Vec<ReviewGoal> {
+    missions
+        .iter()
+        .filter(|mission| !mission.archived && mission.weekly_goal_secs > 0)
+        .take(MAX_REVIEW_GOALS)
+        .map(|mission| ReviewGoal {
+            mission_id: mission.id.clone(),
+            weekly_goal_secs: mission.weekly_goal_secs,
+        })
+        .collect()
+}
+
+/// A review's three answers, as typed. Blank clears one.
+pub struct Answers {
+    pub went_well: String,
+    pub went_badly: String,
+    pub change_next: String,
+}
+
+/// The review of `week_start` as it is about to be written, and whether
+/// it is stored already: the live one, or a new one that takes today's
+/// goals as its snapshot. A `week_start` that is not a Monday is left
+/// to the sync rules to refuse.
+async fn review_to_write(
+    conn: &mut sqlx::SqliteConnection,
+    user_id: &str,
+    week_start: &str,
+    now: UnixTime,
+) -> Result<(Review, bool), StoreError> {
+    // A tombstone's `updated_at` counts too: a review written after a
+    // delete must not lose to it.
+    let stored_at = store::updated_at_of(conn, Kind::Review, user_id, week_start).await?;
+    let updated_at = edit_time(stored_at.unwrap_or(0), now);
+    Ok(match store::live_review(conn, user_id, week_start).await? {
+        Some(review) => (
+            Review {
+                updated_at,
+                ..review
+            },
+            true,
+        ),
+        None => (
+            Review {
+                week_start: week_start.to_owned(),
+                went_well: None,
+                went_badly: None,
+                change_next: None,
+                goals: goals_of(&missions_by_title(conn, user_id).await?),
+                deleted: false,
+                updated_at,
+            },
+            false,
+        ),
+    })
+}
+
+/// Writes the answers of the review of `week_start`. The first write
+/// takes today's goals as the week's snapshot; later ones keep it.
+pub async fn save_review(
+    pool: &SqlitePool,
+    user_id: &str,
+    week_start: &str,
+    answers: Answers,
+    now: UnixTime,
+) -> Result<SaveOutcome, StoreError> {
+    let mut conn = pool.acquire().await?;
+    let (review, _) = review_to_write(&mut conn, user_id, week_start, now).await?;
+    drop(conn);
+    // A browser sends a textarea's line breaks as CRLF; the sync rules
+    // accept LF only.
+    let text = |raw: String| Some(raw.replace("\r\n", "\n")).filter(|text| !text.trim().is_empty());
+    let review = Review {
+        went_well: text(answers.went_well),
+        went_badly: text(answers.went_badly),
+        change_next: text(answers.change_next),
+        ..review
+    };
+    let push = Changes {
+        reviews: vec![review],
+        ..Changes::default()
+    };
+    write(pool, user_id, push, now).await
+}
+
+/// Sets the weekly goals of the account's missions, from the review of
+/// `week_start`. That review is written first if there is none yet, so
+/// its snapshot holds the goals the week had, not the new ones.
+pub async fn set_goals(
+    pool: &SqlitePool,
+    user_id: &str,
+    week_start: &str,
+    goals: &[(String, i64)],
+    now: UnixTime,
+) -> Result<SaveOutcome, StoreError> {
+    let mut conn = pool.acquire().await?;
+    let (review, stored) = review_to_write(&mut conn, user_id, week_start, now).await?;
+    let mut missions = Vec::with_capacity(goals.len());
+    for (id, weekly_goal_secs) in goals {
+        let Some(stored) = store::live_mission(&mut conn, user_id, id).await? else {
+            return Ok(SaveOutcome::NotFound);
+        };
+        if stored.weekly_goal_secs != *weekly_goal_secs {
+            missions.push(Mission {
+                weekly_goal_secs: *weekly_goal_secs,
+                updated_at: edit_time(stored.updated_at, now),
+                ..stored
+            });
+        }
+    }
+    drop(conn);
+    let push = Changes {
+        missions,
+        reviews: if stored { Vec::new() } else { vec![review] },
+        ..Changes::default()
+    };
+    if push.is_empty() {
+        return Ok(SaveOutcome::Saved);
+    }
+    write(pool, user_id, push, now).await
+}
+
+/// The weekday the dashboard asks for a review on, 1 (Monday) to 7.
+pub async fn review_day(pool: &SqlitePool, user_id: &str) -> Result<i8, StoreError> {
+    let mut conn = pool.acquire().await?;
+    store::review_day(&mut conn, user_id).await
+}
+
+/// Sets the review day; `false` if `day` is not 1 to 7.
+pub async fn set_review_day(pool: &SqlitePool, user_id: &str, day: i8) -> Result<bool, StoreError> {
+    if !(1..=7).contains(&day) {
+        return Ok(false);
+    }
+    let mut conn = pool.acquire().await?;
+    store::set_review_day(&mut conn, user_id, day).await?;
+    Ok(true)
+}
+
+/// The Monday of the week to review on `today`, if `today` is the
+/// review day. On a Monday the week has only just begun, so it is the
+/// week before.
+pub fn week_to_review(today: Date, review_day: i8) -> Option<Date> {
+    let weekday = today.weekday().to_monday_one_offset();
+    if weekday != review_day {
+        return None;
+    }
+    let monday = today.checked_sub(i64::from(weekday - 1).days()).ok()?;
+    if weekday == 1 {
+        monday.checked_sub(1.week()).ok()
+    } else {
+        Some(monday)
+    }
+}
+
+/// The week Today asks to review: on the review day, until that week
+/// has a review.
+pub async fn review_due(
+    pool: &SqlitePool,
+    user_id: &str,
+    today: Date,
+) -> Result<Option<String>, StoreError> {
+    let mut conn = pool.acquire().await?;
+    let day = store::review_day(&mut conn, user_id).await?;
+    let Some(week) = week_to_review(today, day) else {
+        return Ok(None);
+    };
+    let week = week.to_string();
+    let reviewed = store::live_review(&mut conn, user_id, &week)
+        .await?
+        .is_some();
+    Ok((!reviewed).then_some(week))
+}
+
 pub async fn running_timer(
     pool: &SqlitePool,
     user_id: &str,
@@ -765,6 +1047,42 @@ pub async fn set_north_star(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_week_to_review_is_this_one_except_on_a_monday() {
+        let date = |raw: &str| raw.parse::<Date>().unwrap();
+        // 2026-11-22 is a Sunday, the default review day.
+        assert_eq!(
+            week_to_review(date("2026-11-22"), 7),
+            Some(date("2026-11-16"))
+        );
+        assert_eq!(week_to_review(date("2026-11-21"), 7), None);
+        assert_eq!(
+            week_to_review(date("2026-11-20"), 5),
+            Some(date("2026-11-16"))
+        );
+        assert_eq!(
+            week_to_review(date("2026-11-23"), 1),
+            Some(date("2026-11-16"))
+        );
+    }
+
+    #[test]
+    fn an_entry_counts_only_inside_the_window_and_runs_to_now() {
+        let entry = |start_ts, end_ts| TrackedEntry {
+            id: String::new(),
+            task_id: String::new(),
+            mission_id: None,
+            start_ts,
+            end_ts,
+            task_title: String::new(),
+            colour: None,
+        };
+        assert_eq!(clipped(&entry(50, Some(150)), (100, 200), 1_000), 50);
+        assert_eq!(clipped(&entry(150, None), (100, 200), 170), 20);
+        assert_eq!(clipped(&entry(150, None), (100, 200), 1_000), 50);
+        assert_eq!(clipped(&entry(10, Some(20)), (100, 200), 1_000), 0);
+    }
 
     #[test]
     fn a_span_entered_by_hand_ends_after_it_starts_and_not_after_now() {

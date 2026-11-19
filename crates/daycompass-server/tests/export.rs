@@ -98,7 +98,7 @@ async fn an_export_carries_the_accounts_own_data_and_nobody_elses() {
     let doc = &response.body;
 
     assert_eq!(doc["format"], "daycompass-export");
-    assert_eq!(doc["format_version"], 2);
+    assert_eq!(doc["format_version"], 3);
     assert_eq!(doc["complete"], true);
     assert_eq!(doc["account"]["id"], carol_id.as_str());
     assert_eq!(doc["account"]["username"], "carol");

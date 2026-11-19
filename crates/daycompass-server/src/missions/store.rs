@@ -1,5 +1,5 @@
-//! Every SQL statement that names `missions`, `tasks` or
-//! `time_entries`.
+//! Every SQL statement that names `missions`, `tasks`, `time_entries`
+//! or `reviews`, and the account's missions settings on `users`.
 //!
 //! Every function takes the caller's `user_id` and filters on it; there
 //! is no statement here that could reach another account's rows. They
@@ -9,25 +9,37 @@
 use sqlx::sqlite::SqliteRow;
 use sqlx::{Row, SqliteConnection};
 
-use super::validate::{Mission, Task, TimeEntry};
+use super::validate::{Mission, Review, ReviewGoal, Task, TimeEntry};
 use crate::auth::store::StoreError;
 
-/// Which of the three tables a statement is about.
+/// Which of the four tables a statement is about.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Kind {
     Mission,
     Task,
     TimeEntry,
+    Review,
 }
 
 /// One statement per table, built at compile time: sqlx refuses SQL
 /// assembled at runtime, and a table name cannot be a bound parameter.
+/// The four-part form also puts in the table's key column: `id`, or a
+/// review's `week_start`.
 macro_rules! per_table {
     ($kind:expr, $before:literal, $after:literal) => {
         match $kind {
             Kind::Mission => concat!($before, "missions", $after),
             Kind::Task => concat!($before, "tasks", $after),
             Kind::TimeEntry => concat!($before, "time_entries", $after),
+            Kind::Review => concat!($before, "reviews", $after),
+        }
+    };
+    ($kind:expr, $before:literal, $middle:literal, $after:literal) => {
+        match $kind {
+            Kind::Mission => concat!($before, "missions", $middle, "id", $after),
+            Kind::Task => concat!($before, "tasks", $middle, "id", $after),
+            Kind::TimeEntry => concat!($before, "time_entries", $middle, "id", $after),
+            Kind::Review => concat!($before, "reviews", $middle, "week_start", $after),
         }
     };
 }
@@ -58,7 +70,8 @@ pub async fn set_rev(
     Ok(())
 }
 
-/// The stored `updated_at` of one record, tombstones included.
+/// The stored `updated_at` of one record, tombstones included. `id` is
+/// the record's key: a review's is its `week_start`.
 pub async fn updated_at_of(
     conn: &mut SqliteConnection,
     kind: Kind,
@@ -68,7 +81,8 @@ pub async fn updated_at_of(
     let sql = per_table!(
         kind,
         "SELECT updated_at FROM ",
-        " WHERE user_id = ?1 AND id = ?2"
+        " WHERE user_id = ?1 AND ",
+        " = ?2"
     );
     Ok(sqlx::query_scalar(sql)
         .bind(user_id)
@@ -89,7 +103,8 @@ pub async fn bump_rev(
     let sql = per_table!(
         kind,
         "UPDATE ",
-        " SET rev = ?3 WHERE user_id = ?1 AND id = ?2"
+        " SET rev = ?3 WHERE user_id = ?1 AND ",
+        " = ?2"
     );
     sqlx::query(sql)
         .bind(user_id)
@@ -124,6 +139,11 @@ pub async fn tombstone(
         Kind::TimeEntry => {
             "UPDATE time_entries SET deleted = 1, updated_at = ?3, rev = ?4
              WHERE user_id = ?1 AND id = ?2"
+        }
+        Kind::Review => {
+            "UPDATE reviews SET deleted = 1, went_well = NULL, went_badly = NULL,
+                 change_next = NULL, updated_at = ?3, rev = ?4
+             WHERE user_id = ?1 AND week_start = ?2"
         }
     };
     sqlx::query(sql)
@@ -225,6 +245,36 @@ pub async fn upsert_time_entry(
     .bind(entry.start_ts)
     .bind(entry.end_ts)
     .bind(entry.updated_at)
+    .bind(rev)
+    .execute(conn)
+    .await?;
+    Ok(())
+}
+
+pub async fn upsert_review(
+    conn: &mut SqliteConnection,
+    user_id: &str,
+    review: &Review,
+    rev: i64,
+) -> Result<(), StoreError> {
+    let goals = serde_json::to_string(&review.goals).expect("a goal list is always serializable");
+    sqlx::query(
+        "INSERT INTO reviews
+             (user_id, week_start, went_well, went_badly, change_next, goals, deleted,
+              updated_at, rev)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, 0, ?7, ?8)
+         ON CONFLICT (user_id, week_start) DO UPDATE SET
+             went_well = excluded.went_well, went_badly = excluded.went_badly,
+             change_next = excluded.change_next, goals = excluded.goals, deleted = 0,
+             updated_at = excluded.updated_at, rev = excluded.rev",
+    )
+    .bind(user_id)
+    .bind(&review.week_start)
+    .bind(review.went_well.as_deref())
+    .bind(review.went_badly.as_deref())
+    .bind(review.change_next.as_deref())
+    .bind(goals)
+    .bind(review.updated_at)
     .bind(rev)
     .execute(conn)
     .await?;
@@ -496,6 +546,9 @@ pub async fn live_entry(
 pub struct TrackedEntry {
     pub id: String,
     pub task_id: String,
+    /// `None`: the task is under no mission, or its mission is gone -
+    /// so the entry is not Mission Hours.
+    pub mission_id: Option<String>,
     pub start_ts: i64,
     /// `None` while it runs.
     pub end_ts: Option<i64>,
@@ -514,7 +567,7 @@ pub async fn entries_overlapping(
 ) -> Result<Vec<TrackedEntry>, StoreError> {
     let rows = sqlx::query(
         "SELECT e.id AS id, e.task_id AS task_id, e.start_ts AS start_ts,
-             e.end_ts AS end_ts, t.title AS title, m.colour AS colour
+             e.end_ts AS end_ts, t.title AS title, m.id AS mission_id, m.colour AS colour
          FROM time_entries e
          JOIN tasks t ON t.user_id = e.user_id AND t.id = e.task_id AND t.deleted = 0
          LEFT JOIN missions m
@@ -534,6 +587,7 @@ pub async fn entries_overlapping(
             Ok(TrackedEntry {
                 id: row.try_get("id")?,
                 task_id: row.try_get("task_id")?,
+                mission_id: row.try_get("mission_id")?,
                 start_ts: row.try_get("start_ts")?,
                 end_ts: row.try_get("end_ts")?,
                 task_title: row.try_get("title")?,
@@ -566,6 +620,107 @@ pub async fn set_north_star(
         .execute(conn)
         .await?;
     Ok(())
+}
+
+/// The weekday the dashboard asks for a review on, 1 (Monday) to 7.
+pub async fn review_day(conn: &mut SqliteConnection, user_id: &str) -> Result<i8, StoreError> {
+    let day: Option<i64> = sqlx::query_scalar("SELECT review_day FROM users WHERE id = ?1")
+        .bind(user_id)
+        .fetch_optional(conn)
+        .await?;
+    day.and_then(|day| i8::try_from(day).ok())
+        .ok_or(StoreError::CorruptRow)
+}
+
+pub async fn set_review_day(
+    conn: &mut SqliteConnection,
+    user_id: &str,
+    day: i8,
+) -> Result<(), StoreError> {
+    sqlx::query("UPDATE users SET review_day = ?2 WHERE id = ?1")
+        .bind(user_id)
+        .bind(day)
+        .execute(conn)
+        .await?;
+    Ok(())
+}
+
+/// Live tasks marked done inside `[start, end)`, in the order they were
+/// done.
+pub async fn tasks_done_between(
+    conn: &mut SqliteConnection,
+    user_id: &str,
+    start: i64,
+    end: i64,
+) -> Result<Vec<Task>, StoreError> {
+    let rows = sqlx::query(
+        "SELECT * FROM tasks
+         WHERE user_id = ?1 AND deleted = 0 AND done_at >= ?2 AND done_at < ?3
+         ORDER BY done_at, id",
+    )
+    .bind(user_id)
+    .bind(start)
+    .bind(end)
+    .fetch_all(conn)
+    .await?;
+    rows.iter().map(task_from_row).collect()
+}
+
+pub async fn reviews_after(
+    conn: &mut SqliteConnection,
+    user_id: &str,
+    after: i64,
+    limit: i64,
+    live_only: bool,
+) -> Result<Vec<(i64, Review)>, StoreError> {
+    let rows = select_after(conn, Kind::Review, user_id, after, limit, live_only).await?;
+    rows.iter()
+        .map(|row| Ok((row.try_get("rev")?, review_from_row(row)?)))
+        .collect()
+}
+
+fn review_from_row(row: &SqliteRow) -> Result<Review, StoreError> {
+    let goals: String = row.try_get("goals")?;
+    let goals: Vec<ReviewGoal> =
+        serde_json::from_str(&goals).map_err(|_| StoreError::CorruptRow)?;
+    Ok(Review {
+        week_start: row.try_get("week_start")?,
+        went_well: row.try_get("went_well")?,
+        went_badly: row.try_get("went_badly")?,
+        change_next: row.try_get("change_next")?,
+        goals,
+        deleted: row.try_get("deleted")?,
+        updated_at: row.try_get("updated_at")?,
+    })
+}
+
+/// The live review of the week starting `week_start`, if there is one.
+pub async fn live_review(
+    conn: &mut SqliteConnection,
+    user_id: &str,
+    week_start: &str,
+) -> Result<Option<Review>, StoreError> {
+    let row =
+        sqlx::query("SELECT * FROM reviews WHERE user_id = ?1 AND week_start = ?2 AND deleted = 0")
+            .bind(user_id)
+            .bind(week_start)
+            .fetch_optional(conn)
+            .await?;
+    row.as_ref().map(review_from_row).transpose()
+}
+
+/// The weeks the account has a live review of, newest first.
+pub async fn reviewed_weeks(
+    conn: &mut SqliteConnection,
+    user_id: &str,
+) -> Result<Vec<String>, StoreError> {
+    Ok(sqlx::query_scalar(
+        "SELECT week_start FROM reviews WHERE user_id = ?1 AND deleted = 0
+         ORDER BY week_start DESC",
+    )
+    .bind(user_id)
+    .fetch_all(conn)
+    .await?)
 }
 
 pub async fn tasks_after(
