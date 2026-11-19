@@ -1,14 +1,16 @@
 //! Missions: an account's own goals, the tasks under them and the time
 //! tracked on those tasks, synced between the account's devices.
 //!
-//! The service layer behind `POST /api/v1/missions/sync`. As
-//! everywhere else, nothing here knows about axum.
+//! The service layer behind `POST /api/v1/missions/sync` and the
+//! dashboard's missions pages. As everywhere else, nothing here knows
+//! about axum.
 //!
 //! | Topic | Module |
 //! | --- | --- |
 //! | The three record types, every per-record rule, the closed set of refusal reasons | [`validate`] |
 //! | Every SQL statement that names `missions`, `tasks` or `time_entries` | [`store`] |
 //! | Last write wins, tombstones, the running timer, the cursor | [`sync`] |
+//! | The dashboard's reads and writes, the North Star | [`service`] |
 //!
 //! # The sync model
 //!
@@ -32,6 +34,7 @@
 //! keyed to the device's owner, and has no id parameter that could name
 //! another account. No admin route reads these tables.
 
+pub mod service;
 pub mod store;
 pub mod sync;
 pub mod validate;

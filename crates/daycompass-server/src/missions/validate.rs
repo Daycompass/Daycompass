@@ -32,6 +32,8 @@ pub const MAX_NOTES_CHARS: usize = 4_000;
 pub const MAX_POSITION_CHARS: usize = 64;
 /// One week.
 pub const MAX_WEEKLY_GOAL_SECS: i64 = 7 * 24 * 60 * 60;
+/// `users.north_star`, also pinned by a CHECK in its migration.
+pub const MAX_NORTH_STAR_CHARS: usize = 200;
 
 /// A mission, as sent, stored and returned.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -281,6 +283,14 @@ pub fn time_entry(raw: &TimeEntry, now: UnixTime) -> Result<TimeEntry, RejectRea
         deleted: false,
         updated_at: raw.updated_at,
     })
+}
+
+/// The account's North Star: one line, like a title. Blank clears it.
+pub fn north_star(raw: &str) -> Result<Option<String>, RejectReason> {
+    if raw.trim().is_empty() {
+        return Ok(None);
+    }
+    check_line(raw, MAX_NORTH_STAR_CHARS).map(Some)
 }
 
 /// A one-line title: trimmed, non-blank, no control characters.
@@ -642,5 +652,26 @@ mod tests {
         let codes: std::collections::HashSet<&str> =
             ALL_REJECT_REASONS.iter().map(|r| r.code()).collect();
         assert_eq!(codes.len(), ALL_REJECT_REASONS.len());
+    }
+
+    #[test]
+    fn a_north_star_is_one_trimmed_line_and_blank_clears_it() {
+        assert_eq!(
+            north_star("  Finish school well "),
+            Ok(Some("Finish school well".to_owned()))
+        );
+        assert_eq!(north_star(" \t "), Ok(None));
+        assert_eq!(
+            north_star(&"a".repeat(MAX_NORTH_STAR_CHARS)).map(|s| s.map(|s| s.len())),
+            Ok(Some(MAX_NORTH_STAR_CHARS))
+        );
+        assert_eq!(
+            north_star(&"a".repeat(MAX_NORTH_STAR_CHARS + 1)),
+            Err(RejectReason::TitleLength)
+        );
+        assert_eq!(
+            north_star("one\ntwo"),
+            Err(RejectReason::ForbiddenCharacter)
+        );
     }
 }

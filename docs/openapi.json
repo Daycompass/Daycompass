@@ -499,6 +499,8 @@
                   "invalid_device_name",
                   "invalid_event_range",
                   "invalid_invite_token",
+                  "invalid_mission",
+                  "invalid_north_star",
                   "invalid_pairing_code",
                   "invalid_password",
                   "invalid_platform",

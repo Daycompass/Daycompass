@@ -187,6 +187,25 @@ pub async fn sync(
     })
 }
 
+/// Applies `push` for `user_id` and pulls nothing back: the dashboard's
+/// writes, under exactly the rules a device's push gets. Devices learn
+/// of them on their next pull, like of any other device's write.
+pub async fn apply_own(
+    pool: &SqlitePool,
+    user_id: &str,
+    push: &Changes,
+    now: UnixTime,
+) -> Result<Report, StoreError> {
+    let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
+    let mut rev = store::current_rev(&mut tx, user_id)
+        .await?
+        .ok_or(StoreError::CorruptRow)?;
+    let report = apply_changes(&mut tx, user_id, &mut rev, push, now).await?;
+    store::set_rev(&mut tx, user_id, rev).await?;
+    tx.commit().await?;
+    Ok(report)
+}
+
 fn next(rev: &mut i64) -> i64 {
     *rev += 1;
     *rev

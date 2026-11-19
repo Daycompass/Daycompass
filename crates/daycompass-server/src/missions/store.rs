@@ -294,25 +294,139 @@ pub async fn missions_after(
 ) -> Result<Vec<(i64, Mission)>, StoreError> {
     let rows = select_after(conn, Kind::Mission, user_id, after, limit, live_only).await?;
     rows.iter()
+        .map(|row| Ok((row.try_get("rev")?, mission_from_row(row)?)))
+        .collect()
+}
+
+fn mission_from_row(row: &SqliteRow) -> Result<Mission, StoreError> {
+    Ok(Mission {
+        id: row.try_get("id")?,
+        title: row.try_get("title")?,
+        colour: row.try_get("colour")?,
+        weekly_goal_secs: row.try_get("weekly_goal_secs")?,
+        description: row.try_get("description")?,
+        why: row.try_get("why")?,
+        starts_on: row.try_get("starts_on")?,
+        ends_on: row.try_get("ends_on")?,
+        archived: row.try_get("archived")?,
+        deleted: row.try_get("deleted")?,
+        updated_at: row.try_get("updated_at")?,
+    })
+}
+
+/// One live mission, or `None` if this account has none by that id.
+pub async fn live_mission(
+    conn: &mut SqliteConnection,
+    user_id: &str,
+    id: &str,
+) -> Result<Option<Mission>, StoreError> {
+    let row = sqlx::query("SELECT * FROM missions WHERE user_id = ?1 AND id = ?2 AND deleted = 0")
+        .bind(user_id)
+        .bind(id)
+        .fetch_optional(conn)
+        .await?;
+    row.as_ref().map(mission_from_row).transpose()
+}
+
+/// Tracked time per mission: inside `[week_start, week_end)` and in
+/// all. A running entry counts up to `now`. Entries of deleted tasks,
+/// and of tasks under no mission, count nowhere.
+pub struct MissionTime {
+    pub mission_id: String,
+    pub week_secs: i64,
+    pub total_secs: i64,
+}
+
+pub async fn mission_times(
+    conn: &mut SqliteConnection,
+    user_id: &str,
+    week_start: i64,
+    week_end: i64,
+    now: i64,
+) -> Result<Vec<MissionTime>, StoreError> {
+    let rows = sqlx::query(
+        "SELECT t.mission_id AS mission_id,
+             SUM(MAX(0, MIN(COALESCE(e.end_ts, ?4), ?3) - MAX(e.start_ts, ?2))) AS week_secs,
+             SUM(MAX(0, COALESCE(e.end_ts, ?4) - e.start_ts)) AS total_secs
+         FROM time_entries e
+         JOIN tasks t ON t.user_id = e.user_id AND t.id = e.task_id
+         WHERE e.user_id = ?1 AND e.deleted = 0 AND t.deleted = 0
+             AND t.mission_id IS NOT NULL
+         GROUP BY t.mission_id",
+    )
+    .bind(user_id)
+    .bind(week_start)
+    .bind(week_end)
+    .bind(now)
+    .fetch_all(conn)
+    .await?;
+    rows.iter()
         .map(|row| {
-            Ok((
-                row.try_get("rev")?,
-                Mission {
-                    id: row.try_get("id")?,
-                    title: row.try_get("title")?,
-                    colour: row.try_get("colour")?,
-                    weekly_goal_secs: row.try_get("weekly_goal_secs")?,
-                    description: row.try_get("description")?,
-                    why: row.try_get("why")?,
-                    starts_on: row.try_get("starts_on")?,
-                    ends_on: row.try_get("ends_on")?,
-                    archived: row.try_get("archived")?,
-                    deleted: row.try_get("deleted")?,
-                    updated_at: row.try_get("updated_at")?,
-                },
-            ))
+            Ok(MissionTime {
+                mission_id: row.try_get("mission_id")?,
+                week_secs: row.try_get("week_secs")?,
+                total_secs: row.try_get("total_secs")?,
+            })
         })
         .collect()
+}
+
+/// The account's running timer, with what the app layout shows of it.
+pub struct RunningTimer {
+    pub start_ts: i64,
+    pub task_title: String,
+    /// `None`: the task is under no mission, or its mission is gone.
+    pub colour: Option<i64>,
+}
+
+pub async fn running_timer(
+    conn: &mut SqliteConnection,
+    user_id: &str,
+) -> Result<Option<RunningTimer>, StoreError> {
+    let row = sqlx::query(
+        "SELECT e.start_ts AS start_ts, t.title AS title, m.colour AS colour
+         FROM time_entries e
+         JOIN tasks t ON t.user_id = e.user_id AND t.id = e.task_id AND t.deleted = 0
+         LEFT JOIN missions m
+             ON m.user_id = t.user_id AND m.id = t.mission_id AND m.deleted = 0
+         WHERE e.user_id = ?1 AND e.end_ts IS NULL AND e.deleted = 0",
+    )
+    .bind(user_id)
+    .fetch_optional(conn)
+    .await?;
+    row.map(|row| {
+        Ok(RunningTimer {
+            start_ts: row.try_get("start_ts")?,
+            task_title: row.try_get("title")?,
+            colour: row.try_get("colour")?,
+        })
+    })
+    .transpose()
+}
+
+pub async fn north_star(
+    conn: &mut SqliteConnection,
+    user_id: &str,
+) -> Result<Option<String>, StoreError> {
+    let stored: Option<Option<String>> =
+        sqlx::query_scalar("SELECT north_star FROM users WHERE id = ?1")
+            .bind(user_id)
+            .fetch_optional(conn)
+            .await?;
+    Ok(stored.flatten())
+}
+
+pub async fn set_north_star(
+    conn: &mut SqliteConnection,
+    user_id: &str,
+    north_star: Option<&str>,
+) -> Result<(), StoreError> {
+    sqlx::query("UPDATE users SET north_star = ?2 WHERE id = ?1")
+        .bind(user_id)
+        .bind(north_star)
+        .execute(conn)
+        .await?;
+    Ok(())
 }
 
 pub async fn tasks_after(

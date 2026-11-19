@@ -312,7 +312,7 @@ mod tests {
             .fetch_one(&pool)
             .await
             .expect("schema_info must have exactly one row");
-        assert_eq!(version, 8);
+        assert_eq!(version, 9);
     }
 
     /// The auth tables must exist and be STRICT, so a value of the wrong
