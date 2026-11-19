@@ -67,6 +67,7 @@ pub mod login;
 pub mod missions;
 pub mod onboarding;
 pub mod overview;
+pub mod plan;
 pub mod qr;
 pub mod today;
 

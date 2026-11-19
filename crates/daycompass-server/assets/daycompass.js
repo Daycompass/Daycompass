@@ -12,7 +12,9 @@
 //   section opened by hand does not close after every write.
 // * data-dc-sortable lists of data-dc-task items can be reordered by
 //   drag and drop: the drop fills the page's form[data-dc-move] and
-//   submits it, and htmx sends it like any other write.
+//   submits it, and htmx sends it like any other write. A task can
+//   also be dropped into another list if both are days of the plan
+//   (data-dc-day, empty for the backlog), which sends that day along.
 //
 // Elements htmx swaps in later are picked up on the next tick.
 "use strict";
@@ -68,9 +70,13 @@
   });
 
   let dragged = null;
+  // The list a drop would land in, or null where it cannot land.
   const target = (event) => {
-    const over = event.target instanceof Element ? event.target.closest("[data-dc-task]") : null;
-    return over && dragged && over !== dragged && over.parentElement === dragged.parentElement ? over : null;
+    const el = event.target instanceof Element ? event.target : null;
+    const list = el?.closest("[data-dc-sortable]");
+    if (!dragged || !list || el.closest("[data-dc-task]") === dragged) return null;
+    const home = dragged.parentElement;
+    return list === home || ("dcDay" in list.dataset && "dcDay" in home.dataset) ? list : null;
   };
   document.addEventListener("dragstart", (event) => {
     dragged = event.target instanceof Element ? event.target.closest("[data-dc-sortable] > [data-dc-task]") : null;
@@ -84,16 +90,22 @@
     if (target(event)) event.preventDefault();
   });
   document.addEventListener("drop", (event) => {
-    const over = target(event);
+    const list = target(event);
     const form = document.querySelector("form[data-dc-move]");
-    if (!over || !form) return;
+    if (!list || !form) return;
     event.preventDefault();
-    const box = over.getBoundingClientRect();
-    const others = [...over.parentElement.children].filter((el) => el !== dragged);
-    const at = others.indexOf(over) + (event.clientY > box.top + box.height / 2 ? 1 : 0);
+    // Before the first task whose middle is below the pointer, so a
+    // drop in a gap or an empty list lands where it looks like it does.
+    const others = [...list.children].filter((el) => el !== dragged);
+    const below = others.findIndex((el) => {
+      const box = el.getBoundingClientRect();
+      return event.clientY < box.top + box.height / 2;
+    });
+    const at = below < 0 ? others.length : below;
     form.elements.task.value = dragged.dataset.dcTask;
     form.elements.after.value = others[at - 1]?.dataset.dcTask ?? "";
     form.elements.before.value = others[at]?.dataset.dcTask ?? "";
+    if (form.elements.day) form.elements.day.value = list.dataset.dcDay;
     form.requestSubmit();
   });
   document.addEventListener("dragend", () => {

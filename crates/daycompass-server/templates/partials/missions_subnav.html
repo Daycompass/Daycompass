@@ -2,5 +2,6 @@
     `subnav_current` names the one shown. #}
 <nav class="dc-subnav" aria-label="Missions">
   <a class="dc-subnav__item" href="/missions/today"{% if subnav_current == "today" %} aria-current="page"{% endif %}>Today</a>
+  <a class="dc-subnav__item" href="/missions/plan"{% if subnav_current == "plan" %} aria-current="page"{% endif %}>Plan</a>
   <a class="dc-subnav__item" href="/missions/manage"{% if subnav_current == "manage" %} aria-current="page"{% endif %}>Manage</a>
 </nav>

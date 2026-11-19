@@ -1252,6 +1252,41 @@ pub const INVENTORY: &[RouteSpec] = &[
         max_body_bytes: None,
         rate_limits: &[],
     },
+    // The caller's own week plan and backlog. Same shape again: the
+    // `task` field only ever names one of the caller's own tasks.
+    RouteSpec {
+        method: "GET",
+        path: "/missions/plan",
+        surface: Surface::Page,
+        access: Access::Session,
+        origin: OriginRule::Checked,
+        csrf: false,
+        sets_session_cookie: false,
+        max_body_bytes: None,
+        rate_limits: &[],
+    },
+    RouteSpec {
+        method: "POST",
+        path: "/missions/plan/tasks",
+        surface: Surface::Page,
+        access: Access::Session,
+        origin: OriginRule::Required,
+        csrf: true,
+        sets_session_cookie: false,
+        max_body_bytes: None,
+        rate_limits: &[],
+    },
+    RouteSpec {
+        method: "POST",
+        path: "/missions/plan/move",
+        surface: Surface::Page,
+        access: Access::Session,
+        origin: OriginRule::Required,
+        csrf: true,
+        sets_session_cookie: false,
+        max_body_bytes: None,
+        rate_limits: &[],
+    },
     // The caller's own account: password change, account log, and a
     // link to `GET /api/v1/export` (not a page route of its own).
     RouteSpec {
@@ -1520,6 +1555,9 @@ pub fn router(state: AppState) -> Router {
     table.add("POST", "/missions/tasks/{id}/start", pages::today::start);
     table.add("POST", "/missions/tasks/{id}/stop", pages::today::stop);
     table.add("POST", "/missions/tasks/{id}/done", pages::today::done);
+    table.add("GET", "/missions/plan", pages::plan::page);
+    table.add("POST", "/missions/plan/tasks", pages::plan::add);
+    table.add("POST", "/missions/plan/move", pages::plan::move_task);
     table.add("GET", "/account", pages::account::page);
     table.add("POST", "/account/password", pages::account::change_password);
     table.add("POST", "/account/timezone", pages::account::change_timezone);
