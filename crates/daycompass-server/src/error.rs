@@ -198,6 +198,11 @@ pub enum ErrorKind {
     DeviceNameCharset,
     /// The time zone was not an IANA name the server knows.
     TimeZoneUnknown,
+
+    // Missions sync.
+    /// The sync cursor is negative or ahead of anything this account
+    /// has issued. The device must start over from 0.
+    SyncCursorInvalid,
 }
 
 impl ErrorKind {
@@ -223,7 +228,8 @@ impl ErrorKind {
             | Self::CategoryLabelCharset
             | Self::StatsRangeInverted
             | Self::StatsRangeTooWide
-            | Self::TimeZoneUnknown => StatusCode::BAD_REQUEST,
+            | Self::TimeZoneUnknown
+            | Self::SyncCursorInvalid => StatusCode::BAD_REQUEST,
             Self::Unauthorized
             | Self::Unauthenticated
             | Self::InvalidCredentials
@@ -303,6 +309,7 @@ impl ErrorKind {
             Self::CategoryRuleLimitReached => "category_rule_limit_reached",
             Self::StatsRangeInverted | Self::StatsRangeTooWide => "invalid_stats_range",
             Self::TimeZoneUnknown => "invalid_timezone",
+            Self::SyncCursorInvalid => "invalid_sync_cursor",
         }
     }
 
@@ -357,7 +364,7 @@ impl ErrorKind {
             Self::PlatformUnknown => {
                 "the platform must be one of android, windows, macos, linux or ios"
             }
-            Self::BatchTooLarge => "this request carries too many events",
+            Self::BatchTooLarge => "this request carries too many records",
             Self::DeviceNameLength => "the device name must be between 1 and 64 characters long",
             Self::DeviceNameCharset => {
                 "the device name may not contain control or text-direction characters"
@@ -392,6 +399,7 @@ impl ErrorKind {
                 "the time range between start_ts and end_ts is wider than this server allows in one request"
             }
             Self::TimeZoneUnknown => "the time zone must be an IANA name such as Europe/Berlin",
+            Self::SyncCursorInvalid => "the sync cursor is not valid; start over from 0",
         }
     }
 }
@@ -450,6 +458,7 @@ pub(crate) const ALL_ERROR_KINDS: &[ErrorKind] = &[
     ErrorKind::StatsRangeInverted,
     ErrorKind::StatsRangeTooWide,
     ErrorKind::TimeZoneUnknown,
+    ErrorKind::SyncCursorInvalid,
 ];
 
 /// Compile-time proof that every code and message is a constant.
