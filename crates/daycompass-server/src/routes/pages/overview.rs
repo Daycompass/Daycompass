@@ -1,9 +1,10 @@
 //! `GET /` - the overview: the caller's own screen time for today and
-//! the last seven days, per category.
+//! the last seven days, per category and per app.
 //!
-//! A read into events, and the same one `GET /api/v1/stats` makes:
-//! [`aggregate::daily_totals`] with the caller's own id, resolved from
-//! the session. No parameter can point it at anyone else, and an admin
+//! A read into events, the same one `GET /api/v1/stats` makes:
+//! [`aggregate::daily_totals`], plus [`aggregate::app_totals`] for the
+//! per-app list, both with the caller's own id, resolved from the
+//! session. No parameter can point it at anyone else, and an admin
 //! sees their own numbers here like everyone else.
 //!
 //! Days are calendar days of the account's own time zone
@@ -19,7 +20,7 @@ use crate::categories::palette;
 use crate::error::{ApiError, ErrorKind};
 use crate::routes::SessionContext;
 use crate::state::AppState;
-use crate::stats::aggregate::{self, DailyCategoryTotal};
+use crate::stats::aggregate::{self, AppTotal, DailyCategoryTotal};
 use crate::timezone;
 
 const DAY_SECS: i64 = 24 * 60 * 60;
@@ -35,6 +36,47 @@ struct OverviewPage {
     week: String,
     zone: String,
     categories: Vec<CategoryRow>,
+    apps: Vec<AppRow>,
+}
+
+/// One app's week, as one bar.
+struct AppRow {
+    /// The label the client reported, or the `app_id` without one.
+    name: String,
+    /// `"<category> · <app_id>"`, so a row with a label still names
+    /// the id a rule would match.
+    caption: String,
+    duration: String,
+    value: i64,
+    max: i64,
+    uncategorized: bool,
+    color: u32,
+}
+
+impl AppRow {
+    fn rows(apps: &[AppTotal]) -> Vec<Self> {
+        let max = apps
+            .iter()
+            .map(|app| app.total_duration_secs)
+            .max()
+            .unwrap_or(0)
+            .max(1);
+        apps.iter()
+            .map(|app| Self {
+                name: app.label.clone().unwrap_or_else(|| app.app_id.clone()),
+                caption: format!(
+                    "{} · {}",
+                    app.category.as_deref().unwrap_or("Uncategorized"),
+                    app.app_id
+                ),
+                duration: format_duration(app.total_duration_secs),
+                value: app.total_duration_secs,
+                max,
+                uncategorized: app.category.is_none(),
+                color: app.category.as_deref().map_or(0, palette::slot_for),
+            })
+            .collect()
+    }
 }
 
 /// One category's week, as one bar.
@@ -77,6 +119,14 @@ pub async fn page(State(state): State<AppState>, session: SessionContext) -> Res
         }
     };
 
+    let apps = match aggregate::app_totals(&state.pool, &auth.user.id, start, end).await {
+        Ok(apps) => apps,
+        Err(err) => {
+            tracing::error!(error = ?err, user_id = %auth.user.id, "aggregating the app list failed");
+            return ApiError::of(ErrorKind::InternalError).into_response();
+        }
+    };
+
     let summary = Summary::of(&days, today_start);
     render(&OverviewPage {
         shell: Shell::for_session(auth, "overview"),
@@ -84,6 +134,7 @@ pub async fn page(State(state): State<AppState>, session: SessionContext) -> Res
         week: format_duration(summary.week_secs),
         zone: zone.as_str().to_owned(),
         categories: summary.rows(),
+        apps: AppRow::rows(&apps),
     })
 }
 

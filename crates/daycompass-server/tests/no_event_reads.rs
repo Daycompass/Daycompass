@@ -9,7 +9,8 @@
 //! path* - but it is still a rule this file checks against the
 //! sources rather than trusting it to be remembered. M5's dashboard
 //! overview, `GET /`, is a fourth, rendering the same aggregation as
-//! `GET /api/v1/stats` for the same caller.
+//! `GET /api/v1/stats` for the same caller, plus a per-app total
+//! (`stats::aggregate::app_totals`) - still the caller's own only.
 //!
 //! An admin still reaches zero event data, full stop: there is no
 //! admin variant of any of them and no id parameter anywhere that
@@ -577,8 +578,8 @@ async fn no_get_other_than_the_owners_events_route_returns_an_event() {
     // Every path in the inventory except the owner's own events
     // route, plus the ones a reader might reasonably expect to exist.
     // `/` is the overview, the admin's own: it does read their events,
-    // but renders only per-category totals, never an app id, label or
-    // domain - so it stays in the sweep and must still show none.
+    // and lists their own apps by id and label, but never a domain - so
+    // it stays in the sweep, showing nothing at all to anyone else.
     let mut paths: Vec<String> = INVENTORY
         .iter()
         .filter(|spec| spec.path != "/api/v1/events" && spec.path != "/api/v1/export")
@@ -617,6 +618,9 @@ async fn no_get_other_than_the_owners_events_route_returns_an_event() {
             let rendered = &response.text;
 
             for needle in needles {
+                if path == "/" && label == "an admin" && needle != "private.example" {
+                    continue;
+                }
                 assert!(
                     !rendered.contains(needle),
                     "GET {path} as {label} returned event data: {needle}"

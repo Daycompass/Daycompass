@@ -9,6 +9,6 @@
 //!
 //! | Topic | Module |
 //! | --- | --- |
-//! | Range validation and the day/category folding | [`aggregate`] |
+//! | Range validation, the day/category folding and per-app totals | [`aggregate`] |
 
 pub mod aggregate;

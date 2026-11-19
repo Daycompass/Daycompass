@@ -266,12 +266,17 @@ async fn the_overview_shows_only_the_callers_own_screen_time() {
                         "start_ts": now - 5000,
                         "duration_secs": 3600 + 14 * 60,
                         "app_id": "org.example.game",
-                        "label": "A Very Private Thing",
+                        "label": "<i>A Very Private Thing</i>",
+                    }, {
+                        "event_id": "0123456789abcdef0123456789abcde0",
+                        "start_ts": now - 9000,
+                        "duration_secs": 600,
+                        "app_id": "com.whatsapp",
                     }],
                 })),
         )
         .await;
-    assert_eq!(ingested.body["accepted"], 1, "{:?}", ingested.body);
+    assert_eq!(ingested.body["accepted"], 2, "{:?}", ingested.body);
 
     let own = app.send(TestRequest::get("/").cookie(&admin.cookie)).await;
     assert_eq!(own.status, StatusCode::OK);
@@ -285,15 +290,31 @@ async fn the_overview_shows_only_the_callers_own_screen_time() {
         "the category was not escaped"
     );
     assert!(own.text.contains("1h 14m"), "{}", own.text);
-    // Totals per category only: never the app id or the label.
-    assert!(!own.text.contains("org.example.game"));
-    assert!(!own.text.contains("A Very Private Thing"));
+    // Every app of the caller's own, by label (escaped) or by app id,
+    // with its category - a built-in one without a rule.
+    assert!(own.text.contains("org.example.game"), "{}", own.text);
+    assert!(
+        own.text
+            .contains("&#60;i&#62;A Very Private Thing&#60;/i&#62;"),
+        "{}",
+        own.text
+    );
+    assert!(!own.text.contains("<i>A Very Private Thing</i>"));
+    assert!(
+        own.text.contains("Communication · com.whatsapp"),
+        "{}",
+        own.text
+    );
 
     let bobs = app.send(TestRequest::get("/").cookie(&bob.cookie)).await;
     assert_eq!(bobs.status, StatusCode::OK);
     assert!(
         !bobs.text.contains("Games"),
         "another account's category leaked"
+    );
+    assert!(
+        !bobs.text.contains("org.example.game") && !bobs.text.contains("Private Thing"),
+        "another account's apps leaked"
     );
     assert!(bobs.text.contains("Nothing tracked yet"));
 }

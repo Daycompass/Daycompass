@@ -36,6 +36,18 @@
     </ul>
     <p class="dc-caption">Days are counted in {{ zone }}.</p>
   </section>
+  <section class="dc-card dc-stack">
+    <h2 class="dc-heading-3">By app, last 7 days</h2>
+    <ul class="dc-bars">
+      {% for row in apps %}
+      <li class="dc-bars__row">
+        <span class="dc-bars__name">{{ row.name }}<br><span class="dc-caption">{{ row.caption }}</span></span>
+        <span class="dc-bars__value">{{ row.duration }}</span>
+        <progress class="dc-bar {% if row.uncategorized %}dc-bar--neutral{% else %}dc-bar--c{{ row.color }}{% endif %}" value="{{ row.value }}" max="{{ row.max }}" aria-label="{{ row.name }}: {{ row.duration }}"></progress>
+      </li>
+      {% endfor %}
+    </ul>
+  </section>
 </div>
 {% endif %}
 {% endblock %}
