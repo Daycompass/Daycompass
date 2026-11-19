@@ -429,3 +429,28 @@ still show everything as of loading.
 Categories moved from the main navigation to a link on the account
 page, so the phone's bottom bar keeps four entries: Overview, Missions,
 Devices, Account.
+
+The Focus page (`/missions/focus`) shows one of today's tasks: the
+open one whose timer runs, or else the first open one in the order
+Today lists them (tasks under a mission, then "Other"). It has no write
+routes of its own: it sends the Today page's writes with
+`?view=focus`, which only changes which block the answer renders. Two
+writes came with it, both usable from Today as well: notes, and "move
+to tomorrow", which puts the task at the end of tomorrow and leaves a
+running timer alone, as a move on the Plan page does. Notes are saved
+on leaving the field without swapping the page, and the card queues
+its requests (`hx-sync`), so notes typed just before "Complete" are
+written before the completion reads the task - two whole-record
+writes racing would otherwise drop the notes.
+
+Keyboard shortcuts, the Ctrl/Cmd+K command menu and the completion
+chime are `daycompass.js` again, still without a request of their own:
+a shortcut presses a button the server rendered (marked `data-dc-key`),
+a command is a link or a button. The menu's entries are rendered into
+the layout, admin entries for admins only, like the sidebar. The chime
+is synthesized with the Web Audio API, so there is no sound file to
+serve. Whether it plays is kept in the browser's `localStorage`, not on
+the account: it is about the device in front of you (a classroom, a
+library), and keeping it client-side needs no column and no route. The
+completion animation is skipped when the device asks for reduced
+motion.
