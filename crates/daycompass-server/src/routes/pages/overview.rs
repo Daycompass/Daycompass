@@ -9,6 +9,10 @@
 //!
 //! Days are calendar days of the account's own time zone
 //! (`crate::timezone`), and the page names the zone it counted in.
+//!
+//! Above the screen time, an account with active missions also gets
+//! its mission hours ([`service::mission_hours`]), linking to the
+//! Missions tab.
 
 use askama::Template;
 use axum::extract::State;
@@ -18,6 +22,7 @@ use super::{format_duration, render, Shell};
 use crate::auth::time::UnixTime;
 use crate::categories::palette;
 use crate::error::{ApiError, ErrorKind};
+use crate::missions::service;
 use crate::routes::SessionContext;
 use crate::state::AppState;
 use crate::stats::aggregate::{self, AppTotal, DailyCategoryTotal};
@@ -37,6 +42,15 @@ struct OverviewPage {
     zone: String,
     categories: Vec<CategoryRow>,
     apps: Vec<AppRow>,
+    mission_hours: Option<MissionHoursCard>,
+}
+
+struct MissionHoursCard {
+    today: String,
+    week: String,
+    week_secs: i64,
+    goal: String,
+    goal_secs: i64,
 }
 
 /// One app's week, as one bar.
@@ -127,6 +141,29 @@ pub async fn page(State(state): State<AppState>, session: SessionContext) -> Res
         }
     };
 
+    let hours = match service::mission_hours(
+        &state.pool,
+        &auth.user.id,
+        (today_start, end),
+        zone.week_bounds(now),
+        UnixTime::from_secs(now),
+    )
+    .await
+    {
+        Ok(hours) => hours,
+        Err(err) => {
+            tracing::error!(error = %err, user_id = %auth.user.id, "reading mission hours failed");
+            return ApiError::of(ErrorKind::InternalError).into_response();
+        }
+    };
+    let mission_hours = (hours.active > 0).then(|| MissionHoursCard {
+        today: format_duration(hours.today_secs),
+        week: format_duration(hours.week_secs),
+        week_secs: hours.week_secs,
+        goal: format_duration(hours.week_goal_secs),
+        goal_secs: hours.week_goal_secs,
+    });
+
     let summary = Summary::of(&days, today_start);
     render(&OverviewPage {
         shell: Shell::load(&state.pool, auth, "overview").await,
@@ -135,6 +172,7 @@ pub async fn page(State(state): State<AppState>, session: SessionContext) -> Res
         zone: zone.as_str().to_owned(),
         categories: summary.rows(),
         apps: AppRow::rows(&apps),
+        mission_hours,
     })
 }
 

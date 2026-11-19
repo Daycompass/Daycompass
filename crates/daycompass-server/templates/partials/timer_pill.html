@@ -1,0 +1,6 @@
+{#- #dc-timer: the running timer, on every page. Always there, empty
+    without a timer, so an htmx answer can replace it out of band. Not a
+    live region: it changes every second. #}
+<div id="dc-timer"{% if oob %} hx-swap-oob="true"{% endif %}>
+{%- if let Some(timer) = timer %}<a class="dc-timer" href="/missions/today"><span class="dc-swatch {% if let Some(colour) = timer.colour %}dc-swatch--c{{ colour }}{% else %}dc-swatch--neutral{% endif %}" aria-hidden="true"></span><span class="dc-visually-hidden">Timer running:</span><span class="dc-timer__title">{{ timer.task_title }}</span><span class="dc-timer__clock" data-dc-elapsed="{{ timer.elapsed_secs }}">{{ timer.elapsed() }}</span></a>{% endif -%}
+</div>

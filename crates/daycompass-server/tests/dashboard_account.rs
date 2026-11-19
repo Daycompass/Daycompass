@@ -343,6 +343,7 @@ async fn every_page_renders_without_inline_script_or_style() {
     for path in [
         "/",
         "/devices",
+        "/missions/today",
         "/missions/manage",
         "/category-rules",
         "/account",

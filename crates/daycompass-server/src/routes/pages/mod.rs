@@ -10,10 +10,13 @@
 //! # What the browser runs
 //!
 //! Two scripts, both served from this binary: `htmx`, and
-//! `assets/daycompass.js`, first-party vanilla JavaScript that ticks
-//! live timers and does nothing else - it reads a `data-dc-elapsed`
-//! attribute and changes text, never the DOM's structure, and makes no
-//! requests. The Content-Security-Policy (in [`crate::middleware`])
+//! `assets/daycompass.js`, first-party vanilla JavaScript with four
+//! small jobs, each keyed on a data attribute the server rendered:
+//! ticking live timers, growing the timeline's running block, keeping
+//! `<details>` open across htmx swaps, and drag and drop of tasks. It
+//! makes no request of its own - a drop fills in a form and submits
+//! it, and htmx sends it, CSRF token and all, like any other write.
+//! The Content-Security-Policy (in [`crate::middleware`])
 //! allows scripts, styles, fonts and images from this origin only, and
 //! no inline script or style at all; neither script needed it changed.
 //! htmx is configured accordingly from a `<meta name="htmx-config">`
@@ -65,6 +68,7 @@ pub mod missions;
 pub mod onboarding;
 pub mod overview;
 pub mod qr;
+pub mod today;
 
 use askama::Template;
 use axum::extract::Request;
@@ -276,9 +280,27 @@ pub struct TimerPill {
 }
 
 impl TimerPill {
+    pub fn new(timer: crate::missions::store::RunningTimer, now: i64) -> Self {
+        Self {
+            task_title: timer.task_title,
+            colour: timer.colour,
+            elapsed_secs: (now - timer.start_ts).max(0),
+        }
+    }
+
     pub fn elapsed(&self) -> String {
         format_clock(self.elapsed_secs)
     }
+}
+
+/// The pill's slot in the layout, `#dc-timer`. Always there, empty
+/// without a timer, so an htmx answer can replace it out of band.
+#[derive(Template)]
+#[template(path = "partials/timer_pill.html")]
+pub struct TimerSlot {
+    pub timer: Option<TimerPill>,
+    /// Swapped in out of band, as part of an htmx answer.
+    pub oob: bool,
 }
 
 impl Shell {
@@ -302,11 +324,7 @@ impl Shell {
             csrf_token: auth.csrf_token(),
             current,
             is_admin: auth.user.role.is_admin(),
-            timer: timer.map(|timer| TimerPill {
-                task_title: timer.task_title,
-                colour: timer.colour,
-                elapsed_secs: (now - timer.start_ts).max(0),
-            }),
+            timer: timer.map(|timer| TimerPill::new(timer, now)),
         }
     }
 }
