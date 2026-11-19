@@ -381,7 +381,10 @@ async fn missions_are_in_the_navigation_and_categories_on_the_account_page() {
 
     let overview = page(&app, "/", &admin).await.text;
     assert!(overview.contains(r#"href="/missions/today""#));
-    assert!(!overview.contains(r#"href="/category-rules""#));
+    // Not in the navigation; the command menu, rendered after it, may
+    // still lead there.
+    let navigation = overview.split(r#"<dialog id="dc-command""#).next();
+    assert!(!navigation.unwrap().contains(r#"href="/category-rules""#));
     assert!(page(&app, "/account", &admin)
         .await
         .text
