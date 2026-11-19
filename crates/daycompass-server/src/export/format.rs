@@ -20,14 +20,15 @@ use crate::categories::store::CategoryRuleRecord;
 use crate::devices::store::DeviceRecord;
 use crate::events::store::QueriedEvent;
 use crate::missions::validate::{
-    Mission as MissionRecord, Task as TaskRecord, TimeEntry as TimeEntryRecord,
+    Mission as MissionRecord, Review as ReviewRecord, ReviewGoal as ReviewGoalRecord,
+    Task as TaskRecord, TimeEntry as TimeEntryRecord,
 };
 
 /// The value of the document's `format` field.
 pub const FORMAT_NAME: &str = "daycompass-export";
 
 /// Bumped on any change to the document's shape.
-pub const FORMAT_VERSION: u32 = 2;
+pub const FORMAT_VERSION: u32 = 3;
 
 /// Everything before `events`, serialized in one go.
 ///
@@ -45,6 +46,7 @@ pub struct Head {
     pub missions: Vec<Mission>,
     pub tasks: Vec<Task>,
     pub time_entries: Vec<TimeEntry>,
+    pub reviews: Vec<Review>,
 }
 
 /// The account itself. No password hash, no status: the first is a
@@ -214,6 +216,46 @@ impl From<TimeEntryRecord> for TimeEntry {
     }
 }
 
+/// A weekly review. Deleted ones are not exported, like missions.
+#[derive(Serialize, ToSchema)]
+pub struct Review {
+    /// The week's Monday.
+    pub week_start: String,
+    pub went_well: Option<String>,
+    pub went_badly: Option<String>,
+    pub change_next: Option<String>,
+    pub goals: Vec<ReviewGoal>,
+    pub updated_at: i64,
+}
+
+#[derive(Serialize, ToSchema)]
+pub struct ReviewGoal {
+    pub mission_id: String,
+    pub weekly_goal_secs: i64,
+}
+
+impl From<ReviewRecord> for Review {
+    fn from(r: ReviewRecord) -> Self {
+        Self {
+            week_start: r.week_start,
+            went_well: r.went_well,
+            went_badly: r.went_badly,
+            change_next: r.change_next,
+            goals: r.goals.into_iter().map(ReviewGoal::from).collect(),
+            updated_at: r.updated_at,
+        }
+    }
+}
+
+impl From<ReviewGoalRecord> for ReviewGoal {
+    fn from(g: ReviewGoalRecord) -> Self {
+        Self {
+            mission_id: g.mission_id,
+            weekly_goal_secs: g.weekly_goal_secs,
+        }
+    }
+}
+
 /// One event, exactly as reported. No `category` - see the module doc.
 #[derive(Serialize, ToSchema)]
 pub struct Event<'a> {
@@ -264,6 +306,7 @@ pub struct Document {
     pub missions: Vec<Mission>,
     pub tasks: Vec<Task>,
     pub time_entries: Vec<TimeEntry>,
+    pub reviews: Vec<Review>,
     pub events: Vec<Event<'static>>,
     /// Always `true`, and always the last field. Missing means the
     /// export was cut off and must be discarded.

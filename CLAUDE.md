@@ -107,10 +107,12 @@ events only, nothing else. Refused at startup if shorter than
 `0008_missions.sql`): device auth, push and pull in one call. Last
 write wins per record on the client's `updated_at`; a tie goes to the
 later arrival. Deletes are tombstones that keep no text. One counter,
-`users.missions_rev`, orders all three tables for the cursor. One
-running timer per account: the entry that started earlier is ended,
-backed by a partial unique index. Details: `docs/wire-format.md`,
-`docs/design-decisions.md`.
+`users.missions_rev`, orders all four tables (missions, tasks,
+time_entries, reviews) for the cursor. One running timer per account:
+the entry that started earlier is ended, backed by a partial unique
+index. A review (`0010_reviews.sql`) is keyed by its week's Monday,
+not an id, and keeps a snapshot of the goals it was measured against.
+Details: `docs/wire-format.md`, `docs/design-decisions.md`.
 
 ## Rate-limit defaults
 

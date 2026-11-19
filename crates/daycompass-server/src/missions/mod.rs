@@ -1,5 +1,6 @@
-//! Missions: an account's own goals, the tasks under them and the time
-//! tracked on those tasks, synced between the account's devices.
+//! Missions: an account's own goals, the tasks under them, the time
+//! tracked on those tasks and the weekly reviews of it, synced between
+//! the account's devices.
 //!
 //! The service layer behind `POST /api/v1/missions/sync` and the
 //! dashboard's missions pages. As everywhere else, nothing here knows
@@ -7,11 +8,11 @@
 //!
 //! | Topic | Module |
 //! | --- | --- |
-//! | The three record types, every per-record rule, the closed set of refusal reasons | [`validate`] |
-//! | Every SQL statement that names `missions`, `tasks` or `time_entries` | [`store`] |
+//! | The four record types, every per-record rule, the closed set of refusal reasons | [`validate`] |
+//! | Every SQL statement that names `missions`, `tasks`, `time_entries` or `reviews` | [`store`] |
 //! | Last write wins, tombstones, the running timer, the cursor | [`sync`] |
 //! | Keys that put a task between two others | [`position`] |
-//! | The dashboard's reads and writes, the North Star | [`service`] |
+//! | The dashboard's reads and writes, the North Star, the weekly review | [`service`] |
 //!
 //! # The sync model
 //!
@@ -23,7 +24,7 @@
 //! response, so every device converges on what the server holds.
 //!
 //! Every write takes the next value of the account's `missions_rev`, a
-//! counter shared by all three tables. A device pulls "everything after
+//! counter shared by all four tables. A device pulls "everything after
 //! the rev I last saw", in pages, and keeps the returned cursor.
 //!
 //! A delete is a tombstone, so other devices learn of it. A tombstone

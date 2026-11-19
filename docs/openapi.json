@@ -446,6 +446,12 @@
             },
             "type": "array"
           },
+          "reviews": {
+            "items": {
+              "$ref": "#/components/schemas/Review"
+            },
+            "type": "array"
+          },
           "tasks": {
             "items": {
               "$ref": "#/components/schemas/Task"
@@ -470,6 +476,7 @@
           "missions",
           "tasks",
           "time_entries",
+          "reviews",
           "events",
           "complete"
         ],
@@ -504,6 +511,7 @@
                   "invalid_pairing_code",
                   "invalid_password",
                   "invalid_platform",
+                  "invalid_review",
                   "invalid_role",
                   "invalid_setup_token",
                   "invalid_stats_range",
@@ -1081,6 +1089,131 @@
         ],
         "type": "object"
       },
+      "Review": {
+        "properties": {
+          "change_next": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "goals": {
+            "items": {
+              "$ref": "#/components/schemas/ReviewGoal"
+            },
+            "type": "array"
+          },
+          "updated_at": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "week_start": {
+            "description": "The week's Monday.",
+            "type": "string"
+          },
+          "went_badly": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "went_well": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "week_start",
+          "goals",
+          "updated_at"
+        ],
+        "type": "object"
+      },
+      "ReviewGoal": {
+        "properties": {
+          "mission_id": {
+            "type": "string"
+          },
+          "weekly_goal_secs": {
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "mission_id",
+          "weekly_goal_secs"
+        ],
+        "type": "object"
+      },
+      "ReviewGoalRecord": {
+        "additionalProperties": false,
+        "properties": {
+          "mission_id": {
+            "type": "string"
+          },
+          "weekly_goal_secs": {
+            "description": "0 means no goal.",
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "mission_id",
+          "weekly_goal_secs"
+        ],
+        "type": "object"
+      },
+      "ReviewRecord": {
+        "additionalProperties": false,
+        "properties": {
+          "change_next": {
+            "description": "What changes next week.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "deleted": {
+            "type": "boolean"
+          },
+          "goals": {
+            "description": "The weekly goals the week is measured against, taken when the\nreview is first written.",
+            "items": {
+              "$ref": "#/components/schemas/ReviewGoalRecord"
+            },
+            "type": "array"
+          },
+          "updated_at": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "week_start": {
+            "description": "The week's Monday, `YYYY-MM-DD`, in the account's time zone.",
+            "type": "string"
+          },
+          "went_badly": {
+            "description": "What went badly, and why.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "went_well": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "week_start",
+          "deleted",
+          "updated_at"
+        ],
+        "type": "object"
+      },
       "RuleListResponse": {
         "properties": {
           "rules": {
@@ -1217,6 +1350,12 @@
             },
             "type": "array"
           },
+          "reviews": {
+            "items": {
+              "$ref": "#/components/schemas/ReviewRecord"
+            },
+            "type": "array"
+          },
           "tasks": {
             "items": {
               "$ref": "#/components/schemas/TaskRecord"
@@ -1233,7 +1372,8 @@
         "required": [
           "missions",
           "tasks",
-          "time_entries"
+          "time_entries",
+          "reviews"
         ],
         "type": "object"
       },
@@ -1248,6 +1388,12 @@
           "missions": {
             "items": {
               "$ref": "#/components/schemas/MissionRecord"
+            },
+            "type": "array"
+          },
+          "reviews": {
+            "items": {
+              "$ref": "#/components/schemas/ReviewRecord"
             },
             "type": "array"
           },
@@ -1309,6 +1455,12 @@
             },
             "type": "array"
           },
+          "reviews": {
+            "items": {
+              "$ref": "#/components/schemas/RecordResult"
+            },
+            "type": "array"
+          },
           "tasks": {
             "items": {
               "$ref": "#/components/schemas/RecordResult"
@@ -1325,7 +1477,8 @@
         "required": [
           "missions",
           "tasks",
-          "time_entries"
+          "time_entries",
+          "reviews"
         ],
         "type": "object"
       },
