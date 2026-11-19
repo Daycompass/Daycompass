@@ -33,6 +33,8 @@ use crate::timezone::{self, TimeZoneName};
 struct AccountPage {
     shell: Shell,
     is_admin: bool,
+    /// [`crate::build::label`], shown to admins.
+    version: String,
     form: PasswordForm,
     timezone_form: String,
     review_day_form: ReviewDayForm,
@@ -191,6 +193,7 @@ pub async fn page(State(state): State<AppState>, session: SessionContext) -> Res
     render(&AccountPage {
         shell: Shell::load(&state.pool, auth, "account").await,
         is_admin: auth.user.role.is_admin(),
+        version: crate::build::label(),
         form: PasswordForm { changed: None },
         timezone_form,
         review_day_form: ReviewDayForm::new(review_day, false),

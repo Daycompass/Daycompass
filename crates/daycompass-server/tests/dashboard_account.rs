@@ -475,3 +475,32 @@ async fn a_category_has_the_same_colour_in_the_rule_list_and_on_the_overview() {
     }
     assert!(!css.contains(&format!("--cat-{SLOTS}:")));
 }
+
+/// An admin sees which version runs, with links to compare it; an
+/// ordinary account, which cannot update the server, does not.
+#[tokio::test]
+async fn only_an_admin_sees_the_server_version() {
+    let app = TestApp::new().await;
+    let (_credentials, admin) = app.provisioned_admin().await;
+    let (_id, credentials) = app.create_account(&admin, "carol", "user").await;
+    let carol = app.log_in(&credentials).await;
+    let version = format!("Daycompass {}", env!("CARGO_PKG_VERSION"));
+
+    let text = page(&app, "/account", &admin).await.text;
+    assert!(text.contains(&version), "{text}");
+    assert!(
+        text.contains("never checks for updates on its own"),
+        "{text}"
+    );
+
+    let text = page(&app, "/account", &carol).await.text;
+    assert!(!text.contains(&version), "{text}");
+
+    // Not on the anonymous health check either.
+    let health = app.send(TestRequest::get("/healthz")).await;
+    assert!(
+        !health.text.contains(env!("CARGO_PKG_VERSION")),
+        "{}",
+        health.text
+    );
+}

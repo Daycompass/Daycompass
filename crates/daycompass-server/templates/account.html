@@ -47,6 +47,13 @@
     <p class="dc-muted">Manage accounts and devices on this server. You never see anyone else's screen time.</p>
     <div class="dc-list__actions"><a class="dc-btn dc-btn--neutral" href="/admin/users">Accounts</a><a class="dc-btn dc-btn--neutral" href="/admin/devices">All devices</a></div>
   </section>
+  <section class="dc-card dc-stack">
+    <h2 class="dc-heading-3">Server version</h2>
+    <p class="dc-stat__value">Daycompass {{ version }}</p>
+    {#- No request is made to find out more: the server has no outgoing
+        connections, so the admin compares by following these links. #}
+    <p class="dc-muted">This server never checks for updates on its own. Compare this version with the newest <a href="https://github.com/Daycompass/Daycompass/releases" rel="noopener noreferrer">release</a> or <a href="https://github.com/Daycompass/Daycompass/commits/main" rel="noopener noreferrer">commit</a>, and update as described under <a href="https://github.com/Daycompass/Daycompass/blob/main/docs/guide.md#updating" rel="noopener noreferrer">Updating</a> in the guide.</p>
+  </section>
   {% endif %}
   <section class="dc-card dc-stack">
     <h2 class="dc-heading-3">Log out</h2>

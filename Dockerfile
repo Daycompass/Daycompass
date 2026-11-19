@@ -1,6 +1,8 @@
 # Daycompass server: one binary, one container.
 #
 # Build:  podman build -t daycompass .     (or `docker build`)
+#         Add `--build-arg DAYCOMPASS_BUILD_COMMIT=$(git rev-parse --short HEAD)`
+#         to show the commit next to the version on the dashboard.
 # Run:    see docs/guide.md, "Running in a container".
 #
 # Both base images are pinned by digest, so a rebuild uses exactly the
@@ -18,6 +20,12 @@ FROM docker.io/library/rust:1.99.1-slim-trixie@sha256:f6c4a35d21dbb3c89d7a8d056c
 WORKDIR /src
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
+
+# The commit to show next to the version (see `crate::build`). Optional:
+# `.git` is not in the build context, so it has to be passed in. A build
+# argument is visible to the `RUN` below, and only at compile time - it
+# is not in the runtime image's environment.
+ARG DAYCOMPASS_BUILD_COMMIT=
 
 # `--locked`: the lockfile is the dependency set CI and `cargo deny`
 # checked, never a fresh resolution. SQLite is compiled from source
