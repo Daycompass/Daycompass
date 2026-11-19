@@ -125,7 +125,7 @@ fn colour_choices(selected: i64) -> Vec<ColourChoice> {
 }
 
 /// `7.5` for a goal of 7 h 30 min; empty for no goal.
-fn goal_hours(secs: i64) -> String {
+pub(super) fn goal_hours(secs: i64) -> String {
     if secs == 0 {
         return String::new();
     }
@@ -246,28 +246,33 @@ impl MissionFormData {
     /// `None` if the goal is not a number of hours; everything else is
     /// left to the service's validation.
     fn into_fields(self) -> Option<MissionFields> {
-        let hours = self.weekly_goal_hours.trim();
-        let hours: f64 = if hours.is_empty() {
-            0.0
-        } else {
-            hours.parse().ok()?
-        };
-        if !hours.is_finite() || hours < 0.0 {
-            return None;
-        }
-        // Saturates on overflow, which validation then refuses.
-        #[allow(clippy::cast_possible_truncation)]
-        let weekly_goal_secs = (hours * 3600.0).round() as i64;
         Some(MissionFields {
+            weekly_goal_secs: goal_secs(&self.weekly_goal_hours)?,
             title: self.title,
             colour: self.colour,
-            weekly_goal_secs,
             description: text(self.description),
             why: text(self.why),
             starts_on: optional(self.starts_on),
             ends_on: optional(self.ends_on),
         })
     }
+}
+
+/// A weekly goal typed in hours, in seconds; empty is no goal. `None`
+/// if it is not a number of hours. The range is left to validation.
+pub(super) fn goal_secs(raw: &str) -> Option<i64> {
+    let hours = raw.trim();
+    let hours: f64 = if hours.is_empty() {
+        0.0
+    } else {
+        hours.parse().ok()?
+    };
+    if !hours.is_finite() || hours < 0.0 {
+        return None;
+    }
+    // Saturates on overflow, which validation then refuses.
+    #[allow(clippy::cast_possible_truncation)]
+    Some((hours * 3600.0).round() as i64)
 }
 
 /// Browsers send a textarea's line breaks as CRLF; the stored form is LF.

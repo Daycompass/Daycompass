@@ -16,6 +16,9 @@
   {% if left_from_yesterday > 0 %}
   <div class="dc-banner dc-banner--info">{% call icons::icon("info") %}{% endcall %}<div class="dc-inline-form"><span>{{ left_from_yesterday }} {% if left_from_yesterday == 1 %}task{% else %}tasks{% endif %} left from yesterday</span><button class="dc-btn dc-btn--neutral dc-btn--sm" type="button" hx-post="/missions/today/carry-over{{ query }}" hx-target="#today" hx-swap="outerHTML">Move to today</button></div></div>
   {% endif %}
+  {% if let Some(week) = review_due %}
+  <div class="dc-banner dc-banner--info">{% call icons::icon("info") %}{% endcall %}<div class="dc-inline-form"><span>It's review day.</span><a class="dc-btn dc-btn--neutral dc-btn--sm" href="/missions/review?week={{ week }}">Review the week</a></div></div>
+  {% endif %}
   {% if chips.len() > 1 %}
   <nav class="dc-subnav dc-subnav--chips" aria-label="Filter by mission">
     {% for chip in chips %}<a class="dc-subnav__item" href="{{ chip.href }}"{% if chip.current %} aria-current="true"{% endif %}>{% if let Some(colour) = chip.colour %}<span class="dc-swatch dc-swatch--c{{ colour }}" aria-hidden="true"></span>{% endif %}{{ chip.title }}</a>{% endfor %}

@@ -52,6 +52,8 @@ struct TodayContent {
     week_goal: String,
     week_goal_secs: i64,
     left_from_yesterday: usize,
+    /// On the review day: the Monday of the week still to review.
+    review_due: Option<String>,
     chips: Vec<Chip>,
     choices: Vec<Choice>,
     /// Tasks under a mission, then tasks under none ("Other").
@@ -172,8 +174,13 @@ async fn content(
     let data = service::today_of(&state.pool, user_id, &day, now)
         .await
         .map_err(|err| internal(&err, "reading today's tasks"))?;
+    let review_due = service::review_due(&state.pool, user_id, date)
+        .await
+        .map_err(|err| internal(&err, "reading the review day"))?;
     let heading = date.strftime("%A, %-d %B").to_string();
-    Ok((build(data, &day, &zone, filter, now, htmx), heading))
+    let mut content = build(data, &day, &zone, filter, now, htmx);
+    content.review_due = review_due;
+    Ok((content, heading))
 }
 
 fn build(
@@ -268,6 +275,7 @@ fn build(
         week_goal: format_duration(hours.week_goal_secs),
         week_goal_secs: hours.week_goal_secs,
         left_from_yesterday,
+        review_due: None,
         chips,
         choices,
         open,
@@ -627,6 +635,7 @@ mod tests {
         let entry = |start, end| TrackedEntry {
             id: String::new(),
             task_id: String::new(),
+            mission_id: None,
             start_ts: start,
             end_ts: end,
             task_title: "Exercise 4".to_owned(),

@@ -546,6 +546,9 @@ pub async fn live_entry(
 pub struct TrackedEntry {
     pub id: String,
     pub task_id: String,
+    /// `None`: the task is under no mission, or its mission is gone -
+    /// so the entry is not Mission Hours.
+    pub mission_id: Option<String>,
     pub start_ts: i64,
     /// `None` while it runs.
     pub end_ts: Option<i64>,
@@ -564,7 +567,7 @@ pub async fn entries_overlapping(
 ) -> Result<Vec<TrackedEntry>, StoreError> {
     let rows = sqlx::query(
         "SELECT e.id AS id, e.task_id AS task_id, e.start_ts AS start_ts,
-             e.end_ts AS end_ts, t.title AS title, m.colour AS colour
+             e.end_ts AS end_ts, t.title AS title, m.id AS mission_id, m.colour AS colour
          FROM time_entries e
          JOIN tasks t ON t.user_id = e.user_id AND t.id = e.task_id AND t.deleted = 0
          LEFT JOIN missions m
@@ -584,6 +587,7 @@ pub async fn entries_overlapping(
             Ok(TrackedEntry {
                 id: row.try_get("id")?,
                 task_id: row.try_get("task_id")?,
+                mission_id: row.try_get("mission_id")?,
                 start_ts: row.try_get("start_ts")?,
                 end_ts: row.try_get("end_ts")?,
                 task_title: row.try_get("title")?,

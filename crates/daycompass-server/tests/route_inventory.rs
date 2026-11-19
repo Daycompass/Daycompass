@@ -334,6 +334,10 @@ impl Fixture {
             ("POST", "/missions/plan/move") => {
                 Some(vec![("task", target_id.to_owned()), ("day", String::new())])
             }
+            ("POST", "/missions/review") => Some(vec![("went_well", "Probe".to_owned())]),
+            // No goal fields: the review is written, no mission changes.
+            ("POST", "/missions/review/goals") => Some(Vec::new()),
+            ("POST", "/account/review-day") => Some(vec![("day", "7".to_owned())]),
             ("POST", "/missions/log/entries") => Some(probe_span(target_id.to_owned())),
             // Corrected onto the task it is already on.
             ("POST", "/missions/log/entries/{id}") => {

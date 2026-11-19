@@ -1380,6 +1380,54 @@ pub const INVENTORY: &[RouteSpec] = &[
         max_body_bytes: None,
         rate_limits: &[],
     },
+    // The caller's own weekly review: the week's numbers, the review's
+    // answers and next week's goals, and the week as a Markdown file.
+    // No `{id}`: the week is the key, and a goal field only ever names
+    // one of the caller's own missions.
+    RouteSpec {
+        method: "GET",
+        path: "/missions/review",
+        surface: Surface::Page,
+        access: Access::Session,
+        origin: OriginRule::Checked,
+        csrf: false,
+        sets_session_cookie: false,
+        max_body_bytes: None,
+        rate_limits: &[],
+    },
+    RouteSpec {
+        method: "POST",
+        path: "/missions/review",
+        surface: Surface::Page,
+        access: Access::Session,
+        origin: OriginRule::Required,
+        csrf: true,
+        sets_session_cookie: false,
+        max_body_bytes: None,
+        rate_limits: &[],
+    },
+    RouteSpec {
+        method: "POST",
+        path: "/missions/review/goals",
+        surface: Surface::Page,
+        access: Access::Session,
+        origin: OriginRule::Required,
+        csrf: true,
+        sets_session_cookie: false,
+        max_body_bytes: None,
+        rate_limits: &[],
+    },
+    RouteSpec {
+        method: "GET",
+        path: "/missions/review/markdown",
+        surface: Surface::Page,
+        access: Access::Session,
+        origin: OriginRule::Checked,
+        csrf: false,
+        sets_session_cookie: false,
+        max_body_bytes: None,
+        rate_limits: &[],
+    },
     // The caller's own account: password change, account log, and a
     // link to `GET /api/v1/export` (not a page route of its own).
     RouteSpec {
@@ -1406,6 +1454,17 @@ pub const INVENTORY: &[RouteSpec] = &[
         sets_session_cookie: false,
         max_body_bytes: None,
         rate_limits: &[RateLimit::new(Bucket::PwChange, LimitKey::Session)],
+    },
+    RouteSpec {
+        method: "POST",
+        path: "/account/review-day",
+        surface: Surface::Page,
+        access: Access::Session,
+        origin: OriginRule::Required,
+        csrf: true,
+        sets_session_cookie: false,
+        max_body_bytes: None,
+        rate_limits: &[],
     },
     RouteSpec {
         method: "POST",
@@ -1667,9 +1726,22 @@ pub fn router(state: AppState) -> Router {
         pages::log::delete,
     );
     table.add("POST", "/missions/log/entries/{id}/stop", pages::log::stop);
+    table.add("GET", "/missions/review", pages::review::page);
+    table.add("POST", "/missions/review", pages::review::save);
+    table.add("POST", "/missions/review/goals", pages::review::set_goals);
+    table.add(
+        "GET",
+        "/missions/review/markdown",
+        pages::review::markdown_file,
+    );
     table.add("GET", "/account", pages::account::page);
     table.add("POST", "/account/password", pages::account::change_password);
     table.add("POST", "/account/timezone", pages::account::change_timezone);
+    table.add(
+        "POST",
+        "/account/review-day",
+        pages::account::change_review_day,
+    );
     table.add("GET", "/setup", pages::onboarding::setup_page);
     table.add("POST", "/setup", pages::onboarding::submit_setup);
     table.add("GET", "/invite", pages::onboarding::invite_page);
