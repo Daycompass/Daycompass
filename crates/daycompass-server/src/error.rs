@@ -211,6 +211,11 @@ pub enum ErrorKind {
     /// `missions::validate::mission`.
     MissionInvalid,
     NorthStarInvalid,
+    /// A task title broke the rules in `missions::validate::task`.
+    TaskInvalid,
+    /// No position key fits between the two tasks a move named, see
+    /// `missions::position`.
+    TaskOrderConflict,
 }
 
 impl ErrorKind {
@@ -239,7 +244,8 @@ impl ErrorKind {
             | Self::TimeZoneUnknown
             | Self::SyncCursorInvalid
             | Self::MissionInvalid
-            | Self::NorthStarInvalid => StatusCode::BAD_REQUEST,
+            | Self::NorthStarInvalid
+            | Self::TaskInvalid => StatusCode::BAD_REQUEST,
             Self::Unauthorized
             | Self::Unauthenticated
             | Self::InvalidCredentials
@@ -256,6 +262,7 @@ impl ErrorKind {
             Self::UsernameTaken
             | Self::LastAdminProtected
             | Self::PasswordChangeConflict
+            | Self::TaskOrderConflict
             | Self::DeviceLimitReached
             | Self::PairingCodeLimitReached
             | Self::CategoryRuleDuplicate
@@ -322,6 +329,8 @@ impl ErrorKind {
             Self::SyncCursorInvalid => "invalid_sync_cursor",
             Self::MissionInvalid => "invalid_mission",
             Self::NorthStarInvalid => "invalid_north_star",
+            Self::TaskInvalid => "invalid_task",
+            Self::TaskOrderConflict => "task_order_conflict",
         }
     }
 
@@ -419,6 +428,10 @@ impl ErrorKind {
             Self::NorthStarInvalid => {
                 "the North Star must be one line of at most 200 characters"
             }
+            Self::TaskInvalid => "a task needs a title of 1 to 200 characters on one line",
+            Self::TaskOrderConflict => {
+                "those tasks could not be reordered; reload the page and try again"
+            }
         }
     }
 }
@@ -480,6 +493,8 @@ pub(crate) const ALL_ERROR_KINDS: &[ErrorKind] = &[
     ErrorKind::SyncCursorInvalid,
     ErrorKind::MissionInvalid,
     ErrorKind::NorthStarInvalid,
+    ErrorKind::TaskInvalid,
+    ErrorKind::TaskOrderConflict,
 ];
 
 /// Compile-time proof that every code and message is a constant.
