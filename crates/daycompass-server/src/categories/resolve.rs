@@ -11,6 +11,7 @@
 use std::cmp::Reverse;
 use std::collections::HashMap;
 
+use super::builtin;
 use super::kind::RuleKind;
 use super::store::CategoryRuleRecord;
 
@@ -50,20 +51,25 @@ impl<'a> Resolver<'a> {
         }
     }
 
-    /// The category for one event, or `None` if no rule matches.
+    /// The category for one event, or `None` if neither a rule nor a
+    /// built-in entry matches.
     ///
-    /// An `app_id` match always wins over a `domain` match - see
+    /// An `app_id` match always wins over a `domain` match, and any of
+    /// the account's own rules over [`builtin`] - see
     /// `crate::categories`'s module doc for why.
     pub fn category_for(&self, app_id: &str, domain: Option<&str>) -> Option<&'a str> {
         if let Some(category) = self.by_app_id.get(app_id).copied() {
             return Some(category);
         }
 
-        let domain = domain?;
-        self.by_domain
-            .iter()
-            .find(|(pattern, _)| matches_domain(domain, pattern))
-            .map(|(_, category)| *category)
+        domain
+            .and_then(|domain| {
+                self.by_domain
+                    .iter()
+                    .find(|(pattern, _)| matches_domain(domain, pattern))
+                    .map(|(_, category)| *category)
+            })
+            .or_else(|| builtin::category_for(app_id))
     }
 }
 
@@ -196,6 +202,42 @@ mod tests {
         assert_eq!(
             resolver.category_for("org.example.other", Some("unrelated.example")),
             None
+        );
+    }
+
+    #[test]
+    fn a_built_in_category_applies_when_no_rule_matches() {
+        let resolver = Resolver::build(&[]);
+
+        assert_eq!(
+            resolver.category_for("com.whatsapp", None),
+            Some("Communication")
+        );
+        assert_eq!(resolver.category_for("org.example.app", None), None);
+    }
+
+    #[test]
+    fn the_accounts_own_rules_beat_a_built_in_category() {
+        let rules = vec![
+            rule(RuleKind::AppId, "com.whatsapp", "Family"),
+            rule(RuleKind::Domain, "example.com", "Study"),
+        ];
+        let resolver = Resolver::build(&rules);
+
+        assert_eq!(
+            resolver.category_for("com.whatsapp", None),
+            Some("Family"),
+            "an app_id rule must override the built-in entry"
+        );
+        assert_eq!(
+            resolver.category_for("com.android.chrome", Some("example.com")),
+            Some("Study"),
+            "a domain rule must override the browser's built-in entry"
+        );
+        assert_eq!(
+            resolver.category_for("com.android.chrome", Some("unrelated.example")),
+            Some("Browser"),
+            "with no rule matching, the built-in entry still applies"
         );
     }
 

@@ -27,7 +27,7 @@
 <section class="dc-card dc-stack">
   <h2 class="dc-heading-3">Your rules</h2>
   {% if rules.is_empty() %}
-  <p class="dc-muted">No rules yet. Everything shows up as Uncategorized until you add one.</p>
+  <p class="dc-muted">No rules yet. Well-known apps get a built-in category, everything else shows up as Uncategorized until you add a rule. Your rules always win over the built-in ones.</p>
   {% else %}
   <ul class="dc-list">
     {% for rule in rules %}

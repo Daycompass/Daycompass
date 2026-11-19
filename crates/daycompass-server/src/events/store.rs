@@ -334,6 +334,53 @@ pub async fn select_own_daily_group_totals(
     rows.iter().map(daily_group_total_from_row).collect()
 }
 
+/// One app's total over a window, see [`select_own_app_totals`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AppTotal {
+    pub app_id: String,
+    /// One of the labels the app was reported with, if any.
+    pub label: Option<String>,
+    pub total_duration_secs: i64,
+}
+
+/// Sums `duration_secs` for the caller's own events inside
+/// `[start_ts, end_ts)` per `app_id`, longest first. Same ownership
+/// scoping and overlap semantics as [`select_own_daily_group_totals`].
+///
+/// `MAX(label)` only picks a deterministic one of the labels the app
+/// was reported with - a client normally sends the same one every time.
+pub async fn select_own_app_totals(
+    pool: &SqlitePool,
+    user_id: &str,
+    start_ts: i64,
+    end_ts: i64,
+) -> Result<Vec<AppTotal>, StoreError> {
+    let rows = sqlx::query(
+        "SELECT e.app_id AS app_id, MAX(e.label) AS label,
+                SUM(e.duration_secs) AS total_duration_secs
+         FROM events e
+         JOIN devices d ON d.id = e.device_id
+         WHERE d.user_id = ?1 AND e.start_ts >= ?2 AND e.start_ts < ?3
+         GROUP BY e.app_id
+         ORDER BY total_duration_secs DESC, app_id ASC",
+    )
+    .bind(user_id)
+    .bind(start_ts)
+    .bind(end_ts)
+    .fetch_all(pool)
+    .await?;
+
+    rows.iter()
+        .map(|row| {
+            Ok(AppTotal {
+                app_id: row.try_get("app_id")?,
+                label: row.try_get("label")?,
+                total_duration_secs: row.try_get("total_duration_secs")?,
+            })
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

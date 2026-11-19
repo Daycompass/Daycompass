@@ -35,17 +35,24 @@
 //! produced the event, where a domain is one signal among several a
 //! browser might report. Among domain rules, the longest (most
 //! specific) matching pattern wins, so a rule on `mail.google.com`
-//! takes a match away from one on `google.com`. No match leaves the
+//! takes a match away from one on `google.com`.
+//!
+//! When none of the account's own rules match, [`builtin`] supplies a
+//! category for well-known Android apps by exact `app_id`. Own rules
+//! always win over it - an account that disagrees adds an `app_id`
+//! rule, it never has to delete anything. Matching neither leaves the
 //! category absent, not a sentinel string.
 //!
 //! | Topic | Module |
 //! | --- | --- |
+//! | Built-in categories for well-known apps | [`builtin`] |
 //! | The rule kind, and pattern normalization per kind | [`kind`] |
 //! | The category label policy | [`label`] |
 //! | Every SQL statement, and the per-account cap | [`store`] |
 //! | Validation-then-store wrappers | [`service`] |
 //! | The matching logic itself | [`resolve`] |
 
+pub mod builtin;
 pub mod kind;
 pub mod label;
 pub mod palette;

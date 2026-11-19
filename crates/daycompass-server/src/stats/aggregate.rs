@@ -89,14 +89,7 @@ pub async fn daily_totals(
     end_ts: i64,
     zone: &TimeZoneName,
 ) -> Result<Vec<DailyCategoryTotal>, AggregateError> {
-    if end_ts <= start_ts {
-        return Err(AggregateError::Range(RangeError::Inverted));
-    }
-    // `end_ts - start_ts` cannot overflow once the above holds, same
-    // reasoning as `events::query::list_own`.
-    if end_ts - start_ts > MAX_RANGE_SECS {
-        return Err(AggregateError::Range(RangeError::TooWide));
-    }
+    check_range(start_ts, end_ts)?;
 
     let rules = categories::list_own_rules(pool, user_id)
         .await
@@ -142,6 +135,65 @@ pub async fn daily_totals(
     });
 
     Ok(totals)
+}
+
+/// One app's total over a whole window, with the category it resolves
+/// to by `app_id` alone.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AppTotal {
+    pub app_id: String,
+    /// A human-readable name the client reported, if any.
+    pub label: Option<String>,
+    /// `None` when neither a rule nor a built-in category matches.
+    pub category: Option<String>,
+    pub total_duration_secs: i64,
+}
+
+/// Validates `[start_ts, end_ts)` like [`daily_totals`] and sums the
+/// caller's own screen time per app over the whole window, longest
+/// first.
+///
+/// The category comes from `app_id` alone: a browser's per-domain
+/// split is a category question, not an app one, so domain rules do
+/// not apply to an app's row.
+pub async fn app_totals(
+    pool: &SqlitePool,
+    user_id: &str,
+    start_ts: i64,
+    end_ts: i64,
+) -> Result<Vec<AppTotal>, AggregateError> {
+    check_range(start_ts, end_ts)?;
+
+    let rules = categories::list_own_rules(pool, user_id)
+        .await
+        .map_err(AggregateError::Store)?;
+    let resolver = Resolver::build(&rules);
+
+    let apps = store::select_own_app_totals(pool, user_id, start_ts, end_ts)
+        .await
+        .map_err(AggregateError::Store)?;
+
+    Ok(apps
+        .into_iter()
+        .map(|app| AppTotal {
+            category: resolver.category_for(&app.app_id, None).map(str::to_owned),
+            app_id: app.app_id,
+            label: app.label,
+            total_duration_secs: app.total_duration_secs,
+        })
+        .collect())
+}
+
+fn check_range(start_ts: i64, end_ts: i64) -> Result<(), AggregateError> {
+    if end_ts <= start_ts {
+        return Err(AggregateError::Range(RangeError::Inverted));
+    }
+    // `end_ts - start_ts` cannot overflow once the above holds, same
+    // reasoning as `events::query::list_own`.
+    if end_ts - start_ts > MAX_RANGE_SECS {
+        return Err(AggregateError::Range(RangeError::TooWide));
+    }
+    Ok(())
 }
 
 /// Orders `Some` categories alphabetically, with `None` sorted last
@@ -520,5 +572,71 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![(first, 60), (first + DAY, 120)]
         );
+    }
+
+    #[tokio::test]
+    async fn app_totals_sum_each_app_and_resolve_its_category() {
+        let pool = pool_with_one_owner().await;
+        sqlx::query(
+            "INSERT INTO users (id, username, password_hash, role, created_at)
+             VALUES ('bob', 'bob', 'placeholder-not-a-hash', 'user', 0)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO devices
+                 (id, user_id, name, platform, token_hash, created_at, last_seen_at)
+             VALUES ('d-bob', 'bob', 'device', 'android', x'00', 0, 0)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        add_rule(&pool, "app_id", "org.example.study", "Study").await;
+        let day_start = (NOW / DAY) * DAY;
+        let mut labelled = event(1, day_start - DAY, 600, "com.whatsapp", None);
+        labelled.label = Some("WhatsApp".to_owned());
+        insert_for(&pool, "d-one", &[labelled]).await;
+        insert_for(
+            &pool,
+            "d-two",
+            &[
+                event(2, day_start + 100, 300, "com.whatsapp", None),
+                event(3, day_start + 900, 1200, "org.example.study", None),
+                event(4, day_start + 1200, 60, "org.example.unknown", None),
+            ],
+        )
+        .await;
+        insert_for(
+            &pool,
+            "d-bob",
+            &[event(5, day_start + 100, 9000, "org.example.bobs", None)],
+        )
+        .await;
+
+        let apps = app_totals(&pool, "alice", day_start - DAY, day_start + DAY)
+            .await
+            .expect("a valid range must succeed");
+
+        let app = |app_id: &str, label: Option<&str>, category: Option<&str>, secs| AppTotal {
+            app_id: app_id.to_owned(),
+            label: label.map(str::to_owned),
+            category: category.map(str::to_owned),
+            total_duration_secs: secs,
+        };
+        assert_eq!(
+            apps,
+            vec![
+                app("org.example.study", None, Some("Study"), 1200),
+                app("com.whatsapp", Some("WhatsApp"), Some("Communication"), 900),
+                app("org.example.unknown", None, None, 60),
+            ],
+            "summed across days and devices, longest first, never another account's"
+        );
+
+        assert!(matches!(
+            app_totals(&pool, "alice", day_start, day_start).await,
+            Err(AggregateError::Range(RangeError::Inverted))
+        ));
     }
 }
