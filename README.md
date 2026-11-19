@@ -120,6 +120,8 @@ podman run -d --name daycompass \
   daycompass
 ```
 
+To update later, see "Updating" in [docs/guide.md](docs/guide.md#updating).
+
 `DAYCOMPASS_PUBLIC_URL` is the address you open in the browser. The
 server checks the `Origin` of every state-changing request against it and refuses to start without
 it. The value above is for trying Daycompass on your own machine; for a

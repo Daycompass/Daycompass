@@ -5,6 +5,9 @@ services:
   daycompass:
     build:
       context: ../..
+      # Optional, shown on the dashboard. See "Updating" in docs/guide.md.
+      args:
+        DAYCOMPASS_BUILD_COMMIT: ${DAYCOMPASS_BUILD_COMMIT:-}
     image: daycompass:local
     restart: unless-stopped
     environment:
