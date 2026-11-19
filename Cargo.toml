@@ -107,3 +107,12 @@ jiff = { version = "~0.2", default-features = false, features = ["std", "tzdb-bu
 # encoder: no dependencies of its own, no rendering - the dashboard
 # draws the modules as inline SVG itself (routes::pages::qr).
 qrcodegen = { version = "~1.8" }
+
+# The tests run Argon2 at the production floor (tests/common/mod.rs).
+# Unoptimized, that dominates `cargo test`; optimizing just the hash
+# crates keeps the parameters and makes the hashing fast.
+[profile.dev.package.argon2]
+opt-level = 3
+
+[profile.dev.package.blake2]
+opt-level = 3
