@@ -28,7 +28,7 @@ use crate::missions::validate::{
 pub const FORMAT_NAME: &str = "daycompass-export";
 
 /// Bumped on any change to the document's shape.
-pub const FORMAT_VERSION: u32 = 3;
+pub const FORMAT_VERSION: u32 = 4;
 
 /// Everything before `events`, serialized in one go.
 ///
@@ -40,6 +40,7 @@ pub struct Head {
     pub format_version: u32,
     pub exported_at: i64,
     pub account: Account,
+    pub settings: Settings,
     pub devices: Vec<Device>,
     pub category_rules: Vec<CategoryRule>,
     pub account_log: Vec<AccountLogEntry>,
@@ -69,6 +70,21 @@ impl From<&UserRecord> for Account {
             created_at: user.created_at.as_secs(),
         }
     }
+}
+
+/// What the account set on the dashboard. None of it is a secret, and
+/// none of it is anyone else's.
+#[derive(Serialize, ToSchema)]
+pub struct Settings {
+    /// An IANA name; `UTC` until one is picked.
+    pub timezone: String,
+    pub north_star: Option<String>,
+    /// The weekday Today asks for a review on, 1 (Monday) to 7.
+    pub review_day: i8,
+    /// Whether the Missions pages show screen time.
+    pub screen_time_in_missions: bool,
+    /// The categories counted as distraction, sorted.
+    pub distraction_categories: Vec<String>,
 }
 
 /// Same fields as `GET /api/v1/devices`.
@@ -300,6 +316,7 @@ pub struct Document {
     pub format_version: u32,
     pub exported_at: i64,
     pub account: Account,
+    pub settings: Settings,
     pub devices: Vec<Device>,
     pub category_rules: Vec<CategoryRule>,
     pub account_log: Vec<AccountLogEntry>,

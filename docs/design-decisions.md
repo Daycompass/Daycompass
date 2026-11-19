@@ -377,8 +377,10 @@ time zone. Tracked time counts entries of live tasks only, and a
 running timer counts up to now.
 
 The North Star is `users.north_star`, one line of at most 200
-characters, set from the dashboard only. It is not synced to devices
-and not in the export yet.
+characters, set from the dashboard only. It is in the export (under
+`settings`, since format version 4) but not synced to devices: a device
+that wants to show it would need a sync field with its own last write
+wins, which nobody needs yet.
 
 The Today page (`/missions/today`) works the same way. Starting a
 timer writes a new running entry, and the sync rules end whatever ran
@@ -539,4 +541,4 @@ prefix rather than by a list someone has to remember to extend.
 The integration can be turned off (`users.missions_screen_time`, on by
 default), and off means the Missions pages read no event at all -
 not that they read and hide it. Both settings are dashboard-only, like
-the review day: not synced, and not in the export.
+the review day: not synced, but in the export's `settings`.

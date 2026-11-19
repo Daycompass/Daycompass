@@ -93,16 +93,41 @@ async fn an_export_carries_the_accounts_own_data_and_nobody_elses() {
         .await;
     assert_eq!(rule.status, StatusCode::CREATED, "{:?}", rule.body);
 
+    for (path, field, value) in [
+        ("/missions/north-star", "north_star", "Finish school well"),
+        ("/account/review-day", "day", "5"),
+    ] {
+        let saved = app
+            .send(
+                TestRequest::post(path)
+                    .origin(GOOD_ORIGIN)
+                    .authenticated(&carol)
+                    .form(&[(field, value)]),
+            )
+            .await;
+        assert_eq!(saved.status, StatusCode::OK, "{path}: {}", saved.text);
+    }
+
     let response = app.send(get_export(&carol)).await;
     assert_eq!(response.status, StatusCode::OK, "{:?}", response.body);
     let doc = &response.body;
 
     assert_eq!(doc["format"], "daycompass-export");
-    assert_eq!(doc["format_version"], 3);
+    assert_eq!(doc["format_version"], 4);
     assert_eq!(doc["complete"], true);
     assert_eq!(doc["account"]["id"], carol_id.as_str());
     assert_eq!(doc["account"]["username"], "carol");
     assert_eq!(doc["account"]["role"], "user");
+    assert_eq!(
+        doc["settings"],
+        json!({
+            "timezone": "UTC",
+            "north_star": "Finish school well",
+            "review_day": 5,
+            "screen_time_in_missions": true,
+            "distraction_categories": [],
+        })
+    );
 
     let devices = doc["devices"].as_array().expect("a devices array");
     assert_eq!(devices.len(), 1);
