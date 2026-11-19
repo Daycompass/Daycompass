@@ -1,0 +1,13 @@
+{% extends "layout_app.html" %}
+{% block title %}Missions{% endblock %}
+{% block content %}
+<header class="dc-page-head">
+  <span class="dc-overline">Missions</span>
+  <h1 class="dc-heading-1">Your missions</h1>
+</header>
+{% let subnav_current = "manage" %}{% include "partials/missions_subnav.html" %}
+<div class="dc-stack dc-stack--lg">
+{{ north_star|safe }}
+{{ list|safe }}
+</div>
+{% endblock %}

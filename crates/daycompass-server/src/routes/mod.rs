@@ -1113,6 +1113,65 @@ pub const INVENTORY: &[RouteSpec] = &[
         max_body_bytes: None,
         rate_limits: &[],
     },
+    // The caller's own missions and North Star. Like the category
+    // rules: no admin variant, and an `{id}` only ever names one of the
+    // caller's own missions. Writes go through the same sync rules as
+    // `POST /api/v1/missions/sync`.
+    RouteSpec {
+        method: "GET",
+        path: "/missions/manage",
+        surface: Surface::Page,
+        access: Access::Session,
+        origin: OriginRule::Checked,
+        csrf: false,
+        sets_session_cookie: false,
+        max_body_bytes: None,
+        rate_limits: &[],
+    },
+    RouteSpec {
+        method: "POST",
+        path: "/missions/manage",
+        surface: Surface::Page,
+        access: Access::Session,
+        origin: OriginRule::Required,
+        csrf: true,
+        sets_session_cookie: false,
+        max_body_bytes: None,
+        rate_limits: &[],
+    },
+    RouteSpec {
+        method: "POST",
+        path: "/missions/{id}/edit",
+        surface: Surface::Page,
+        access: Access::Session,
+        origin: OriginRule::Required,
+        csrf: true,
+        sets_session_cookie: false,
+        max_body_bytes: None,
+        rate_limits: &[],
+    },
+    RouteSpec {
+        method: "POST",
+        path: "/missions/{id}/archive",
+        surface: Surface::Page,
+        access: Access::Session,
+        origin: OriginRule::Required,
+        csrf: true,
+        sets_session_cookie: false,
+        max_body_bytes: None,
+        rate_limits: &[],
+    },
+    RouteSpec {
+        method: "POST",
+        path: "/missions/north-star",
+        surface: Surface::Page,
+        access: Access::Session,
+        origin: OriginRule::Required,
+        csrf: true,
+        sets_session_cookie: false,
+        max_body_bytes: None,
+        rate_limits: &[],
+    },
     // The caller's own account: password change, account log, and a
     // link to `GET /api/v1/export` (not a page route of its own).
     RouteSpec {
@@ -1360,6 +1419,15 @@ pub fn router(state: AppState) -> Router {
         "POST",
         "/category-rules/{id}/delete",
         pages::categories::delete,
+    );
+    table.add("GET", "/missions/manage", pages::missions::page);
+    table.add("POST", "/missions/manage", pages::missions::create);
+    table.add("POST", "/missions/{id}/edit", pages::missions::edit);
+    table.add("POST", "/missions/{id}/archive", pages::missions::archive);
+    table.add(
+        "POST",
+        "/missions/north-star",
+        pages::missions::set_north_star,
     );
     table.add("GET", "/account", pages::account::page);
     table.add("POST", "/account/password", pages::account::change_password);

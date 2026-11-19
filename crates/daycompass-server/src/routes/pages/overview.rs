@@ -14,7 +14,7 @@ use askama::Template;
 use axum::extract::State;
 use axum::response::{IntoResponse, Response};
 
-use super::{render, Shell};
+use super::{format_duration, render, Shell};
 use crate::auth::time::UnixTime;
 use crate::categories::palette;
 use crate::error::{ApiError, ErrorKind};
@@ -129,7 +129,7 @@ pub async fn page(State(state): State<AppState>, session: SessionContext) -> Res
 
     let summary = Summary::of(&days, today_start);
     render(&OverviewPage {
-        shell: Shell::for_session(auth, "overview"),
+        shell: Shell::load(&state.pool, auth, "overview").await,
         today: format_duration(summary.today_secs),
         week: format_duration(summary.week_secs),
         zone: zone.as_str().to_owned(),
@@ -207,16 +207,6 @@ impl Summary {
 
 /// `2h 14m`, `47m`, `0m` - the design system's time format. Whole
 /// minutes, rounded down, so a total never reads as more than it was.
-fn format_duration(secs: i64) -> String {
-    let minutes = secs.max(0) / 60;
-    let (hours, minutes) = (minutes / 60, minutes % 60);
-    if hours > 0 {
-        format!("{hours}h {minutes}m")
-    } else {
-        format!("{minutes}m")
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

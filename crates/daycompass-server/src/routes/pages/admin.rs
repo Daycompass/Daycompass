@@ -129,7 +129,7 @@ async fn account_fragment(
 pub async fn accounts_page(State(state): State<AppState>, admin: AdminContext) -> Response {
     match account_list(&state, &admin, None).await {
         Ok(list) => render(&AccountsPage {
-            shell: Shell::for_session(admin.auth(), "admin-accounts"),
+            shell: Shell::load(&state.pool, admin.auth(), "admin-accounts").await,
             list,
         }),
         Err(error) => error.into_response(),
@@ -252,7 +252,7 @@ async fn device_list(state: &AppState) -> Result<DeviceList, ApiError> {
 pub async fn devices_page(State(state): State<AppState>, admin: AdminContext) -> Response {
     match device_list(&state).await {
         Ok(list) => render(&DevicesPage {
-            shell: Shell::for_session(admin.auth(), "admin-devices"),
+            shell: Shell::load(&state.pool, admin.auth(), "admin-devices").await,
             list,
         }),
         Err(error) => error.into_response(),

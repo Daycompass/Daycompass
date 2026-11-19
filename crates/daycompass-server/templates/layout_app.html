@@ -24,6 +24,10 @@
     </div>
   </nav>
   <main class="dc-app__main">
+    {%- if let Some(timer) = shell.timer %}
+    {#- Not a live region: it changes every second. #}
+    <p class="dc-timer"><span class="dc-swatch {% if let Some(colour) = timer.colour %}dc-swatch--c{{ colour }}{% else %}dc-swatch--neutral{% endif %}" aria-hidden="true"></span><span class="dc-visually-hidden">Timer running:</span><span class="dc-timer__title">{{ timer.task_title }}</span><span class="dc-timer__clock" data-dc-elapsed="{{ timer.elapsed_secs }}">{{ timer.elapsed() }}</span></p>
+    {%- endif %}
     <div id="dc-flash" class="dc-flash" aria-live="polite"></div>
     {% block content %}{% endblock %}
   </main>
