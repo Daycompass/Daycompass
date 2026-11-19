@@ -52,6 +52,7 @@ pub const GENEROUS_LIMITS: &[(&str, &str)] = &[
     // tight values rather than relying on this one.
     ("DAYCOMPASS_RATE_LIMIT_DEVICE_AUTH_FAIL", "1000/60"),
     ("DAYCOMPASS_RATE_LIMIT_EXPORT", "1000/3600"),
+    ("DAYCOMPASS_RATE_LIMIT_MISSIONS_SYNC_DEVICE", "1000/60"),
 ];
 
 /// A running app plus the pool behind it.

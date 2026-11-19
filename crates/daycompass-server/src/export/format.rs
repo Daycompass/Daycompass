@@ -19,12 +19,15 @@ use crate::auth::store::UserRecord;
 use crate::categories::store::CategoryRuleRecord;
 use crate::devices::store::DeviceRecord;
 use crate::events::store::QueriedEvent;
+use crate::missions::validate::{
+    Mission as MissionRecord, Task as TaskRecord, TimeEntry as TimeEntryRecord,
+};
 
 /// The value of the document's `format` field.
 pub const FORMAT_NAME: &str = "daycompass-export";
 
 /// Bumped on any change to the document's shape.
-pub const FORMAT_VERSION: u32 = 1;
+pub const FORMAT_VERSION: u32 = 2;
 
 /// Everything before `events`, serialized in one go.
 ///
@@ -39,6 +42,9 @@ pub struct Head {
     pub devices: Vec<Device>,
     pub category_rules: Vec<CategoryRule>,
     pub account_log: Vec<AccountLogEntry>,
+    pub missions: Vec<Mission>,
+    pub tasks: Vec<Task>,
+    pub time_entries: Vec<TimeEntry>,
 }
 
 /// The account itself. No password hash, no status: the first is a
@@ -127,6 +133,87 @@ impl From<&LogEntry> for AccountLogEntry {
     }
 }
 
+/// A mission. Deleted ones are not exported, so there is no `deleted`.
+#[derive(Serialize, ToSchema)]
+pub struct Mission {
+    pub id: String,
+    pub title: String,
+    pub colour: i64,
+    pub weekly_goal_secs: i64,
+    pub description: Option<String>,
+    pub why: Option<String>,
+    pub starts_on: Option<String>,
+    pub ends_on: Option<String>,
+    pub archived: bool,
+    pub updated_at: i64,
+}
+
+impl From<MissionRecord> for Mission {
+    fn from(m: MissionRecord) -> Self {
+        Self {
+            id: m.id,
+            title: m.title,
+            colour: m.colour,
+            weekly_goal_secs: m.weekly_goal_secs,
+            description: m.description,
+            why: m.why,
+            starts_on: m.starts_on,
+            ends_on: m.ends_on,
+            archived: m.archived,
+            updated_at: m.updated_at,
+        }
+    }
+}
+
+#[derive(Serialize, ToSchema)]
+pub struct Task {
+    pub id: String,
+    pub mission_id: Option<String>,
+    pub title: String,
+    pub notes: Option<String>,
+    pub day: Option<String>,
+    pub position: String,
+    pub done_at: Option<i64>,
+    pub updated_at: i64,
+}
+
+impl From<TaskRecord> for Task {
+    fn from(t: TaskRecord) -> Self {
+        Self {
+            id: t.id,
+            mission_id: t.mission_id,
+            title: t.title,
+            notes: t.notes,
+            day: t.day,
+            position: t.position,
+            done_at: t.done_at,
+            updated_at: t.updated_at,
+        }
+    }
+}
+
+#[derive(Serialize, ToSchema)]
+pub struct TimeEntry {
+    pub id: String,
+    pub task_id: String,
+    pub start_ts: i64,
+    /// `null` for the timer that was running at export time.
+    pub end_ts: Option<i64>,
+    pub updated_at: i64,
+}
+
+impl From<TimeEntryRecord> for TimeEntry {
+    fn from(e: TimeEntryRecord) -> Self {
+        Self {
+            id: e.id,
+            task_id: e.task_id,
+            start_ts: e.start_ts,
+            end_ts: e.end_ts,
+            updated_at: e.updated_at,
+        }
+    }
+}
+
 /// One event, exactly as reported. No `category` - see the module doc.
 #[derive(Serialize, ToSchema)]
 pub struct Event<'a> {
@@ -174,6 +261,9 @@ pub struct Document {
     pub devices: Vec<Device>,
     pub category_rules: Vec<CategoryRule>,
     pub account_log: Vec<AccountLogEntry>,
+    pub missions: Vec<Mission>,
+    pub tasks: Vec<Task>,
+    pub time_entries: Vec<TimeEntry>,
     pub events: Vec<Event<'static>>,
     /// Always `true`, and always the last field. Missing means the
     /// export was cut off and must be discarded.

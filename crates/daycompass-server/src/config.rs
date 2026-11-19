@@ -56,6 +56,7 @@ const VAR_INVITE_TTL: &str = "DAYCOMPASS_INVITE_TTL_SECS";
 const VAR_RATE_LIMIT_INVITE_IP: &str = "DAYCOMPASS_RATE_LIMIT_INVITE_IP";
 const VAR_RATE_LIMIT_INVITE_GLOBAL: &str = "DAYCOMPASS_RATE_LIMIT_INVITE_GLOBAL";
 const VAR_RATE_LIMIT_EXPORT: &str = "DAYCOMPASS_RATE_LIMIT_EXPORT";
+const VAR_RATE_LIMIT_MISSIONS_SYNC_DEVICE: &str = "DAYCOMPASS_RATE_LIMIT_MISSIONS_SYNC_DEVICE";
 const VAR_RETENTION_DAYS: &str = "DAYCOMPASS_RETENTION_DAYS";
 
 const DEFAULT_BIND_ADDR: &str = "127.0.0.1:8080";
@@ -231,6 +232,13 @@ const DEFAULT_RATE_LIMIT_INGEST_DEVICE: &str = "30/60";
 /// same reason as [`DEFAULT_RATE_LIMIT_PW_CHANGE`].
 const DEFAULT_RATE_LIMIT_EXPORT: &str = "3/3600";
 
+/// Thirty missions syncs per minute for one device.
+///
+/// Its own bucket rather than the ingest one, so a client syncing
+/// missions after every edit cannot starve its own screen time
+/// reporting, or the other way round.
+const DEFAULT_RATE_LIMIT_MISSIONS_SYNC_DEVICE: &str = "30/60";
+
 /// Seconds in one day of `DAYCOMPASS_RETENTION_DAYS`.
 const SECS_PER_DAY: u64 = 24 * 60 * 60;
 
@@ -281,6 +289,8 @@ pub struct Config {
     pub rate_limit_invite_global: RateLimitRule,
     /// Account exports per session, per window.
     pub rate_limit_export: RateLimitRule,
+    /// Missions syncs from one device, per window.
+    pub rate_limit_missions_sync_device: RateLimitRule,
     /// How long events are kept, or `None` to keep them forever - the
     /// default. Never shorter than [`Self::event_max_age`]. See
     /// [`crate::events::retention`].
@@ -647,6 +657,11 @@ impl Config {
             DEFAULT_RATE_LIMIT_INVITE_GLOBAL,
         )?;
         let rate_limit_export = rule(source, VAR_RATE_LIMIT_EXPORT, DEFAULT_RATE_LIMIT_EXPORT)?;
+        let rate_limit_missions_sync_device = rule(
+            source,
+            VAR_RATE_LIMIT_MISSIONS_SYNC_DEVICE,
+            DEFAULT_RATE_LIMIT_MISSIONS_SYNC_DEVICE,
+        )?;
 
         // Off unless set: deleting data is something an operator opts
         // into, never a default they discover afterwards.
@@ -706,6 +721,7 @@ impl Config {
             rate_limit_invite_ip,
             rate_limit_invite_global,
             rate_limit_export,
+            rate_limit_missions_sync_device,
             event_retention,
         })
     }
@@ -747,6 +763,10 @@ impl fmt::Debug for Config {
             .field("rate_limit_invite_ip", &self.rate_limit_invite_ip)
             .field("rate_limit_invite_global", &self.rate_limit_invite_global)
             .field("rate_limit_export", &self.rate_limit_export)
+            .field(
+                "rate_limit_missions_sync_device",
+                &self.rate_limit_missions_sync_device,
+            )
             .field("event_retention", &self.event_retention)
             .finish()
     }
@@ -1201,6 +1221,11 @@ mod tests {
         assert_eq!(config.rate_limit_invite_global.max, 600);
         assert_eq!(config.rate_limit_export.max, 3);
         assert_eq!(config.rate_limit_export.window, Duration::from_secs(3_600));
+        assert_eq!(config.rate_limit_missions_sync_device.max, 30);
+        assert_eq!(
+            config.rate_limit_missions_sync_device.window,
+            Duration::from_secs(60)
+        );
         assert_eq!(
             config.event_retention, None,
             "nothing is deleted by default"
@@ -1709,6 +1734,7 @@ mod tests {
                 "rate_limit_invite_ip: RateLimitRule { max: 100, window: 300s }, ",
                 "rate_limit_invite_global: RateLimitRule { max: 600, window: 60s }, ",
                 "rate_limit_export: RateLimitRule { max: 3, window: 3600s }, ",
+                "rate_limit_missions_sync_device: RateLimitRule { max: 30, window: 60s }, ",
                 "event_retention: None",
                 " }",
             )

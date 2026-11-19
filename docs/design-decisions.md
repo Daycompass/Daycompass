@@ -323,3 +323,38 @@ route.
   at query time only. The time zone database is compiled into the
   binary (jiff), not read from the host. Account log timestamps stay
   UTC.
+
+## Why missions sync is last write wins, with tombstones and one counter
+
+Missions, tasks and time entries are edited on several devices, often
+offline, so every record carries a client-generated id and the
+client's `updated_at`, and the server keeps whichever write has the
+newer one. On a tie the write that reached the server last wins: no
+extra writer-id column, and two quick edits on one device within the
+same second come out in the right order. The server is authoritative:
+a losing push is answered `stale` and handed the winner, so devices
+converge without a field-level merge. Whole-record last write wins is
+the deliberate trade-off: an edit to a task's title on one device and
+to its notes on another, both offline, keeps only the newer one.
+
+A delete is a tombstone, so other devices learn of it, but it keeps no
+text. Deleting a mission should delete what the person wrote, not hide
+it behind a flag; ids, numbers and references stay so the composite
+foreign keys still hold.
+
+Pulling uses one counter per account, `users.missions_rev`, shared by
+all three tables. Every write takes the next value, and the whole sync
+runs in one `BEGIN IMMEDIATE` transaction, so a device that saw rev N
+has seen everything up to N and can never skip a record that commits
+later with a smaller rev. A cursor ahead of the counter (a server
+restored from a backup) is refused rather than silently returning
+nothing, and the device starts over from 0.
+
+One running timer per account is enforced twice: the sync service
+ends whichever running entry started earlier, so the result does not
+depend on arrival order, and a partial unique index makes a second
+running entry impossible if that logic ever misses a path.
+
+The sync route has its own per-device rate limit instead of sharing
+the ingest bucket, so a client that syncs missions after every edit
+cannot crowd out its own screen time reporting.

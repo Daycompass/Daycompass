@@ -7,13 +7,16 @@
 use futures_util::stream::{self, Stream, StreamExt};
 use sqlx::SqlitePool;
 
-use super::format::{self, Account, AccountLogEntry, CategoryRule, Device, Event, Head};
+use super::format::{
+    self, Account, AccountLogEntry, CategoryRule, Device, Event, Head, Mission, Task, TimeEntry,
+};
 use crate::auth::account_log;
 use crate::auth::store::{StoreError, UserRecord};
 use crate::auth::time::UnixTime;
 use crate::categories::service as categories;
 use crate::devices::service as devices;
 use crate::events::store::{self as events, PageKey};
+use crate::missions::store as missions;
 
 /// Events read per query.
 ///
@@ -38,7 +41,7 @@ const TAIL: &[u8] = b"],\"complete\":true}";
 #[error("the export was aborted")]
 pub struct Aborted;
 
-/// Reads `user`'s account, devices, rules and log, and returns the
+/// Reads `user`'s account, devices, rules, log and missions, and returns the
 /// whole document as a stream of byte chunks.
 ///
 /// Fails before anything is sent if one of the up-front reads fails,
@@ -56,6 +59,14 @@ pub async fn export_own(
     let devices = devices::list_own_devices(pool, &user.id).await?;
     let rules = categories::list_own_rules(pool, &user.id).await?;
     let log = account_log::list_all_for_user(pool, &user.id).await?;
+    // shortcut: read whole like the other small sections, not paged
+    // like events; page them too if accounts reach many thousand
+    // time entries.
+    let mut conn = pool.acquire().await?;
+    let own_missions = missions::missions_after(&mut conn, &user.id, 0, -1, true).await?;
+    let tasks = missions::tasks_after(&mut conn, &user.id, 0, -1, true).await?;
+    let entries = missions::time_entries_after(&mut conn, &user.id, 0, -1, true).await?;
+    drop(conn);
 
     let head = Head {
         format: format::FORMAT_NAME,
@@ -65,6 +76,15 @@ pub async fn export_own(
         devices: devices.iter().map(Device::from).collect(),
         category_rules: rules.iter().map(CategoryRule::from).collect(),
         account_log: log.iter().map(AccountLogEntry::from).collect(),
+        missions: own_missions
+            .into_iter()
+            .map(|(_, m)| Mission::from(m))
+            .collect(),
+        tasks: tasks.into_iter().map(|(_, t)| Task::from(t)).collect(),
+        time_entries: entries
+            .into_iter()
+            .map(|(_, e)| TimeEntry::from(e))
+            .collect(),
     };
 
     let head = open_events_array(&head);

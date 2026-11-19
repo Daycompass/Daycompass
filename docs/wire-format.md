@@ -5,7 +5,8 @@ Reference for client implementations: every route this server answers
 administration, pairing a device, authenticating as one, reporting
 events, reading an account's own events back, managing the category
 rules those events are matched against, reading the resulting
-screen time summed per day and category, and exporting an account's
+screen time summed per day and category, syncing missions, tasks and
+tracked time between an account's devices, and exporting an account's
 whole data.
 
 Everything here is normative for the server as it stands. The
@@ -719,9 +720,9 @@ it on a sync interval.**
 | Failed device authentication, per address | 429 | `rate_limited` |
 | Requests from this device | 429 | `rate_limited` |
 
-Both device routes share one per-device bucket: calling `device/me`
-spends the same budget as sending events, there are not two numbers to
-keep in step. Both are also covered by the per-address limit on
+`device/me` and `POST /api/v1/events` share one per-device bucket:
+calling `device/me` spends the same budget as sending events, there are
+not two numbers to keep in step. Missions sync has a bucket of its own. Both are also covered by the per-address limit on
 *failed* authentication - see
 ["Handling errors on device routes"](#handling-errors-on-device-routes)
 below for what to do with either 429.
@@ -901,6 +902,235 @@ again" state to the person using it. Pairing again issues a new token.
 
 If you retry at all, retry once, well after a long delay — not on a
 sync interval.
+
+---
+
+## Missions sync (device auth)
+
+Missions are an account's own goals, the tasks under them and the time
+tracked on those tasks. A device keeps its own copy, edits it offline,
+and syncs it with this one route: each call pushes local edits and
+pulls everyone else's.
+
+<!-- route: POST /api/v1/missions/sync -->
+### `POST /api/v1/missions/sync`
+
+Device auth. Pushes any number of records (0 is fine) and returns one
+page of everything changed after `cursor`.
+
+```json
+{
+  "cursor": 41,
+  "missions": [
+    {
+      "id": "00000000000000000000000000000001",
+      "title": "Maths",
+      "colour": 2,
+      "weekly_goal_secs": 36000,
+      "description": "Pass the final exam",
+      "why": null,
+      "starts_on": "2026-09-01",
+      "ends_on": "2027-07-31",
+      "archived": false,
+      "deleted": false,
+      "updated_at": 1800000000
+    }
+  ],
+  "tasks": [
+    {
+      "id": "00000000000000000000000000000002",
+      "mission_id": "00000000000000000000000000000001",
+      "title": "Exercise 4",
+      "notes": null,
+      "day": "2026-11-19",
+      "position": "a0",
+      "done_at": null,
+      "deleted": false,
+      "updated_at": 1800000000
+    }
+  ],
+  "time_entries": [
+    {
+      "id": "00000000000000000000000000000003",
+      "task_id": "00000000000000000000000000000002",
+      "start_ts": 1799999400,
+      "end_ts": null,
+      "deleted": false,
+      "updated_at": 1799999400
+    }
+  ]
+}
+```
+
+`missions`, `tasks` and `time_entries` may each be omitted. A pull
+without pushing is `{ "cursor": 41 }`. The same record shapes come
+back in `changes`.
+
+**Limits on the request as a whole** — these fail the whole call:
+
+| Limit | Status | Code |
+| --- | --- | --- |
+| Body over 512 KiB | 413 | `payload_too_large` |
+| More than 500 records, all three arrays together | 413 | `batch_too_large` |
+| `cursor` negative, or ahead of anything this account was given | 400 | `invalid_sync_cursor` |
+| Malformed JSON, a missing or unknown field | 400 | `bad_request` |
+| Missing/wrong `Content-Type` | 415 | `unsupported_media_type` |
+
+**Fields every record has:**
+
+| Field | Rule |
+| --- | --- |
+| `id` | Client-generated, **32 lowercase hex characters** (a dashed UUID is accepted and normalized, same as `event_id`). Unique within the account. |
+| `deleted` | `true` makes the record a tombstone; see below. |
+| `updated_at` | Your clock at the last edit, Unix seconds. At most 300 s in the future. |
+
+**Missions:**
+
+| Field | Rule |
+| --- | --- |
+| `title` | 1–100 characters after trimming, one line. |
+| `colour` | Palette slot, 0–7. |
+| `weekly_goal_secs` | 0–604800. 0 means no goal. |
+| `description`, `why` | Optional, up to 2000 characters each. Newlines allowed. `""` is stored as `null`. |
+| `starts_on`, `ends_on` | Optional `YYYY-MM-DD`. `ends_on` may not be before `starts_on`. |
+| `archived` | Boolean. |
+
+**Tasks:**
+
+| Field | Rule |
+| --- | --- |
+| `mission_id` | Optional. `null` means no mission ("Other"). Must name a mission of this account, pushed earlier or in the same request. |
+| `title` | 1–200 characters after trimming, one line. |
+| `notes` | Optional, up to 4000 characters. Newlines allowed. |
+| `day` | Optional `YYYY-MM-DD` in the account's time zone. `null` means the backlog. |
+| `position` | 1–64 characters of `0-9A-Za-z`: a fractional index key. Tasks of one day sort by it, bytewise. |
+| `done_at` | Optional Unix seconds, at most 300 s in the future. `null` while open. |
+
+**Time entries:**
+
+| Field | Rule |
+| --- | --- |
+| `task_id` | Required. Must name a task of this account, pushed earlier or in the same request. |
+| `start_ts` | Unix seconds, at most 300 s in the future. |
+| `end_ts` | `null` while the timer runs. Otherwise after `start_ts`, at most 300 s in the future. |
+
+No string may contain a control character (except a newline in
+`description`, `why` and `notes`) or a bidirectional override.
+
+**`200 OK`** — always, if the request itself was well formed:
+
+```json
+{
+  "results": {
+    "missions": [{ "index": 0, "status": "applied" }],
+    "tasks": [{ "index": 0, "status": "stale" }],
+    "time_entries": [{ "index": 0, "status": "rejected", "reason": "task_unknown" }]
+  },
+  "changes": {
+    "missions": [],
+    "tasks": [],
+    "time_entries": []
+  },
+  "cursor": 57,
+  "has_more": false,
+  "server_time": 1800000000
+}
+```
+
+`results` is **positional**, per array, like ingest: `index` is the
+offset in the array you sent, and your ids are not echoed back.
+
+| Status | Meaning |
+| --- | --- |
+| `applied` | Stored. It also comes back in `changes`, as the server now holds it. |
+| `stale` | The server holds a version with a newer `updated_at`. Nothing was changed; the server's version is in `changes` of this same response — take it. |
+| `rejected` | Refused, with a `reason` from the table below. Fix or drop the record; resending it unchanged gets the same answer. |
+
+**Rejection reasons:**
+
+| Code | Meaning |
+| --- | --- |
+| `id_malformed` | `id` is not 32 hex characters or a canonical UUID. |
+| `updated_at_in_future` | More than 300 s ahead of `server_time`. |
+| `title_length` | Blank, or over the maximum. |
+| `text_length` | `description`, `why` or `notes` over its maximum. |
+| `forbidden_character` | A control character or bidi override. |
+| `colour_out_of_range` | Not 0–7. |
+| `weekly_goal_out_of_range` | Not 0–604800. |
+| `date_malformed` | Not a real `YYYY-MM-DD` date. |
+| `period_inverted` | `ends_on` before `starts_on`. |
+| `mission_unknown` | `mission_id` names no mission of this account. |
+| `task_unknown` | `task_id` names no task of this account. |
+| `position_malformed` | Empty, over 64 characters, or not `0-9A-Za-z`. |
+| `done_at_in_future` | More than 300 s ahead. |
+| `start_ts_in_future` | More than 300 s ahead. |
+| `end_ts_in_future` | More than 300 s ahead. |
+| `end_ts_not_after_start` | `end_ts` is not after `start_ts`. |
+
+### How to sync
+
+1. Keep the `cursor` from the last response; start at 0.
+2. Send every record you changed locally since the last successful
+   sync, with `updated_at` set to your clock at the edit.
+3. Apply every record in `changes` over your local copy — they are
+   the server's versions, including your own `applied` ones and the
+   winners of your `stale` ones. Store the new `cursor`.
+4. While `has_more` is `true`, sync again with the new cursor (an
+   empty push is fine). One page holds at most 500 records.
+
+Resending is always safe: a record that was already applied and is
+sent again with the same `updated_at` is simply applied again. On a
+`429` or a network failure, keep your local changes and retry later
+with the same cursor.
+
+On `invalid_sync_cursor`, set the cursor to 0 and sync again; you get
+the account's whole state. This happens if the server was restored
+from an older backup.
+
+### Last write wins
+
+Per record, on `updated_at`. A push older than what the server holds
+is `stale`; equal `updated_at` goes to the push that reaches the
+server last. Edits are whole records — there is no field-level merge.
+Set `updated_at` from a clock that is roughly right: check
+`server_time` from [`GET /api/v1/device/me`](#get-apiv1deviceme) at
+startup.
+
+### Deleting: tombstones
+
+To delete, send the record with `deleted: true` and a new
+`updated_at`. Other devices receive it in `changes` and should delete
+their copy. A tombstone keeps only its id, `updated_at`, its numbers
+and references: titles, `description`, `why` and `notes` come back
+empty (`""` / `null`) and are gone from the server. Only `id` and
+`updated_at` are checked on a tombstone, so you may send one back
+exactly as you received it.
+
+A later edit (newer `updated_at`) of a deleted record brings it back.
+Deleting a mission does not delete its tasks, and deleting a task
+does not delete its time entries — delete those too if that is what
+the person meant.
+
+### One running timer
+
+An account has at most one running time entry (`end_ts: null`).
+Starting a timer while another one runs ends the one that **started
+earlier**, at the other's `start_ts` — on whichever device it was, and
+in whichever order the two reach the server. The ended entry comes
+back in `changes`. A device whose own timer was stopped this way
+learns it on its next sync.
+
+**Limits:**
+
+| Limit | Status | Code |
+| --- | --- | --- |
+| Failed device authentication, per address | 429 | `rate_limited` |
+| Syncs from this device (30 a minute by default) | 429 | `rate_limited` |
+
+The sync limit is its own per-device bucket, separate from the one
+`POST /api/v1/events` and `device/me` share. Handle a 429 or 401 here
+exactly as described in
+["Handling errors on device routes"](#handling-errors-on-device-routes).
 
 ---
 
@@ -1266,7 +1496,7 @@ filename="daycompass-export.json"` and `Cache-Control: no-store`:
 ```json
 {
   "format": "daycompass-export",
-  "format_version": 1,
+  "format_version": 2,
   "exported_at": 1800000000,
   "account": {
     "id": "0190a0b2-0000-7000-8000-000000000001",
@@ -1296,6 +1526,41 @@ filename="daycompass-export.json"` and `Cache-Control: no-store`:
   "account_log": [
     { "kind": "invite_redeemed", "actor_id": null, "at": 1790000050 }
   ],
+  "missions": [
+    {
+      "id": "00000000000000000000000000000001",
+      "title": "Maths",
+      "colour": 2,
+      "weekly_goal_secs": 36000,
+      "description": null,
+      "why": null,
+      "starts_on": "2026-09-01",
+      "ends_on": null,
+      "archived": false,
+      "updated_at": 1799000000
+    }
+  ],
+  "tasks": [
+    {
+      "id": "00000000000000000000000000000002",
+      "mission_id": "00000000000000000000000000000001",
+      "title": "Exercise 4",
+      "notes": null,
+      "day": "2026-11-19",
+      "position": "a0",
+      "done_at": null,
+      "updated_at": 1799000000
+    }
+  ],
+  "time_entries": [
+    {
+      "id": "00000000000000000000000000000003",
+      "task_id": "00000000000000000000000000000002",
+      "start_ts": 1799000000,
+      "end_ts": 1799003600,
+      "updated_at": 1799003600
+    }
+  ],
   "events": [
     {
       "device_id": "0190a0b2-0000-7000-8000-000000000002",
@@ -1321,9 +1586,13 @@ filename="daycompass-export.json"` and `Cache-Control: no-store`:
   part of the document. `label` and `domain` are
   omitted when absent. Ordered by `start_ts`, then `device_id`, then
   `event_id`, all ascending.
+- `missions`, `tasks` and `time_entries` carry the fields of
+  [`POST /api/v1/missions/sync`](#post-apiv1missionssync) without
+  `deleted`: deleted records are not exported.
 - No password, token or hash of either appears anywhere in the
   document, nor any session, invite or pairing-code data.
-- `format_version` changes whenever the document's shape does.
+- `format_version` changes whenever the document's shape does. Version
+  2 added `missions`, `tasks` and `time_entries`.
 
 **Accept an export only if it parses and ends with `"complete": true`.**
 The body is streamed: the status line is sent before the events are

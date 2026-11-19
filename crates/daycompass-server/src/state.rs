@@ -86,6 +86,8 @@ pub struct Limits {
     /// Account exports, keyed by session - same reasoning as
     /// [`Self::pw_change`].
     pub export: Arc<RateLimiter<SessionKey>>,
+    /// Missions syncs, per device. Same keying as [`Self::ingest_device`].
+    pub missions_sync_device: Arc<RateLimiter<DeviceKey>>,
 }
 
 impl Limits {
@@ -137,6 +139,10 @@ impl Limits {
             invite_global: Arc::new(RateLimiter::new(config.rate_limit_invite_global, 1)),
             export: Arc::new(RateLimiter::new(
                 config.rate_limit_export,
+                config.rate_limit_max_entries,
+            )),
+            missions_sync_device: Arc::new(RateLimiter::new(
+                config.rate_limit_missions_sync_device,
                 config.rate_limit_max_entries,
             )),
         }

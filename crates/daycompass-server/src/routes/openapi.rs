@@ -81,6 +81,7 @@ const DEVICE: &str = "device_token";
         super::categories::delete_own,
         super::stats::daily_totals,
         super::export::export_own,
+        super::missions::sync,
         super::devices::list_own,
         super::devices::rename_own,
         super::devices::revoke_own,

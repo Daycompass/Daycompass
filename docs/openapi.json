@@ -439,6 +439,24 @@
             "format": "int32",
             "minimum": 0,
             "type": "integer"
+          },
+          "missions": {
+            "items": {
+              "$ref": "#/components/schemas/Mission"
+            },
+            "type": "array"
+          },
+          "tasks": {
+            "items": {
+              "$ref": "#/components/schemas/Task"
+            },
+            "type": "array"
+          },
+          "time_entries": {
+            "items": {
+              "$ref": "#/components/schemas/TimeEntry"
+            },
+            "type": "array"
           }
         },
         "required": [
@@ -449,6 +467,9 @@
           "devices",
           "category_rules",
           "account_log",
+          "missions",
+          "tasks",
+          "time_entries",
           "events",
           "complete"
         ],
@@ -484,6 +505,7 @@
                   "invalid_role",
                   "invalid_setup_token",
                   "invalid_stats_range",
+                  "invalid_sync_cursor",
                   "invalid_timezone",
                   "invalid_username",
                   "last_admin_protected",
@@ -765,6 +787,133 @@
         ],
         "type": "object"
       },
+      "Mission": {
+        "properties": {
+          "archived": {
+            "type": "boolean"
+          },
+          "colour": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "ends_on": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "starts_on": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "title": {
+            "type": "string"
+          },
+          "updated_at": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "weekly_goal_secs": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "why": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "colour",
+          "weekly_goal_secs",
+          "archived",
+          "updated_at"
+        ],
+        "type": "object"
+      },
+      "MissionRecord": {
+        "additionalProperties": false,
+        "properties": {
+          "archived": {
+            "type": "boolean"
+          },
+          "colour": {
+            "description": "Palette slot, 0-7.",
+            "format": "int64",
+            "type": "integer"
+          },
+          "deleted": {
+            "type": "boolean"
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "ends_on": {
+            "description": "`YYYY-MM-DD`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "description": "Client-generated, 32 lowercase hex characters.",
+            "type": "string"
+          },
+          "starts_on": {
+            "description": "`YYYY-MM-DD`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "title": {
+            "type": "string"
+          },
+          "updated_at": {
+            "description": "Your clock at the last edit. Last write wins on it.",
+            "format": "int64",
+            "type": "integer"
+          },
+          "weekly_goal_secs": {
+            "description": "0 means no goal.",
+            "format": "int64",
+            "type": "integer"
+          },
+          "why": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "colour",
+          "weekly_goal_secs",
+          "archived",
+          "deleted",
+          "updated_at"
+        ],
+        "type": "object"
+      },
       "NewCodeResponse": {
         "properties": {
           "expires_at": {
@@ -848,6 +997,27 @@
         },
         "required": [
           "other_sessions_ended"
+        ],
+        "type": "object"
+      },
+      "RecordResult": {
+        "properties": {
+          "index": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "reason": {
+            "description": "Absent unless the status is `rejected`.",
+            "type": "string"
+          },
+          "status": {
+            "description": "`applied`, `stale` or `rejected`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "index",
+          "status"
         ],
         "type": "object"
       },
@@ -1030,6 +1200,304 @@
         },
         "required": [
           "days"
+        ],
+        "type": "object"
+      },
+      "SyncChanges": {
+        "properties": {
+          "missions": {
+            "items": {
+              "$ref": "#/components/schemas/MissionRecord"
+            },
+            "type": "array"
+          },
+          "tasks": {
+            "items": {
+              "$ref": "#/components/schemas/TaskRecord"
+            },
+            "type": "array"
+          },
+          "time_entries": {
+            "items": {
+              "$ref": "#/components/schemas/TimeEntryRecord"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "missions",
+          "tasks",
+          "time_entries"
+        ],
+        "type": "object"
+      },
+      "SyncRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "cursor": {
+            "description": "The `cursor` from your last sync, or 0 to pull everything.",
+            "format": "int64",
+            "type": "integer"
+          },
+          "missions": {
+            "items": {
+              "$ref": "#/components/schemas/MissionRecord"
+            },
+            "type": "array"
+          },
+          "tasks": {
+            "items": {
+              "$ref": "#/components/schemas/TaskRecord"
+            },
+            "type": "array"
+          },
+          "time_entries": {
+            "items": {
+              "$ref": "#/components/schemas/TimeEntryRecord"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "cursor"
+        ],
+        "type": "object"
+      },
+      "SyncResponse": {
+        "properties": {
+          "changes": {
+            "$ref": "#/components/schemas/SyncChanges",
+            "description": "Every record changed after your cursor, tombstones included."
+          },
+          "cursor": {
+            "description": "Send this as `cursor` next time.",
+            "format": "int64",
+            "type": "integer"
+          },
+          "has_more": {
+            "description": "More changes wait; sync again (an empty push is fine).",
+            "type": "boolean"
+          },
+          "results": {
+            "$ref": "#/components/schemas/SyncResults"
+          },
+          "server_time": {
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "results",
+          "changes",
+          "cursor",
+          "has_more",
+          "server_time"
+        ],
+        "type": "object"
+      },
+      "SyncResults": {
+        "properties": {
+          "missions": {
+            "items": {
+              "$ref": "#/components/schemas/RecordResult"
+            },
+            "type": "array"
+          },
+          "tasks": {
+            "items": {
+              "$ref": "#/components/schemas/RecordResult"
+            },
+            "type": "array"
+          },
+          "time_entries": {
+            "items": {
+              "$ref": "#/components/schemas/RecordResult"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "missions",
+          "tasks",
+          "time_entries"
+        ],
+        "type": "object"
+      },
+      "Task": {
+        "properties": {
+          "day": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "done_at": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "mission_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "notes": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "position": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "updated_at": {
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "position",
+          "updated_at"
+        ],
+        "type": "object"
+      },
+      "TaskRecord": {
+        "additionalProperties": false,
+        "properties": {
+          "day": {
+            "description": "`YYYY-MM-DD`, or `null` for the backlog.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "deleted": {
+            "type": "boolean"
+          },
+          "done_at": {
+            "description": "`null` while open.",
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "mission_id": {
+            "description": "`null`: no mission (\"Other\").",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "notes": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "position": {
+            "description": "Fractional index key, base62, sorted bytewise within a day.",
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "updated_at": {
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "position",
+          "deleted",
+          "updated_at"
+        ],
+        "type": "object"
+      },
+      "TimeEntry": {
+        "properties": {
+          "end_ts": {
+            "description": "`null` for the timer that was running at export time.",
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "start_ts": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "task_id": {
+            "type": "string"
+          },
+          "updated_at": {
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "task_id",
+          "start_ts",
+          "updated_at"
+        ],
+        "type": "object"
+      },
+      "TimeEntryRecord": {
+        "additionalProperties": false,
+        "properties": {
+          "deleted": {
+            "type": "boolean"
+          },
+          "end_ts": {
+            "description": "`null` while the timer runs.",
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "start_ts": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "task_id": {
+            "type": "string"
+          },
+          "updated_at": {
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "task_id",
+          "start_ts",
+          "deleted",
+          "updated_at"
         ],
         "type": "object"
       },
@@ -2562,6 +3030,100 @@
         "summary": "Redeem an invite by choosing a password",
         "tags": [
           "accounts"
+        ]
+      }
+    },
+    "/api/v1/missions/sync": {
+      "post": {
+        "operationId": "sync_missions",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SyncRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SyncResponse"
+                }
+              }
+            },
+            "description": "Every pushed record has its own verdict, by index, plus one page of changes."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "`invalid_sync_cursor`: start over from 0."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "`unauthenticated`: no valid device token. Stop and re-pair; do not retry in a loop."
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "`batch_too_large` (more than 500 records) or `payload_too_large`."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "`rate_limited`. Wait for `Retry-After` seconds.",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds until the window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Any other error, in the uniform shape. See the conventions in docs/wire-format.md."
+          }
+        },
+        "security": [
+          {
+            "device_token": []
+          }
+        ],
+        "summary": "Push mission edits and pull everyone else's (device)",
+        "tags": [
+          "missions"
         ]
       }
     },
