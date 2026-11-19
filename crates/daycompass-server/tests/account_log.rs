@@ -34,6 +34,7 @@ const OTHER_ACCOUNT_ROUTES: &[(&str, &str)] = &[
     ("PATCH", "/api/v1/account/timezone"),
     ("POST", "/account/timezone"),
     ("POST", "/account/review-day"),
+    ("POST", "/account/screen-time"),
 ];
 
 /// Files permitted to write to `account_log` in SQL. Extend

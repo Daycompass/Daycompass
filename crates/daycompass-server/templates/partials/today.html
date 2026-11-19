@@ -75,8 +75,23 @@
       {%- endfor %}
       <line class="dc-timeline__now" x1="{{ timeline.now_x }}" x2="{{ timeline.now_x }}" y1="0" y2="40" vector-effect="non-scaling-stroke" data-dc-shift="{{ timeline.rate }}"/>
     </svg>
+    {%- if let Some(track) = track %}
+    <svg class="dc-timeline dc-timeline--thin" viewBox="0 0 1440 8" preserveAspectRatio="none" role="img" aria-label="Screen time today, by category">
+      <rect class="dc-timeline__track" x="0" y="0" width="1440" height="8"/>
+      {%- for rect in track %}
+      <rect class="{% if let Some(slot) = rect.slot %}dc-fill--c{{ slot }}{% else %}dc-fill--neutral{% endif %}" x="{{ rect.x }}" y="0" width="{{ rect.width }}" height="8"><title>{{ rect.title }}</title></rect>
+      {%- endfor %}
+    </svg>
+    {%- endif %}
     <div class="dc-timeline__hours" aria-hidden="true"><span>00</span><span>06</span><span>12</span><span>18</span><span>24</span></div>
-    <p class="dc-caption">{{ timeline.label }}. Days are counted in {{ zone }}.</p>
+    <p class="dc-caption">{{ timeline.label }}.{% if track.is_some() %} The thin row is screen time on your devices, by category.{% endif %} Days are counted in {{ zone }}.</p>
+    {%- if !entries.is_empty() %}
+    <ul class="dc-list">
+      {%- for row in entries %}
+      <li class="dc-list__row"><span>{% if let Some(colour) = row.colour %}<span class="dc-swatch dc-swatch--c{{ colour }}" aria-hidden="true"></span> {% endif %}{{ row.title }}</span><span class="dc-caption">{{ row.when }} · {{ row.focus }}</span></li>
+      {%- endfor %}
+    </ul>
+    {%- endif %}
   </section>
   {% if let Some(slot) = timer_slot %}{{ slot|safe }}{% endif %}
 </div>

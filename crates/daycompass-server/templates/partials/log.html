@@ -32,6 +32,7 @@
   <section id="log-editor" class="dc-card dc-stack">
     {%- if editor.running %}
     <h2 class="dc-heading-3">{{ editor.task_title }}</h2>
+    <p class="dc-caption">{{ editor.focus }} so far</p>
     <p class="dc-muted">This time is still being tracked. Stop the timer to correct or delete it.</p>
     <div class="dc-list__actions">
       <button class="dc-btn dc-btn--primary" type="button" hx-post="/missions/log/entries/{{ editor.id }}/stop{{ query }}" hx-target="#log" hx-swap="outerHTML">{% call icons::icon("pause") %}{% endcall %}Stop</button>
@@ -39,6 +40,7 @@
     </div>
     {%- else %}
     <h2 class="dc-heading-3">Correct time</h2>
+    <p class="dc-caption">{{ editor.task_title }}: {{ editor.focus }}</p>
     <form class="dc-stack" method="post" action="/missions/log/entries/{{ editor.id }}{{ query }}" hx-post="/missions/log/entries/{{ editor.id }}{{ query }}" hx-target="#log" hx-swap="outerHTML" hx-disabled-elt="find button">
       <div class="dc-field">
         <label class="dc-field__label" for="entry-task">Task</label>

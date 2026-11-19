@@ -1457,6 +1457,17 @@ pub const INVENTORY: &[RouteSpec] = &[
     },
     RouteSpec {
         method: "POST",
+        path: "/account/screen-time",
+        surface: Surface::Page,
+        access: Access::Session,
+        origin: OriginRule::Required,
+        csrf: true,
+        sets_session_cookie: false,
+        max_body_bytes: None,
+        rate_limits: &[],
+    },
+    RouteSpec {
+        method: "POST",
         path: "/account/review-day",
         surface: Surface::Page,
         access: Access::Session,
@@ -1741,6 +1752,11 @@ pub fn router(state: AppState) -> Router {
         "POST",
         "/account/review-day",
         pages::account::change_review_day,
+    );
+    table.add(
+        "POST",
+        "/account/screen-time",
+        pages::account::change_screen_time,
     );
     table.add("GET", "/setup", pages::onboarding::setup_page);
     table.add("POST", "/setup", pages::onboarding::submit_setup);

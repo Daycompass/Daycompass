@@ -114,6 +114,13 @@ index. A review (`0010_reviews.sql`) is keyed by its week's Monday,
 not an id, and keeps a snapshot of the goals it was measured against.
 Details: `docs/wire-format.md`, `docs/design-decisions.md`.
 
+The dashboard's `/missions/` pages read the account's own screen time
+(`missions::screen_time`, through `events::store::select_own_overlapping`)
+to show distraction during tracked time, unless the account turned that
+off; distraction means the categories the account marked
+(`0011_missions_screen_time.sql`). Every `/missions/` route is held to
+session access by `tests/no_event_reads.rs`.
+
 ## Rate-limit defaults
 
 All from `src/config.rs`, `max/window_secs`, each overridable by its

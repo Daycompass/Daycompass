@@ -1,5 +1,6 @@
-//! Every SQL statement that names `missions`, `tasks`, `time_entries`
-//! or `reviews`, and the account's missions settings on `users`.
+//! Every SQL statement that names `missions`, `tasks`, `time_entries`,
+//! `reviews` or `distraction_categories`, and the account's missions
+//! settings on `users`.
 //!
 //! Every function takes the caller's `user_id` and filters on it; there
 //! is no statement here that could reach another account's rows. They
@@ -642,6 +643,59 @@ pub async fn set_review_day(
         .bind(day)
         .execute(conn)
         .await?;
+    Ok(())
+}
+
+/// Whether the Missions pages show the account's screen time.
+pub async fn screen_time_enabled(
+    conn: &mut SqliteConnection,
+    user_id: &str,
+) -> Result<bool, StoreError> {
+    let enabled: Option<bool> =
+        sqlx::query_scalar("SELECT missions_screen_time FROM users WHERE id = ?1")
+            .bind(user_id)
+            .fetch_optional(conn)
+            .await?;
+    enabled.ok_or(StoreError::CorruptRow)
+}
+
+/// The categories the account counts as distraction, by name.
+pub async fn distraction_categories(
+    conn: &mut SqliteConnection,
+    user_id: &str,
+) -> Result<Vec<String>, StoreError> {
+    Ok(sqlx::query_scalar(
+        "SELECT category FROM distraction_categories WHERE user_id = ?1 ORDER BY category",
+    )
+    .bind(user_id)
+    .fetch_all(conn)
+    .await?)
+}
+
+/// Replaces both settings at once. Takes a connection inside the
+/// caller's transaction, so the set is never seen half-written.
+pub async fn set_screen_time(
+    conn: &mut SqliteConnection,
+    user_id: &str,
+    enabled: bool,
+    distraction: &[String],
+) -> Result<(), StoreError> {
+    sqlx::query("UPDATE users SET missions_screen_time = ?2 WHERE id = ?1")
+        .bind(user_id)
+        .bind(enabled)
+        .execute(&mut *conn)
+        .await?;
+    sqlx::query("DELETE FROM distraction_categories WHERE user_id = ?1")
+        .bind(user_id)
+        .execute(&mut *conn)
+        .await?;
+    for category in distraction {
+        sqlx::query("INSERT INTO distraction_categories (user_id, category) VALUES (?1, ?2)")
+            .bind(user_id)
+            .bind(category)
+            .execute(&mut *conn)
+            .await?;
+    }
     Ok(())
 }
 

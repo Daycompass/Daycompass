@@ -13,6 +13,7 @@
 //! | Last write wins, tombstones, the running timer, the cursor | [`sync`] |
 //! | Keys that put a task between two others | [`position`] |
 //! | The dashboard's reads and writes, the North Star, the weekly review | [`service`] |
+//! | Screen time set against tracked time, and its settings | [`screen_time`] |
 //!
 //! # The sync model
 //!
@@ -35,8 +36,12 @@
 //! An account's own, like its events: the sync route is device-only,
 //! keyed to the device's owner, and has no id parameter that could name
 //! another account. No admin route reads these tables.
+//!
+//! The dashboard's missions pages also read the account's own screen
+//! time, through [`screen_time`], unless the account turned that off.
 
 pub mod position;
+pub mod screen_time;
 pub mod service;
 pub mod store;
 pub mod sync;

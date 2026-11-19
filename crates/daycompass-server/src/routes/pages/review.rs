@@ -50,6 +50,8 @@ struct ReviewContent {
     next: String,
     mission_total: String,
     tracked_total: String,
+    /// `None`: screen time is off, or no category counts as distraction.
+    distraction: Option<String>,
     /// Mission Hours as a share of all tracked time, in percent; `None`
     /// if nothing was tracked.
     share: Option<i64>,
@@ -206,6 +208,7 @@ fn build(data: ReviewData, week: &Week, saved: bool) -> ReviewContent {
         next: query_of(1),
         mission_total: format_duration(data.mission_secs),
         tracked_total: format_duration(data.tracked_secs),
+        distraction: data.distraction_secs.map(format_duration),
         share: (data.tracked_secs > 0).then(|| data.mission_secs * 100 / data.tracked_secs),
         day_max: days.iter().map(|day| day.secs).max().unwrap_or(0).max(1),
         days,
@@ -417,7 +420,11 @@ fn markdown(heading: &str, content: &ReviewContent) -> String {
         .share
         .map(|share| format!(", {share}% of {} tracked", content.tracked_total))
         .unwrap_or_default();
-    let _ = writeln!(out, "Mission Hours: {}{share}\n", content.mission_total);
+    let _ = writeln!(out, "Mission Hours: {}{share}", content.mission_total);
+    if let Some(distraction) = &content.distraction {
+        let _ = writeln!(out, "Distraction: {distraction}");
+    }
+    out.push('\n');
 
     out.push_str("## Mission Hours per day\n\n");
     for day in &content.days {
@@ -472,6 +479,7 @@ mod tests {
             next: String::new(),
             mission_total: "5h 0m".to_owned(),
             tracked_total: "10h 0m".to_owned(),
+            distraction: Some("1h 0m".to_owned()),
             share: Some(50),
             days: vec![DayBar {
                 name: "Monday 16 Nov".to_owned(),
@@ -501,7 +509,8 @@ mod tests {
         assert_eq!(
             text,
             "# Week of 16 November 2026\n\n\
-             Mission Hours: 5h 0m, 50% of 10h 0m tracked\n\n\
+             Mission Hours: 5h 0m, 50% of 10h 0m tracked\n\
+             Distraction: 1h 0m\n\n\
              ## Mission Hours per day\n\n\
              - Monday 16 Nov: 5h 0m\n\n\
              ## Missions\n\n\

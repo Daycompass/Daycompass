@@ -24,11 +24,12 @@ use jiff::ToSpan;
 use serde::Deserialize;
 
 use super::plan::{month_label, week_of};
-use super::today::{internal, timeline_of, Timeline};
+use super::today::{focus_of, internal, timeline_of, window_around, Timeline};
 use super::{format_duration, render, render_fragment, Shell, TimerPill, TimerSlot};
 use crate::auth::store::StoreError;
 use crate::auth::time::UnixTime;
 use crate::error::{ApiError, ErrorKind};
+use crate::missions::screen_time;
 use crate::missions::service::{self, LogData, SaveOutcome};
 use crate::routes::SessionContext;
 use crate::state::AppState;
@@ -84,6 +85,8 @@ struct Editor {
     /// [`LOCAL_FORMAT`]; `end` is empty while it runs.
     start: String,
     end: String,
+    /// [`focus_of`].
+    focus: String,
 }
 
 struct Group {
@@ -135,7 +138,31 @@ async fn content(
     } else {
         None
     };
+    let window = window_around(&data.entries, week, now.as_secs());
+    let screen = screen_time::load(&state.pool, user_id, window)
+        .await
+        .map_err(|err| internal(&err, "reading screen time"))?;
+    let focus: std::collections::HashMap<String, String> = data
+        .entries
+        .iter()
+        .map(|entry| {
+            let focus = focus_of(entry, screen.as_ref(), now.as_secs());
+            (entry.id.clone(), focus)
+        })
+        .collect();
     let mut content = build(data, &days, week.0, today, &zone, view, now.as_secs());
+    for block in content
+        .days
+        .iter_mut()
+        .flat_map(|day| day.timeline.blocks.iter_mut())
+    {
+        if let Some(focus) = focus.get(&block.id) {
+            block.title = format!("{}, {focus}", block.title);
+        }
+    }
+    if let Some(editor) = content.editor.as_mut() {
+        editor.focus = focus.get(&editor.id).cloned().unwrap_or_default();
+    }
     content.timer_slot = timer_slot;
     Ok((content, month_label(days[0], days[6])))
 }
@@ -192,6 +219,7 @@ fn build(
             running: entry.end_ts.is_none(),
             start: local(entry.start_ts),
             end: entry.end_ts.map(local).unwrap_or_default(),
+            focus: String::new(),
         });
 
     let heads = std::iter::once("Backlog".to_owned()).chain(

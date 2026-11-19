@@ -140,7 +140,7 @@ async fn time_added_by_hand_shows_on_its_day_and_a_device_pulls_it() {
     assert!(text.contains(r#"aria-label="Thursday 5 Nov: 0m""#));
     // 09:00 is minute 540 of the day.
     assert!(text.contains(&format!(
-        r#"<a href="/missions/log?week=2026-11-02&amp;entry={id}#log-editor" aria-label="Reading, 09:00 to 10:30"><rect class="dc-fill--neutral" x="540.00""#
+        r#"<a href="/missions/log?week=2026-11-02&amp;entry={id}#log-editor" aria-label="Reading, 09:00 to 10:30, 1h 30m"><rect class="dc-fill--neutral" x="540.00""#
     )));
     assert!(
         !text.contains("log-editor\" class"),
