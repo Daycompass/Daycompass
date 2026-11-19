@@ -71,6 +71,8 @@ pub enum SaveOutcome {
     /// No position key fits where the task was to go: its neighbours'
     /// keys are equal, or not of the scheme in [`super::position`].
     NoRoom,
+    /// The time entry still runs: it can only be stopped.
+    Running,
 }
 
 /// Creates a mission (`id: None`) or replaces the fields of one of the
@@ -573,6 +575,165 @@ pub async fn carry_over(
     write(pool, user_id, tasks(moved), now).await
 }
 
+pub struct LogData {
+    /// The backlog and the week's days, as in [`plan_of`]: the tasks
+    /// time can be put on.
+    pub plan: PlanData,
+    /// Live entries of live tasks overlapping the week, oldest first.
+    pub entries: Vec<TrackedEntry>,
+}
+
+/// What the Log shows of the week of `days` (`YYYY-MM-DD`), which spans
+/// `week`, `[start, end)` in Unix seconds.
+pub async fn log_of(
+    pool: &SqlitePool,
+    user_id: &str,
+    days: &[String],
+    week: (i64, i64),
+    now: UnixTime,
+) -> Result<LogData, StoreError> {
+    let plan = plan_of(pool, user_id, days).await?;
+    let mut conn = pool.acquire().await?;
+    let entries =
+        store::entries_overlapping(&mut conn, user_id, week.0, week.1, now.as_secs()).await?;
+    Ok(LogData { plan, entries })
+}
+
+/// Stricter than the sync rules, which allow a device's clock some
+/// skew: time entered here was read off this server's clock.
+fn check_span(start: i64, end: i64, now: UnixTime) -> Result<(), RejectReason> {
+    if start > now.as_secs() {
+        Err(RejectReason::StartInFuture)
+    } else if end > now.as_secs() {
+        Err(RejectReason::EndInFuture)
+    } else if end <= start {
+        Err(RejectReason::EndNotAfterStart)
+    } else {
+        Ok(())
+    }
+}
+
+fn entries(entry: TimeEntry) -> Changes {
+    Changes {
+        time_entries: vec![entry],
+        ..Changes::default()
+    }
+}
+
+/// Adds time tracked without a timer, `[start, end)`, to a live task.
+pub async fn add_entry(
+    pool: &SqlitePool,
+    user_id: &str,
+    task_id: &str,
+    start: i64,
+    end: i64,
+    now: UnixTime,
+) -> Result<SaveOutcome, StoreError> {
+    if let Err(reason) = check_span(start, end, now) {
+        return Ok(SaveOutcome::Invalid(reason));
+    }
+    let mut conn = pool.acquire().await?;
+    let Some(task) = store::live_task(&mut conn, user_id, task_id).await? else {
+        return Ok(SaveOutcome::NotFound);
+    };
+    drop(conn);
+    let entry = TimeEntry {
+        id: new_id(),
+        task_id: task.id,
+        start_ts: start,
+        end_ts: Some(end),
+        deleted: false,
+        updated_at: now.as_secs(),
+    };
+    write(pool, user_id, entries(entry), now).await
+}
+
+/// One of the account's live entries that is no longer running.
+async fn stopped_entry(
+    pool: &SqlitePool,
+    user_id: &str,
+    entry_id: &str,
+) -> Result<Result<TimeEntry, SaveOutcome>, StoreError> {
+    let mut conn = pool.acquire().await?;
+    Ok(
+        match store::live_entry(&mut conn, user_id, entry_id).await? {
+            None => Err(SaveOutcome::NotFound),
+            Some(entry) if entry.end_ts.is_none() => Err(SaveOutcome::Running),
+            Some(entry) => Ok(entry),
+        },
+    )
+}
+
+/// Corrects a stopped entry: its start, its end and its task.
+pub async fn correct_entry(
+    pool: &SqlitePool,
+    user_id: &str,
+    entry_id: &str,
+    task_id: &str,
+    start: i64,
+    end: i64,
+    now: UnixTime,
+) -> Result<SaveOutcome, StoreError> {
+    let entry = match stopped_entry(pool, user_id, entry_id).await? {
+        Ok(entry) => entry,
+        Err(outcome) => return Ok(outcome),
+    };
+    if let Err(reason) = check_span(start, end, now) {
+        return Ok(SaveOutcome::Invalid(reason));
+    }
+    let mut conn = pool.acquire().await?;
+    let Some(task) = store::live_task(&mut conn, user_id, task_id).await? else {
+        return Ok(SaveOutcome::NotFound);
+    };
+    drop(conn);
+    let entry = TimeEntry {
+        task_id: task.id,
+        start_ts: start,
+        end_ts: Some(end),
+        updated_at: edit_time(entry.updated_at, now),
+        ..entry
+    };
+    write(pool, user_id, entries(entry), now).await
+}
+
+/// Deletes a stopped entry.
+pub async fn delete_entry(
+    pool: &SqlitePool,
+    user_id: &str,
+    entry_id: &str,
+    now: UnixTime,
+) -> Result<SaveOutcome, StoreError> {
+    let entry = match stopped_entry(pool, user_id, entry_id).await? {
+        Ok(entry) => entry,
+        Err(outcome) => return Ok(outcome),
+    };
+    let entry = TimeEntry {
+        deleted: true,
+        updated_at: edit_time(entry.updated_at, now),
+        ..entry
+    };
+    write(pool, user_id, entries(entry), now).await
+}
+
+/// Stops an entry if it runs; a stopped one has nothing to stop, which
+/// is not an error.
+pub async fn stop_entry(
+    pool: &SqlitePool,
+    user_id: &str,
+    entry_id: &str,
+    now: UnixTime,
+) -> Result<SaveOutcome, StoreError> {
+    let mut conn = pool.acquire().await?;
+    let Some(entry) = store::live_entry(&mut conn, user_id, entry_id).await? else {
+        return Ok(SaveOutcome::NotFound);
+    };
+    drop(conn);
+    if entry.end_ts.is_some() {
+        return Ok(SaveOutcome::Saved);
+    }
+    write(pool, user_id, entries(ended(entry, now)), now).await
+}
+
 pub async fn running_timer(
     pool: &SqlitePool,
     user_id: &str,
@@ -599,4 +760,28 @@ pub async fn set_north_star(
     let mut conn = pool.acquire().await?;
     store::set_north_star(&mut conn, user_id, value.as_deref()).await?;
     Ok(Ok(()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_span_entered_by_hand_ends_after_it_starts_and_not_after_now() {
+        let now = UnixTime::from_secs(1_000);
+        assert_eq!(check_span(900, 1_000, now), Ok(()));
+        assert_eq!(
+            check_span(1_001, 1_002, now),
+            Err(RejectReason::StartInFuture)
+        );
+        assert_eq!(check_span(900, 1_001, now), Err(RejectReason::EndInFuture));
+        assert_eq!(
+            check_span(900, 900, now),
+            Err(RejectReason::EndNotAfterStart)
+        );
+        assert_eq!(
+            check_span(900, 899, now),
+            Err(RejectReason::EndNotAfterStart)
+        );
+    }
 }

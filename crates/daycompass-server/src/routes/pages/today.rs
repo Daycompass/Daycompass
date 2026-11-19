@@ -100,21 +100,24 @@ pub(super) struct Neighbours {
     pub(super) before: String,
 }
 
-struct Timeline {
+pub(super) struct Timeline {
     label: String,
-    blocks: Vec<Block>,
-    now_x: String,
+    pub(super) total_secs: i64,
+    pub(super) blocks: Vec<Block>,
+    pub(super) now_x: String,
     /// SVG units per second, which `daycompass.js` grows the running
     /// block and moves the "now" line by.
-    rate: String,
+    pub(super) rate: String,
 }
 
-struct Block {
-    x: String,
-    width: String,
-    colour: Option<i64>,
-    title: String,
-    running: bool,
+pub(super) struct Block {
+    /// The time entry's.
+    pub(super) id: String,
+    pub(super) x: String,
+    pub(super) width: String,
+    pub(super) colour: Option<i64>,
+    pub(super) title: String,
+    pub(super) running: bool,
 }
 
 #[derive(Deserialize)]
@@ -312,7 +315,9 @@ pub(super) fn up_and_down(
     (up, down)
 }
 
-fn timeline_of(
+/// The entries of `entries` that overlap the day `[start, end)`, laid
+/// out on one SVG row.
+pub(super) fn timeline_of(
     entries: &[TrackedEntry],
     (start, end): (i64, i64),
     zone: &TimeZoneName,
@@ -327,6 +332,7 @@ fn timeline_of(
     let mut total = 0;
     let blocks = entries
         .iter()
+        .filter(|entry| entry.start_ts < end && entry.end_ts.unwrap_or(now) > start)
         .map(|entry| {
             let until = entry.end_ts.unwrap_or(now);
             total += until.min(end) - entry.start_ts.max(start);
@@ -334,6 +340,7 @@ fn timeline_of(
                 .end_ts
                 .map_or_else(|| "now".to_owned(), |ts| zone.clock(ts));
             Block {
+                id: entry.id.clone(),
                 x: format!("{:.2}", x_of(entry.start_ts)),
                 width: format!("{:.2}", x_of(until) - x_of(entry.start_ts)),
                 colour: entry.colour,
@@ -348,6 +355,7 @@ fn timeline_of(
         .collect();
     Timeline {
         label: format!("Tracked today: {}", format_duration(total)),
+        total_secs: total,
         blocks,
         now_x: format!("{:.2}", x_of(now)),
         rate: format!("{scale:.6}"),
@@ -390,6 +398,8 @@ async fn answer(
         Ok(SaveOutcome::NotFound) => ErrorKind::NotFound,
         Ok(SaveOutcome::Invalid(_)) => ErrorKind::TaskInvalid,
         Ok(SaveOutcome::NoRoom) => ErrorKind::TaskOrderConflict,
+        // Only the Log writes time entries.
+        Ok(SaveOutcome::Running) => ErrorKind::TimeEntryRunning,
         Err(err) => return internal(&err, "saving a task").into_response(),
     };
     ApiError::of(kind).into_response()
@@ -615,6 +625,8 @@ mod tests {
         let utc = TimeZoneName::utc();
         let day = (86_400, 2 * 86_400);
         let entry = |start, end| TrackedEntry {
+            id: String::new(),
+            task_id: String::new(),
             start_ts: start,
             end_ts: end,
             task_title: "Exercise 4".to_owned(),
@@ -625,10 +637,16 @@ mod tests {
             &[
                 entry(86_400 - 3600, Some(86_400 + 3600)),
                 entry(86_400 + 11 * 3600, None),
+                entry(2 * 86_400, Some(2 * 86_400 + 60)),
             ],
             day,
             &utc,
             now,
+        );
+        assert_eq!(
+            timeline.blocks.len(),
+            2,
+            "the one after the day is left out"
         );
         assert_eq!(timeline.blocks[0].x, "0.00");
         assert_eq!(timeline.blocks[0].width, "60.00");
@@ -638,6 +656,7 @@ mod tests {
         assert_eq!(timeline.blocks[1].title, "Exercise 4, 11:00 to now");
         assert_eq!(timeline.now_x, "720.00");
         assert_eq!(timeline.label, "Tracked today: 2h 0m");
+        assert_eq!(timeline.total_secs, 7200);
     }
 
     #[test]

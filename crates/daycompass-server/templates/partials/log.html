@@ -1,0 +1,98 @@
+{% import "macros.html" as icons -%}
+{#- Swapped in whole after every write. `query` carries the week along.
+    Every tracked block links to its own editor, below the week. One SVG
+    unit per minute of a day, as on Today. #}
+<div id="log" class="dc-stack dc-stack--lg">
+  <div class="dc-list__actions">
+    <a class="dc-btn dc-btn--neutral dc-btn--sm" href="/missions/log{{ previous }}" aria-label="Previous week">{% call icons::icon("left") %}{% endcall %}</a>
+    <a class="dc-btn dc-btn--neutral dc-btn--sm" href="/missions/log">Today</a>
+    <a class="dc-btn dc-btn--neutral dc-btn--sm" href="/missions/log{{ next }}" aria-label="Next week">{% call icons::icon("right") %}{% endcall %}</a>
+  </div>
+  <section class="dc-card dc-stack">
+    <h2 class="dc-heading-3">Tracked this week: {{ week_total }}</h2>
+    <div class="dc-timeline__hours" aria-hidden="true"><span>00</span><span>06</span><span>12</span><span>18</span><span>24</span></div>
+    {%- for day in days %}
+    <div class="dc-log__day">
+      <h3 class="dc-log__head">{{ day.name }} <span class="dc-muted">{{ day.date }}</span> <span class="dc-task__time">{{ day.total }}</span>{% if day.today %} <span class="dc-tag dc-tag--today">Today</span>{% endif %}</h3>
+      <svg class="dc-timeline" viewBox="0 0 1440 40" preserveAspectRatio="none" role="group" aria-label="{{ day.name }} {{ day.date }}: {{ day.total }}">
+        <rect class="dc-timeline__track" x="0" y="4" width="1440" height="32"/>
+        <path class="dc-timeline__tick" d="M360 0v40M720 0v40M1080 0v40" vector-effect="non-scaling-stroke"/>
+        {%- for block in day.timeline.blocks %}
+        <a href="/missions/log{{ query }}&amp;entry={{ block.id }}#log-editor" aria-label="{{ block.title }}"><rect class="{% if let Some(colour) = block.colour %}dc-fill--c{{ colour }}{% else %}dc-fill--neutral{% endif %}{% if block.id == picked %} dc-timeline__picked{% endif %}" x="{{ block.x }}" y="4" width="{{ block.width }}" height="32"{% if block.running %} data-dc-widen="{{ day.timeline.rate }}"{% endif %}><title>{{ block.title }}</title></rect></a>
+        {%- endfor %}
+        {%- if day.today %}
+        <line class="dc-timeline__now" x1="{{ day.timeline.now_x }}" x2="{{ day.timeline.now_x }}" y1="0" y2="40" vector-effect="non-scaling-stroke" data-dc-shift="{{ day.timeline.rate }}"/>
+        {%- endif %}
+      </svg>
+    </div>
+    {%- endfor %}
+    <p class="dc-caption">Select a block to correct or delete it. Days are counted in {{ zone }}.</p>
+  </section>
+  {%- if let Some(editor) = editor %}
+  <section id="log-editor" class="dc-card dc-stack">
+    {%- if editor.running %}
+    <h2 class="dc-heading-3">{{ editor.task_title }}</h2>
+    <p class="dc-muted">This time is still being tracked. Stop the timer to correct or delete it.</p>
+    <div class="dc-list__actions">
+      <button class="dc-btn dc-btn--primary" type="button" hx-post="/missions/log/entries/{{ editor.id }}/stop{{ query }}" hx-target="#log" hx-swap="outerHTML">{% call icons::icon("pause") %}{% endcall %}Stop</button>
+      <a class="dc-btn dc-btn--ghost" href="/missions/log{{ query }}">Close</a>
+    </div>
+    {%- else %}
+    <h2 class="dc-heading-3">Correct time</h2>
+    <form class="dc-stack" method="post" action="/missions/log/entries/{{ editor.id }}{{ query }}" hx-post="/missions/log/entries/{{ editor.id }}{{ query }}" hx-target="#log" hx-swap="outerHTML" hx-disabled-elt="find button">
+      <div class="dc-field">
+        <label class="dc-field__label" for="entry-task">Task</label>
+        <select class="dc-field__input" id="entry-task" name="task" required>
+          {%- for group in groups %}
+          <optgroup label="{{ group.label }}">{% for task in group.tasks %}<option value="{{ task.0 }}"{% if task.0 == editor.task_id %} selected{% endif %}>{{ task.1 }}</option>{% endfor %}</optgroup>
+          {%- endfor %}
+        </select>
+      </div>
+      <div class="dc-field">
+        <label class="dc-field__label" for="entry-start">Start</label>
+        <input class="dc-field__input" id="entry-start" name="start" type="datetime-local" step="1" value="{{ editor.start }}" required>
+      </div>
+      <div class="dc-field">
+        <label class="dc-field__label" for="entry-end">End</label>
+        <input class="dc-field__input" id="entry-end" name="end" type="datetime-local" step="1" value="{{ editor.end }}" required>
+      </div>
+      <div class="dc-list__actions">
+        <button class="dc-btn dc-btn--primary" type="submit"><span class="dc-spin" aria-hidden="true"></span>Save</button>
+        <button class="dc-btn dc-btn--danger" type="button" hx-post="/missions/log/entries/{{ editor.id }}/delete{{ query }}" hx-target="#log" hx-swap="outerHTML" hx-confirm="Delete this time on {{ editor.task_title }}?">Delete</button>
+        <a class="dc-btn dc-btn--ghost" href="/missions/log{{ query }}">Close</a>
+      </div>
+    </form>
+    {%- endif %}
+  </section>
+  {%- endif %}
+  <section class="dc-card dc-stack">
+    <h2 class="dc-heading-3">Add time</h2>
+    {%- if groups.is_empty() %}
+    <p class="dc-muted">Time goes on a task. Plan one for this week, or put one in the backlog, first.</p>
+    {%- else %}
+    <p class="dc-muted">For time without a timer, such as studying away from your devices.</p>
+    <form class="dc-stack" method="post" action="/missions/log/entries{{ query }}" hx-post="/missions/log/entries{{ query }}" hx-target="#log" hx-swap="outerHTML" hx-disabled-elt="find button">
+      <div class="dc-field">
+        <label class="dc-field__label" for="add-task">Task</label>
+        <select class="dc-field__input" id="add-task" name="task" required>
+          {%- for group in groups %}
+          <optgroup label="{{ group.label }}">{% for task in group.tasks %}<option value="{{ task.0 }}">{{ task.1 }}</option>{% endfor %}</optgroup>
+          {%- endfor %}
+        </select>
+      </div>
+      <div class="dc-field">
+        <label class="dc-field__label" for="add-start">Start</label>
+        <input class="dc-field__input" id="add-start" name="start" type="datetime-local" step="1" required>
+      </div>
+      <div class="dc-field">
+        <label class="dc-field__label" for="add-end">End</label>
+        <input class="dc-field__input" id="add-end" name="end" type="datetime-local" step="1" required>
+      </div>
+      <div class="dc-list__actions">
+        <button class="dc-btn dc-btn--primary" type="submit">{% call icons::icon("plus") %}{% endcall %}<span class="dc-spin" aria-hidden="true"></span>Add time</button>
+      </div>
+    </form>
+    {%- endif %}
+  </section>
+  {% if let Some(slot) = timer_slot %}{{ slot|safe }}{% endif %}
+</div>

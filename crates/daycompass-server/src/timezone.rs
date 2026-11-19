@@ -101,6 +101,19 @@ impl TimeZoneName {
         self.zoned(ts).map(|zoned| zoned.date())
     }
 
+    /// The local wall-clock time of `ts`, to the second.
+    pub fn datetime(&self, ts: i64) -> Option<jiff::civil::DateTime> {
+        self.zoned(ts).map(|zoned| zoned.datetime())
+    }
+
+    /// The Unix timestamp of a local wall-clock time here. A time the
+    /// clocks skip is moved forward past the gap, a time they repeat is
+    /// the first of the two (jiff's "compatible" rule).
+    pub fn timestamp_of(&self, local: jiff::civil::DateTime) -> Option<i64> {
+        let zone = TimeZone::get(&self.0).ok()?;
+        Some(local.to_zoned(zone).ok()?.timestamp().as_second())
+    }
+
     /// `09:05` - the local wall-clock time of `ts`.
     pub fn clock(&self, ts: i64) -> String {
         self.zoned(ts)
@@ -243,6 +256,20 @@ mod tests {
             TimeZoneName::utc().day_bounds(86_400 + 5),
             (86_400, 2 * 86_400)
         );
+    }
+
+    #[test]
+    fn a_wall_clock_time_converts_both_ways_and_a_skipped_one_moves_forward() {
+        let berlin = TimeZoneName::parse("Europe/Berlin").unwrap();
+        let ts = 1_774_740_600;
+        let local = berlin.datetime(ts).unwrap();
+        assert_eq!(local.to_string(), "2026-03-29T00:30:00");
+        assert_eq!(berlin.timestamp_of(local), Some(ts));
+        // 02:30 does not exist that day; it is read as 03:30 CEST.
+        let skipped = jiff::civil::date(2026, 3, 29).at(2, 30, 0, 0);
+        let moved = berlin.timestamp_of(skipped).unwrap();
+        assert_eq!(moved, ts + 7200);
+        assert_eq!(berlin.clock(moved), "03:30");
     }
 
     #[test]

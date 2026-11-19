@@ -216,6 +216,11 @@ pub enum ErrorKind {
     /// No position key fits between the two tasks a move named, see
     /// `missions::position`.
     TaskOrderConflict,
+    /// A time entry form named no task, or a start or end in the future
+    /// or out of order.
+    TimeEntryInvalid,
+    /// The time entry still runs: it can only be stopped.
+    TimeEntryRunning,
 }
 
 impl ErrorKind {
@@ -245,7 +250,8 @@ impl ErrorKind {
             | Self::SyncCursorInvalid
             | Self::MissionInvalid
             | Self::NorthStarInvalid
-            | Self::TaskInvalid => StatusCode::BAD_REQUEST,
+            | Self::TaskInvalid
+            | Self::TimeEntryInvalid => StatusCode::BAD_REQUEST,
             Self::Unauthorized
             | Self::Unauthenticated
             | Self::InvalidCredentials
@@ -263,6 +269,7 @@ impl ErrorKind {
             | Self::LastAdminProtected
             | Self::PasswordChangeConflict
             | Self::TaskOrderConflict
+            | Self::TimeEntryRunning
             | Self::DeviceLimitReached
             | Self::PairingCodeLimitReached
             | Self::CategoryRuleDuplicate
@@ -331,6 +338,8 @@ impl ErrorKind {
             Self::NorthStarInvalid => "invalid_north_star",
             Self::TaskInvalid => "invalid_task",
             Self::TaskOrderConflict => "task_order_conflict",
+            Self::TimeEntryInvalid => "invalid_time_entry",
+            Self::TimeEntryRunning => "time_entry_running",
         }
     }
 
@@ -432,6 +441,10 @@ impl ErrorKind {
             Self::TaskOrderConflict => {
                 "those tasks could not be reordered; reload the page and try again"
             }
+            Self::TimeEntryInvalid => {
+                "time needs a task, a start and an end after it, neither of them in the future"
+            }
+            Self::TimeEntryRunning => "this time is still being tracked; stop the timer first",
         }
     }
 }
@@ -495,6 +508,8 @@ pub(crate) const ALL_ERROR_KINDS: &[ErrorKind] = &[
     ErrorKind::NorthStarInvalid,
     ErrorKind::TaskInvalid,
     ErrorKind::TaskOrderConflict,
+    ErrorKind::TimeEntryInvalid,
+    ErrorKind::TimeEntryRunning,
 ];
 
 /// Compile-time proof that every code and message is a constant.

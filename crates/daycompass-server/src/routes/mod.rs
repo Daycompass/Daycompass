@@ -1322,6 +1322,64 @@ pub const INVENTORY: &[RouteSpec] = &[
         max_body_bytes: None,
         rate_limits: &[],
     },
+    // The caller's own tracked time, a week at a time. Same shape as the
+    // routes above: an `{id}` only ever names one of the caller's own
+    // time entries, a `task` field one of the caller's own tasks.
+    RouteSpec {
+        method: "GET",
+        path: "/missions/log",
+        surface: Surface::Page,
+        access: Access::Session,
+        origin: OriginRule::Checked,
+        csrf: false,
+        sets_session_cookie: false,
+        max_body_bytes: None,
+        rate_limits: &[],
+    },
+    RouteSpec {
+        method: "POST",
+        path: "/missions/log/entries",
+        surface: Surface::Page,
+        access: Access::Session,
+        origin: OriginRule::Required,
+        csrf: true,
+        sets_session_cookie: false,
+        max_body_bytes: None,
+        rate_limits: &[],
+    },
+    RouteSpec {
+        method: "POST",
+        path: "/missions/log/entries/{id}",
+        surface: Surface::Page,
+        access: Access::Session,
+        origin: OriginRule::Required,
+        csrf: true,
+        sets_session_cookie: false,
+        max_body_bytes: None,
+        rate_limits: &[],
+    },
+    RouteSpec {
+        method: "POST",
+        path: "/missions/log/entries/{id}/delete",
+        surface: Surface::Page,
+        access: Access::Session,
+        origin: OriginRule::Required,
+        csrf: true,
+        sets_session_cookie: false,
+        max_body_bytes: None,
+        rate_limits: &[],
+    },
+    RouteSpec {
+        method: "POST",
+        path: "/missions/log/entries/{id}/stop",
+        surface: Surface::Page,
+        access: Access::Session,
+        origin: OriginRule::Required,
+        csrf: true,
+        sets_session_cookie: false,
+        max_body_bytes: None,
+        rate_limits: &[],
+    },
     // The caller's own account: password change, account log, and a
     // link to `GET /api/v1/export` (not a page route of its own).
     RouteSpec {
@@ -1600,6 +1658,15 @@ pub fn router(state: AppState) -> Router {
     table.add("GET", "/missions/plan", pages::plan::page);
     table.add("POST", "/missions/plan/tasks", pages::plan::add);
     table.add("POST", "/missions/plan/move", pages::plan::move_task);
+    table.add("GET", "/missions/log", pages::log::page);
+    table.add("POST", "/missions/log/entries", pages::log::add);
+    table.add("POST", "/missions/log/entries/{id}", pages::log::correct);
+    table.add(
+        "POST",
+        "/missions/log/entries/{id}/delete",
+        pages::log::delete,
+    );
+    table.add("POST", "/missions/log/entries/{id}/stop", pages::log::stop);
     table.add("GET", "/account", pages::account::page);
     table.add("POST", "/account/password", pages::account::change_password);
     table.add("POST", "/account/timezone", pages::account::change_timezone);

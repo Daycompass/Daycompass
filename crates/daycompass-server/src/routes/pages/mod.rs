@@ -66,6 +66,7 @@ pub mod assets;
 pub mod categories;
 pub mod devices;
 pub mod focus;
+pub mod log;
 pub mod login;
 pub mod missions;
 pub mod onboarding;
