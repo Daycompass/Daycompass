@@ -312,7 +312,8 @@ pub async fn enforce_rate_limits(
                     | Bucket::IngestDevice
                     | Bucket::DeviceAuthFail
                     | Bucket::InviteGlobal
-                    | Bucket::Export => return unenforceable(*limit),
+                    | Bucket::Export
+                    | Bucket::MissionsSyncDevice => return unenforceable(*limit),
                 }
             }
             // One shared bucket for the whole endpoint, so there is no
@@ -328,7 +329,8 @@ pub async fn enforce_rate_limits(
                 | Bucket::IngestDevice
                 | Bucket::DeviceAuthFail
                 | Bucket::InviteIp
-                | Bucket::Export => return unenforceable(*limit),
+                | Bucket::Export
+                | Bucket::MissionsSyncDevice => return unenforceable(*limit),
             },
             LimitKey::Device => {
                 let Some(auth) = parts.extensions.get::<Arc<AuthDevice>>() else {
@@ -342,6 +344,10 @@ pub async fn enforce_rate_limits(
                     Bucket::IngestDevice => state
                         .limits
                         .ingest_device
+                        .check(DeviceKey::new(&auth.device.id), now),
+                    Bucket::MissionsSyncDevice => state
+                        .limits
+                        .missions_sync_device
                         .check(DeviceKey::new(&auth.device.id), now),
                     Bucket::LoginIp
                     | Bucket::LoginUsername
@@ -382,7 +388,8 @@ pub async fn enforce_rate_limits(
                     | Bucket::IngestDevice
                     | Bucket::DeviceAuthFail
                     | Bucket::InviteIp
-                    | Bucket::InviteGlobal => return unenforceable(*limit),
+                    | Bucket::InviteGlobal
+                    | Bucket::MissionsSyncDevice => return unenforceable(*limit),
                 }
             }
             // The handler owns this one: its key is in the request body.

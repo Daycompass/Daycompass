@@ -37,6 +37,7 @@ mod events;
 mod export;
 mod health;
 mod invites;
+mod missions;
 pub mod openapi;
 mod pages;
 mod pairing;
@@ -198,6 +199,8 @@ pub enum Bucket {
     InviteGlobal,
     /// Account exports from one session.
     Export,
+    /// Missions syncs from one authenticated device.
+    MissionsSyncDevice,
 }
 
 /// What a limiter counts a request against.
@@ -636,7 +639,7 @@ pub const INVENTORY: &[RouteSpec] = &[
     // is asked for here too. `RouteSpec::validate` permits an
     // `Access::BodySecret` route to stay Origin-checked; only the
     // *exemption* is whitelisted, so this does not touch
-    // `exactly_four_routes_skip_the_origin_check`.
+    // `exactly_five_routes_skip_the_origin_check`.
     RouteSpec {
         method: "POST",
         path: "/api/v1/invites/redeem",
@@ -843,6 +846,27 @@ pub const INVENTORY: &[RouteSpec] = &[
         sets_session_cookie: false,
         max_body_bytes: None,
         rate_limits: &[RateLimit::new(Bucket::Export, LimitKey::Session)],
+    },
+    // --- missions -------------------------------------------------------
+    //
+    // M6: a device pushes its mission, task and time-entry edits and
+    // pulls everyone else's, in one round trip. Same shape as ingest -
+    // device auth, no Origin, a raised body limit sitting inside the
+    // device layer - but its own per-device bucket, so syncing missions
+    // after every edit cannot starve screen time reporting.
+    RouteSpec {
+        method: "POST",
+        path: "/api/v1/missions/sync",
+        surface: Surface::Api,
+        access: Access::Device,
+        origin: OriginRule::NoAmbientAuthority,
+        csrf: false,
+        sets_session_cookie: false,
+        max_body_bytes: Some(crate::missions::sync::MAX_BODY_BYTES),
+        rate_limits: &[
+            RateLimit::new(Bucket::DeviceAuthFail, LimitKey::PeerBeforeAuth),
+            RateLimit::new(Bucket::MissionsSyncDevice, LimitKey::Device),
+        ],
     },
     // Lets a client detect clock skew, which is what makes the
     // validator's future-dating rules diagnosable from the outside.
@@ -1312,6 +1336,7 @@ pub fn router(state: AppState) -> Router {
     table.add("GET", "/api/v1/stats", stats::daily_totals);
     table.add("GET", "/api/v1/export", export::export_own);
     table.add("GET", "/api/v1/device/me", events::device_me);
+    table.add("POST", "/api/v1/missions/sync", missions::sync);
     table.add("GET", "/api/v1/devices", devices::list_own);
     table.add("PATCH", "/api/v1/devices/{id}", devices::rename_own);
     table.add("POST", "/api/v1/devices/{id}/revoke", devices::revoke_own);
@@ -1930,11 +1955,11 @@ mod tests {
         .validate();
     }
 
-    /// The exemption is pinned to an exact set, so adding a fifth
+    /// The exemption is pinned to an exact set, so adding a sixth
     /// route to it is a deliberate edit to this test rather than a
     /// line in a table nobody re-reads.
     #[test]
-    fn exactly_four_routes_skip_the_origin_check() {
+    fn exactly_five_routes_skip_the_origin_check() {
         let mut exempt: Vec<String> = INVENTORY
             .iter()
             .filter(|spec| matches!(spec.origin, OriginRule::NoAmbientAuthority))
@@ -1947,6 +1972,9 @@ mod tests {
             [
                 "GET /api/v1/device/me",
                 "POST /api/v1/events",
+                // Bearer only, like ingest: the device layer refuses
+                // the session cookie, so a browser has nothing to forge.
+                "POST /api/v1/missions/sync",
                 "POST /api/v1/pair",
                 "POST /api/v1/setup",
             ],
@@ -1973,10 +2001,10 @@ mod tests {
         );
     }
 
-    /// Only the ingest route overrides the global body limit, and it
-    /// overrides it to the documented value.
+    /// Only the two device write routes override the global body
+    /// limit, and each overrides it to its documented value.
     #[test]
-    fn only_ingest_raises_the_body_limit() {
+    fn only_the_device_writes_raise_the_body_limit() {
         let raised: Vec<(&str, &str, usize)> = INVENTORY
             .iter()
             .filter_map(|spec| spec.max_body_bytes.map(|max| (spec.method, spec.path, max)))
@@ -1984,11 +2012,18 @@ mod tests {
 
         assert_eq!(
             raised,
-            vec![(
-                "POST",
-                "/api/v1/events",
-                crate::events::ingest::MAX_BODY_BYTES
-            )]
+            vec![
+                (
+                    "POST",
+                    "/api/v1/events",
+                    crate::events::ingest::MAX_BODY_BYTES
+                ),
+                (
+                    "POST",
+                    "/api/v1/missions/sync",
+                    crate::missions::sync::MAX_BODY_BYTES
+                ),
+            ]
         );
     }
 

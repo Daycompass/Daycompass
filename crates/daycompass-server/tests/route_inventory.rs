@@ -274,6 +274,7 @@ impl Fixture {
                 "platform": "linux",
             })),
             ("POST", "/api/v1/events") => Some(json!({ "events": [] })),
+            ("POST", "/api/v1/missions/sync") => Some(json!({ "cursor": 0 })),
             ("POST", "/api/v1/category-rules") => Some(json!({
                 "kind": "app_id",
                 "pattern": format!("org.example.probe-{}", &target_id[..8]),
@@ -810,6 +811,7 @@ async fn every_layer_enforced_rate_limit_refuses_when_reached() {
         // per-address bucket is what refuses here.
         ("DAYCOMPASS_RATE_LIMIT_INVITE_GLOBAL", "100000/60"),
         ("DAYCOMPASS_RATE_LIMIT_EXPORT", "2/3600"),
+        ("DAYCOMPASS_RATE_LIMIT_MISSIONS_SYNC_DEVICE", "2/60"),
     ];
 
     for spec in INVENTORY.iter().filter(|spec| {
@@ -874,6 +876,8 @@ async fn every_layer_enforced_rate_limit_refuses_when_reached() {
                 // the point here: a *succeeding* ingest call must
                 // count too, or a client could sync without limit.
                 ("POST", "/api/v1/events") => request.json(json!({ "events": [] })),
+                // Same reasoning: an empty push is a successful sync.
+                ("POST", "/api/v1/missions/sync") => request.json(json!({ "cursor": 0 })),
                 _ => request,
             };
 
