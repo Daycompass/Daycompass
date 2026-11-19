@@ -397,6 +397,15 @@ the dashboard cannot place a task next to it and says so
 (`task_order_conflict`), as it does for two tasks with the same key -
 two devices that added a task at the same place offline.
 
+The Plan page (`/missions/plan?week=`) shows the backlog (tasks with
+no day) next to the seven days of one ISO week; `week` is any date of
+that week, and without it the page shows this one. A move there sets
+the task's day and its position in one write, through the same sync
+rules. Drag and drop works within and across the columns; the buttons
+reach the same places - up and down, and one column earlier or later,
+to the bottom there. Neither reaches past the backlog or Sunday:
+moving to another week goes through the backlog.
+
 "Mission hours" count time on tasks under a live mission; the week's
 goal is the sum of the weekly goals of the missions that are not
 archived. The timeline shows tracked time only, of every task, in

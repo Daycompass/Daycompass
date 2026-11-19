@@ -450,3 +450,15 @@ select.dc-field__input { -webkit-appearance: none; appearance: none; cursor: poi
 .dc-fill--c7 { fill: var(--cat-7); }
 .dc-fill--neutral { fill: var(--data-neutral); }
 .dc-mission-hours { margin-bottom: var(--space-6); }
+
+/* ---------- Plan ---------- */
+/* The backlog and seven days side by side, scrolling sideways. */
+.dc-plan { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(17rem, 1fr); gap: var(--space-3); overflow-x: auto; padding-bottom: var(--space-2); }
+.dc-plan__head { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-2); }
+.dc-plan__day--today { border-color: var(--primary); }
+.dc-plan__day--past { opacity: 0.65; }
+/* Fills the column, so a drop anywhere below the last task lands. */
+.dc-plan__tasks { flex: 1; min-height: 4rem; }
+.dc-plan__tasks:empty { border: 2px dashed var(--border); border-radius: var(--radius-lg); }
+.dc-plan .dc-task__actions { justify-content: flex-start; }
+.dc-tag--today { background: var(--primary-soft); color: var(--text); }

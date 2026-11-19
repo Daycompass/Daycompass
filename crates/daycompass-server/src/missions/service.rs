@@ -251,14 +251,9 @@ pub async fn today_of(
 ) -> Result<TodayData, StoreError> {
     let hours = mission_hours(pool, user_id, day.bounds, day.week, now).await?;
     let mut conn = pool.acquire().await?;
-    let mut missions: Vec<Mission> = store::missions_after(&mut conn, user_id, 0, -1, true)
-        .await?
-        .into_iter()
-        .map(|(_rev, mission)| mission)
-        .collect();
-    missions.sort_by_cached_key(|mission| mission.title.to_lowercase());
+    let missions = missions_by_title(&mut conn, user_id).await?;
     let times = store::task_times(&mut conn, user_id, &day.date, now.as_secs()).await?;
-    let tasks = store::tasks_of_day(&mut conn, user_id, &day.date)
+    let tasks = store::tasks_of_day(&mut conn, user_id, Some(&day.date))
         .await?
         .into_iter()
         .map(|task| TaskView {
@@ -269,7 +264,7 @@ pub async fn today_of(
             task,
         })
         .collect();
-    let left_from_yesterday = store::tasks_of_day(&mut conn, user_id, &day.yesterday)
+    let left_from_yesterday = store::tasks_of_day(&mut conn, user_id, Some(&day.yesterday))
         .await?
         .iter()
         .filter(|task| task.done_at.is_none())
@@ -291,17 +286,55 @@ pub async fn today_of(
     })
 }
 
+/// Every live mission, archived ones included (tasks may still name
+/// them), by title.
+async fn missions_by_title(
+    conn: &mut sqlx::SqliteConnection,
+    user_id: &str,
+) -> Result<Vec<Mission>, StoreError> {
+    let mut missions: Vec<Mission> = store::missions_after(conn, user_id, 0, -1, true)
+        .await?
+        .into_iter()
+        .map(|(_rev, mission)| mission)
+        .collect();
+    missions.sort_by_cached_key(|mission| mission.title.to_lowercase());
+    Ok(missions)
+}
+
+pub struct PlanData {
+    /// As in [`TodayData::missions`].
+    pub missions: Vec<Mission>,
+    /// The backlog's tasks, then each day's, each in their order.
+    pub columns: Vec<Vec<Task>>,
+}
+
+/// The backlog and the tasks planned for each of `days` (`YYYY-MM-DD`).
+pub async fn plan_of(
+    pool: &SqlitePool,
+    user_id: &str,
+    days: &[String],
+) -> Result<PlanData, StoreError> {
+    let mut conn = pool.acquire().await?;
+    let missions = missions_by_title(&mut conn, user_id).await?;
+    let mut columns = vec![store::tasks_of_day(&mut conn, user_id, None).await?];
+    for day in days {
+        columns.push(store::tasks_of_day(&mut conn, user_id, Some(day)).await?);
+    }
+    Ok(PlanData { missions, columns })
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Place {
     Top,
     Bottom,
 }
 
-/// Adds a task to `day`, before or after all of its tasks.
+/// Adds a task to `day` (`None`: the backlog), before or after all of
+/// its tasks.
 pub async fn add_task(
     pool: &SqlitePool,
     user_id: &str,
-    day: &str,
+    day: Option<&str>,
     title: String,
     mission_id: Option<String>,
     place: Place,
@@ -322,7 +355,7 @@ pub async fn add_task(
         mission_id,
         title,
         notes: None,
-        day: Some(day.to_owned()),
+        day: day.map(str::to_owned),
         position,
         done_at: None,
         deleted: false,
@@ -428,11 +461,14 @@ pub async fn set_done(
     write(pool, user_id, push, now).await
 }
 
-/// Puts a task between two others (`None`: at that end).
+/// Puts a task between two others (`None`: at that end). `day: Some`
+/// also plans it for that day (`Some(None)`: the backlog); `None`
+/// leaves it on its own.
 pub async fn move_task(
     pool: &SqlitePool,
     user_id: &str,
     task_id: &str,
+    day: Option<Option<&str>>,
     after: Option<&str>,
     before: Option<&str>,
     now: UnixTime,
@@ -456,6 +492,7 @@ pub async fn move_task(
         return Ok(SaveOutcome::NoRoom);
     };
     let task = Task {
+        day: day.map_or(task.day, |day| day.map(str::to_owned)),
         position,
         updated_at: edit_time(task.updated_at, now),
         ..task
@@ -472,8 +509,8 @@ pub async fn carry_over(
     now: UnixTime,
 ) -> Result<SaveOutcome, StoreError> {
     let mut conn = pool.acquire().await?;
-    let left = store::tasks_of_day(&mut conn, user_id, from).await?;
-    let planned = store::tasks_of_day(&mut conn, user_id, to).await?;
+    let left = store::tasks_of_day(&mut conn, user_id, Some(from)).await?;
+    let planned = store::tasks_of_day(&mut conn, user_id, Some(to)).await?;
     drop(conn);
     let mut last = planned.last().map(|task| task.position.clone());
     let mut moved = Vec::new();

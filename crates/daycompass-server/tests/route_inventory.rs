@@ -302,6 +302,12 @@ impl Fixture {
             // The task to move travels in the body, not the path.
             ("POST", "/missions/tasks/move") => Some(vec![("task", target_id.to_owned())]),
             ("POST", "/missions/tasks/{id}/done") => Some(vec![("done", "true".to_owned())]),
+            ("POST", "/missions/plan/tasks") => {
+                Some(vec![("title", "Probe".to_owned()), ("day", String::new())])
+            }
+            ("POST", "/missions/plan/move") => {
+                Some(vec![("task", target_id.to_owned()), ("day", String::new())])
+            }
             _ => None,
         }
     }
@@ -370,7 +376,7 @@ impl Fixture {
             self.disposable_category_rule(caller).await
         } else if spec.path.contains("/missions/{id}") {
             self.disposable_mission(caller).await
-        } else if spec.path.starts_with("/missions/tasks/") {
+        } else if spec.path.starts_with("/missions/tasks/") || spec.path == "/missions/plan/move" {
             self.disposable_task(caller).await
         } else {
             self.disposable_account().await

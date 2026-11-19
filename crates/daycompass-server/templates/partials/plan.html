@@ -1,0 +1,89 @@
+{% import "macros.html" as icons -%}
+{#- Swapped in whole after every write. `query` carries the week, the
+    mission filter and "hide done" along. Open tasks can be dragged
+    (daycompass.js) within and across columns, and moved with the
+    buttons: up and down, and one column earlier or later. #}
+<div id="plan" class="dc-stack dc-stack--lg">
+  <div class="dc-list__actions">
+    <a class="dc-btn dc-btn--neutral dc-btn--sm" href="/missions/plan{{ previous }}" aria-label="Previous week">{% call icons::icon("left") %}{% endcall %}</a>
+    <a class="dc-btn dc-btn--neutral dc-btn--sm" href="/missions/plan{{ this_week }}">Today</a>
+    <a class="dc-btn dc-btn--neutral dc-btn--sm" href="/missions/plan{{ next }}" aria-label="Next week">{% call icons::icon("right") %}{% endcall %}</a>
+    <a class="dc-btn dc-btn--ghost dc-btn--sm" href="/missions/plan{{ done_toggle }}">{% if hide_done %}Show done tasks{% else %}Hide done tasks{% endif %}</a>
+  </div>
+  {% if chips.len() > 1 %}
+  <nav class="dc-subnav dc-subnav--chips" aria-label="Filter by mission">
+    {% for chip in chips %}<a class="dc-subnav__item" href="{{ chip.href }}"{% if chip.current %} aria-current="true"{% endif %}>{% if let Some(colour) = chip.colour %}<span class="dc-swatch dc-swatch--c{{ colour }}" aria-hidden="true"></span>{% endif %}{{ chip.title }}</a>{% endfor %}
+  </nav>
+  {% endif %}
+  <div class="dc-plan">
+    {%- for column in columns %}
+    <section class="dc-card dc-stack dc-plan__day{% if column.past %} dc-plan__day--past{% endif %}{% if column.today %} dc-plan__day--today{% endif %}" aria-labelledby="day-{{ column.key }}">
+      <h2 class="dc-heading-3 dc-plan__head" id="day-{{ column.key }}">{{ column.name }}{% if !column.date.is_empty() %} <span class="dc-muted">{{ column.date }}</span>{% endif %}{% if column.today %} <span class="dc-tag dc-tag--today">Today</span>{% endif %}</h2>
+      {#- Always there, even empty: it is where a drop lands. #}
+      <ul class="dc-tasks dc-plan__tasks" data-dc-sortable data-dc-day="{{ column.day }}">
+        {%- for task in column.open %}
+        <li class="dc-task" draggable="true" data-dc-task="{{ task.id }}">
+          <span class="dc-task__stripe {% if let Some(colour) = task.colour %}dc-swatch--c{{ colour }}{% else %}dc-swatch--neutral{% endif %}" aria-hidden="true"></span>
+          <div class="dc-task__main">
+            <span class="dc-task__title">{{ task.title }}</span>
+            {%- if let Some(mission) = task.mission %}<span class="dc-task__meta"><span class="dc-tag dc-tag--muted">{{ mission }}</span></span>{% endif %}
+            <div class="dc-task__actions">
+              {%- if let Some(up) = task.up %}
+              <button class="dc-btn dc-btn--ghost dc-btn--sm" type="button" hx-post="/missions/plan/move{{ query }}" hx-vals='{"task": "{{ task.id }}", "day": "{{ column.day }}", "after": "{{ up.after }}", "before": "{{ up.before }}"}' hx-target="#plan" hx-swap="outerHTML" aria-label="Move {{ task.title }} up">{% call icons::icon("up") %}{% endcall %}</button>
+              {%- endif %}
+              {%- if let Some(down) = task.down %}
+              <button class="dc-btn dc-btn--ghost dc-btn--sm" type="button" hx-post="/missions/plan/move{{ query }}" hx-vals='{"task": "{{ task.id }}", "day": "{{ column.day }}", "after": "{{ down.after }}", "before": "{{ down.before }}"}' hx-target="#plan" hx-swap="outerHTML" aria-label="Move {{ task.title }} down">{% call icons::icon("down") %}{% endcall %}</button>
+              {%- endif %}
+              {%- if let Some(hop) = task.earlier %}
+              <button class="dc-btn dc-btn--ghost dc-btn--sm" type="button" hx-post="/missions/plan/move{{ query }}" hx-vals='{"task": "{{ task.id }}", "day": "{{ hop.day }}", "after": "{{ hop.after }}", "before": ""}' hx-target="#plan" hx-swap="outerHTML" aria-label="Move {{ task.title }} to {{ hop.to }}">{% call icons::icon("left") %}{% endcall %}</button>
+              {%- endif %}
+              {%- if let Some(hop) = task.later %}
+              <button class="dc-btn dc-btn--ghost dc-btn--sm" type="button" hx-post="/missions/plan/move{{ query }}" hx-vals='{"task": "{{ task.id }}", "day": "{{ hop.day }}", "after": "{{ hop.after }}", "before": ""}' hx-target="#plan" hx-swap="outerHTML" aria-label="Move {{ task.title }} to {{ hop.to }}">{% call icons::icon("right") %}{% endcall %}</button>
+              {%- endif %}
+            </div>
+          </div>
+        </li>
+        {%- endfor -%}
+      </ul>
+      {%- if !column.done.is_empty() %}
+      <ul class="dc-tasks">
+        {%- for task in column.done %}
+        <li class="dc-task dc-task--done">
+          <span class="dc-task__stripe {% if let Some(colour) = task.colour %}dc-swatch--c{{ colour }}{% else %}dc-swatch--neutral{% endif %}" aria-hidden="true"></span>
+          <div class="dc-task__main">
+            <span class="dc-task__title">{{ task.title }}</span>
+            {%- if let Some(mission) = task.mission %}<span class="dc-task__meta"><span class="dc-tag dc-tag--muted">{{ mission }}</span></span>{% endif %}
+          </div>
+        </li>
+        {%- endfor %}
+      </ul>
+      {%- endif %}
+      <details id="add-{{ column.key }}" class="dc-details">
+        <summary class="dc-details__summary">Add a task</summary>
+        <form class="dc-stack" method="post" action="/missions/plan/tasks{{ query }}" hx-post="/missions/plan/tasks{{ query }}" hx-target="#plan" hx-swap="outerHTML" hx-disabled-elt="find button">
+          <input type="hidden" name="day" value="{{ column.day }}">
+          <div class="dc-field">
+            <label class="dc-field__label" for="title-{{ column.key }}">Task</label>
+            <input class="dc-field__input" id="title-{{ column.key }}" name="title" type="text" maxlength="200" required>
+          </div>
+          <div class="dc-field">
+            <label class="dc-field__label" for="mission-{{ column.key }}">Mission</label>
+            <select class="dc-field__input" id="mission-{{ column.key }}" name="mission">
+              <option value="">Other (no mission)</option>
+              {% for choice in choices %}<option value="{{ choice.id }}"{% if choice.selected %} selected{% endif %}>{{ choice.title }}</option>{% endfor %}
+            </select>
+          </div>
+          <div class="dc-list__actions">
+            <button class="dc-btn dc-btn--primary dc-btn--sm" type="submit" name="at" value="bottom"><span class="dc-spin" aria-hidden="true"></span>Add to bottom</button>
+            <button class="dc-btn dc-btn--neutral dc-btn--sm" type="submit" name="at" value="top"><span class="dc-spin" aria-hidden="true"></span>Add to top</button>
+          </div>
+        </form>
+      </details>
+    </section>
+    {%- endfor %}
+  </div>
+  {#- Filled in and sent by daycompass.js when a task is dropped. #}
+  <form data-dc-move hidden hx-post="/missions/plan/move{{ query }}" hx-target="#plan" hx-swap="outerHTML">
+    <input type="hidden" name="task"><input type="hidden" name="day"><input type="hidden" name="after"><input type="hidden" name="before">
+  </form>
+</div>
