@@ -463,6 +463,12 @@ select.dc-field__input { -webkit-appearance: none; appearance: none; cursor: poi
 .dc-plan .dc-task__actions { justify-content: flex-start; }
 .dc-tag--today { background: var(--primary-soft); color: var(--text); }
 
+/* ---------- Log ---------- */
+.dc-log__head { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-2); font: 800 15px/20px var(--font-ui); margin-bottom: var(--space-1); }
+/* SVG shapes take no outline; the focused or open block gets a stroke. */
+.dc-timeline a:focus-visible rect, .dc-timeline__picked { stroke: var(--focus); stroke-width: 3px; vector-effect: non-scaling-stroke; }
+.dc-timeline a { cursor: pointer; }
+
 /* ---------- Focus ---------- */
 .dc-focus__title { overflow-wrap: anywhere; }
 .dc-focus__clock { font-variant-numeric: tabular-nums; }

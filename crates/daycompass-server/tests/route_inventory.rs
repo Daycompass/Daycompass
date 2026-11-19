@@ -219,6 +219,31 @@ impl Fixture {
             .expect("the created task")
     }
 
+    /// A stopped time entry belonging to `caller`, for the
+    /// `/missions/log/entries/{id}/...` routes - owner-scoped like a task.
+    async fn disposable_entry(&self, caller: Caller) -> String {
+        let owner = match caller {
+            Caller::Admin => &self.admin,
+            Caller::Anonymous | Caller::User | Caller::Device => &self.user,
+        };
+        let task = self.disposable_task(caller).await;
+        let response = self
+            .app
+            .send(
+                TestRequest::post("/missions/log/entries")
+                    .origin(GOOD_ORIGIN)
+                    .authenticated(owner)
+                    .form(&borrowed(&probe_span(task.clone()))),
+            )
+            .await;
+        assert_eq!(response.status, StatusCode::OK, "{}", response.text);
+        sqlx::query_scalar("SELECT id FROM time_entries WHERE task_id = ?1")
+            .bind(&task)
+            .fetch_one(&self.app.pool)
+            .await
+            .expect("the created entry")
+    }
+
     /// Sends `spec`'s request as `caller`, with a matching `Origin` and,
     /// where there is a session, its CSRF token.
     async fn call(&self, spec: &RouteSpec, caller: Caller, target_id: &str) -> TestResponse {
@@ -234,7 +259,7 @@ impl Fixture {
         if let Some(body) = self.body_for(spec, caller, target_id).await {
             request = request.json(body);
         }
-        if let Some(fields) = self.form_for(spec, caller, target_id) {
+        if let Some(fields) = self.form_for(spec, caller, target_id).await {
             request = request.form(&borrowed(&fields));
         }
 
@@ -243,7 +268,7 @@ impl Fixture {
 
     /// A form body for the dashboard routes that take one, valid in the
     /// same sense as [`Self::body_for`]'s JSON bodies.
-    fn form_for(
+    async fn form_for(
         &self,
         spec: &RouteSpec,
         caller: Caller,
@@ -308,6 +333,16 @@ impl Fixture {
             }
             ("POST", "/missions/plan/move") => {
                 Some(vec![("task", target_id.to_owned()), ("day", String::new())])
+            }
+            ("POST", "/missions/log/entries") => Some(probe_span(target_id.to_owned())),
+            // Corrected onto the task it is already on.
+            ("POST", "/missions/log/entries/{id}") => {
+                let task = sqlx::query_scalar("SELECT task_id FROM time_entries WHERE id = ?1")
+                    .bind(target_id)
+                    .fetch_one(&self.app.pool)
+                    .await
+                    .expect("the entry");
+                Some(probe_span(task))
             }
             _ => None,
         }
@@ -377,7 +412,12 @@ impl Fixture {
             self.disposable_category_rule(caller).await
         } else if spec.path.contains("/missions/{id}") {
             self.disposable_mission(caller).await
-        } else if spec.path.starts_with("/missions/tasks/") || spec.path == "/missions/plan/move" {
+        } else if spec.path.starts_with("/missions/log/entries/") {
+            self.disposable_entry(caller).await
+        } else if spec.path.starts_with("/missions/tasks/")
+            || spec.path == "/missions/plan/move"
+            || spec.path == "/missions/log/entries"
+        {
             self.disposable_task(caller).await
         } else {
             self.disposable_account().await
@@ -395,6 +435,15 @@ fn unissued_invite_token() -> String {
         .expect("the OS CSPRNG must be available")
         .expose()
         .to_owned()
+}
+
+/// A time entry form for `task`: an hour on a past morning.
+fn probe_span(task: String) -> Vec<(&'static str, String)> {
+    vec![
+        ("task", task),
+        ("start", "2026-11-04T09:00:00".to_owned()),
+        ("end", "2026-11-04T10:00:00".to_owned()),
+    ]
 }
 
 /// `form_for`'s owned fields, in the shape `TestRequest::form` takes.
@@ -803,7 +852,7 @@ async fn the_origin_check_follows_the_inventory() {
         if let Some(body) = fixture.body_for(spec, caller, &target).await {
             request = request.json(body);
         }
-        if let Some(fields) = fixture.form_for(spec, caller, &target) {
+        if let Some(fields) = fixture.form_for(spec, caller, &target).await {
             request = request.form(&borrowed(&fields));
         }
         let response = fixture.app.send(request).await;
@@ -848,7 +897,7 @@ async fn a_required_origin_refuses_an_absent_header() {
         if let Some(body) = fixture.body_for(spec, caller, &target).await {
             request = request.json(body);
         }
-        if let Some(fields) = fixture.form_for(spec, caller, &target) {
+        if let Some(fields) = fixture.form_for(spec, caller, &target).await {
             request = request.form(&borrowed(&fields));
         }
         let response = fixture.app.send(request).await;

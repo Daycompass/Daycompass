@@ -1,0 +1,10 @@
+{% extends "layout_app.html" %}
+{% block title %}Log{% endblock %}
+{% block content %}
+<header class="dc-page-head">
+  <span class="dc-overline">Missions</span>
+  <h1 class="dc-heading-1">{{ heading }}</h1>
+</header>
+{% let subnav_current = "log" %}{% include "partials/missions_subnav.html" %}
+{{ content|safe }}
+{% endblock %}

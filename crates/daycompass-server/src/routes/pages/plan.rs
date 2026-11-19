@@ -131,7 +131,7 @@ fn internal(err: &StoreError, what: &'static str) -> ApiError {
 
 /// The seven days, Monday first, of the week `raw` falls in, or of the
 /// week `today` falls in. `None` if `raw` is not a date.
-fn week_of(raw: Option<&str>, today: Date) -> Option<Vec<Date>> {
+pub(super) fn week_of(raw: Option<&str>, today: Date) -> Option<Vec<Date>> {
     let date: Date = match raw {
         Some(raw) => raw.parse().ok()?,
         None => today,
@@ -145,7 +145,7 @@ fn week_of(raw: Option<&str>, today: Date) -> Option<Vec<Date>> {
 
 /// `November 2026`, `November - December 2026`, `December 2026 -
 /// January 2027`.
-fn month_label(first: Date, last: Date) -> String {
+pub(super) fn month_label(first: Date, last: Date) -> String {
     if (first.year(), first.month()) == (last.year(), last.month()) {
         first.strftime("%B %Y").to_string()
     } else if first.year() == last.year() {
@@ -358,6 +358,8 @@ async fn answer(
         Ok(SaveOutcome::NotFound) => ErrorKind::NotFound,
         Ok(SaveOutcome::Invalid(_)) => ErrorKind::TaskInvalid,
         Ok(SaveOutcome::NoRoom) => ErrorKind::TaskOrderConflict,
+        // Only the Log writes time entries.
+        Ok(SaveOutcome::Running) => ErrorKind::TimeEntryRunning,
         Err(err) => return internal(&err, "saving a task").into_response(),
     };
     ApiError::of(kind).into_response()

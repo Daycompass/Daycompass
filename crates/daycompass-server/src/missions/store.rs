@@ -478,8 +478,24 @@ pub async fn live_running_entry(
     row.as_ref().map(entry_from_row).transpose()
 }
 
+pub async fn live_entry(
+    conn: &mut SqliteConnection,
+    user_id: &str,
+    id: &str,
+) -> Result<Option<TimeEntry>, StoreError> {
+    let row =
+        sqlx::query("SELECT * FROM time_entries WHERE user_id = ?1 AND id = ?2 AND deleted = 0")
+            .bind(user_id)
+            .bind(id)
+            .fetch_optional(conn)
+            .await?;
+    row.as_ref().map(entry_from_row).transpose()
+}
+
 /// A time entry with what a timeline shows of it.
 pub struct TrackedEntry {
+    pub id: String,
+    pub task_id: String,
     pub start_ts: i64,
     /// `None` while it runs.
     pub end_ts: Option<i64>,
@@ -497,8 +513,8 @@ pub async fn entries_overlapping(
     now: i64,
 ) -> Result<Vec<TrackedEntry>, StoreError> {
     let rows = sqlx::query(
-        "SELECT e.start_ts AS start_ts, e.end_ts AS end_ts, t.title AS title,
-             m.colour AS colour
+        "SELECT e.id AS id, e.task_id AS task_id, e.start_ts AS start_ts,
+             e.end_ts AS end_ts, t.title AS title, m.colour AS colour
          FROM time_entries e
          JOIN tasks t ON t.user_id = e.user_id AND t.id = e.task_id AND t.deleted = 0
          LEFT JOIN missions m
@@ -516,6 +532,8 @@ pub async fn entries_overlapping(
     rows.iter()
         .map(|row| {
             Ok(TrackedEntry {
+                id: row.try_get("id")?,
+                task_id: row.try_get("task_id")?,
                 start_ts: row.try_get("start_ts")?,
                 end_ts: row.try_get("end_ts")?,
                 task_title: row.try_get("title")?,
