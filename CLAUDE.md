@@ -101,6 +101,17 @@ sweep deletes events whose `start_ts` is older than that many days -
 events only, nothing else. Refused at startup if shorter than
 `DAYCOMPASS_EVENT_MAX_AGE_SECS`. Env-only, never an admin setting.
 
+## Missions sync
+
+`POST /api/v1/missions/sync` (`src/missions/`, migration
+`0008_missions.sql`): device auth, push and pull in one call. Last
+write wins per record on the client's `updated_at`; a tie goes to the
+later arrival. Deletes are tombstones that keep no text. One counter,
+`users.missions_rev`, orders all three tables for the cursor. One
+running timer per account: the entry that started earlier is ended,
+backed by a partial unique index. Details: `docs/wire-format.md`,
+`docs/design-decisions.md`.
+
 ## Rate-limit defaults
 
 All from `src/config.rs`, `max/window_secs`, each overridable by its
@@ -118,6 +129,7 @@ own env var:
 - `DAYCOMPASS_RATE_LIMIT_INVITE_GLOBAL`: 600/60 - instance-wide
 - `DAYCOMPASS_RATE_LIMIT_INGEST_DEVICE`: 30/60 - per device
 - `DAYCOMPASS_RATE_LIMIT_EXPORT`: 3/3600 - per session
+- `DAYCOMPASS_RATE_LIMIT_MISSIONS_SYNC_DEVICE`: 30/60 - per device
 
 "Per client address" (`src/clientip.rs`) means: the TCP peer address,
 unless that peer is a configured trusted proxy
@@ -139,8 +151,8 @@ through billions of addresses and never hit a limit.
 Not itself a window, but related: `DAYCOMPASS_RATE_LIMIT_MAX_ENTRIES`
 bounds each of the per-key limiters above separately (login/IP,
 login/username, setup/IP, pw-change, pair/IP, ingest/device,
-device-auth-fail, invite/IP, export) to 10,000 tracked keys each - not a
-total shared across them (`src/state.rs`). The two instance-wide
+device-auth-fail, invite/IP, export, missions-sync/device) to 10,000
+tracked keys each - not a total shared across them (`src/state.rs`). The two instance-wide
 limiters (`RATE_LIMIT_PAIR_GLOBAL`, `RATE_LIMIT_INVITE_GLOBAL`) use a
 single shared bucket and are unaffected by this setting. When a
 bounded limiter is full: expired windows are reclaimed first; if that
