@@ -454,3 +454,18 @@ the account: it is about the device in front of you (a classroom, a
 library), and keeping it client-side needs no column and no route. The
 completion animation is skipped when the device asks for reduced
 motion.
+
+The Log page (`/missions/log?week=`) draws a week of tracked time, one
+day's row per weekday, each laid out like Today's timeline. Every block
+links to `?entry=<id>`, which opens an editor under the week: start,
+end and task, entered as wall-clock times in the account's time zone
+(`datetime-local`, to the second, so a correction that only changes the
+task does not move the times). Time can also be added by hand, for
+studying away from any device. The writes go through the sync rules
+like every other, plus two of the dashboard's own, in the service
+(`missions::service`): time read off this server's clock may not lie in
+the future at all, where a device gets some clock skew; and a running
+entry can only be stopped, not corrected or deleted - its end is not
+known yet, and a device may still be counting it. The tasks offered are
+the week's, the backlog's, and any other task the week's entries are
+on. Entries may overlap; nothing checks for it, as on a device.
