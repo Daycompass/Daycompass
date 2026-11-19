@@ -12,6 +12,7 @@ use jiff::ToSpan;
 use sqlx::SqlitePool;
 
 use super::position::key_between;
+use super::screen_time;
 use super::store::{self, Kind, RunningTimer, TrackedEntry};
 use super::sync::{self, Changes, Outcome};
 use super::validate::{
@@ -759,6 +760,9 @@ pub struct ReviewData {
     pub mission_secs: i64,
     /// All tracked time, on tasks with a mission or without.
     pub tracked_secs: i64,
+    /// Screen time in the categories the account counts as distraction;
+    /// `None` if it turned screen time off or marked no category.
+    pub distraction_secs: Option<i64>,
     /// Live missions with a goal or tracked time this week, by title.
     /// The goal is the review's snapshot, or today's goal before there
     /// is a review.
@@ -792,6 +796,9 @@ pub async fn review_of(
     let review = store::live_review(&mut conn, user_id, week_start).await?;
     let history = store::reviewed_weeks(&mut conn, user_id).await?;
     drop(conn);
+    let distraction_secs = screen_time::load(pool, user_id, week)
+        .await?
+        .and_then(|screen| screen.distraction_in(week));
 
     let now = now.as_secs();
     let on_missions = || entries.iter().filter(|entry| entry.mission_id.is_some());
@@ -821,6 +828,7 @@ pub async fn review_of(
     Ok(ReviewData {
         mission_secs: on_missions().map(|entry| clipped(entry, week, now)).sum(),
         tracked_secs: entries.iter().map(|entry| clipped(entry, week, now)).sum(),
+        distraction_secs,
         day_secs,
         missions: weeks,
         done: done

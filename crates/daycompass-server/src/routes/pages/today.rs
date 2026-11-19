@@ -22,7 +22,9 @@ use serde::Deserialize;
 use super::{format_clock, format_duration, render, render_fragment, Shell, TimerPill, TimerSlot};
 use crate::auth::store::StoreError;
 use crate::auth::time::UnixTime;
+use crate::categories::palette;
 use crate::error::{ApiError, ErrorKind};
+use crate::missions::screen_time::{self, ScreenTime};
 use crate::missions::service::{self, Day, Place, SaveOutcome, TaskView, TodayData};
 use crate::missions::store::TrackedEntry;
 use crate::missions::validate::Mission;
@@ -62,9 +64,32 @@ struct TodayContent {
     other_open: Vec<TaskCard>,
     other_done: Vec<TaskCard>,
     timeline: Timeline,
+    /// Screen time by category under the timeline; `None` if the account
+    /// turned screen time off.
+    track: Option<Vec<TrackRect>>,
+    /// Today's tracked time, entry by entry, with its distraction.
+    entries: Vec<EntryRow>,
     zone: String,
     /// On an htmx answer: the timer pill, replaced out of band.
     timer_slot: Option<TimerSlot>,
+}
+
+/// One stretch of one screen-time category on the track.
+pub(super) struct TrackRect {
+    x: String,
+    width: String,
+    /// The category's palette slot; `None` for uncategorized time.
+    slot: Option<u32>,
+    title: String,
+}
+
+struct EntryRow {
+    title: String,
+    colour: Option<i64>,
+    /// `09:00 to 09:45`.
+    when: String,
+    /// [`focus_of`].
+    focus: String,
 }
 
 /// A filter link.
@@ -177,9 +202,33 @@ async fn content(
     let review_due = service::review_due(&state.pool, user_id, date)
         .await
         .map_err(|err| internal(&err, "reading the review day"))?;
+    let window = window_around(&data.timeline, day.bounds, now.as_secs());
+    let screen = screen_time::load(&state.pool, user_id, window)
+        .await
+        .map_err(|err| internal(&err, "reading screen time"))?;
+    let entries = data
+        .timeline
+        .iter()
+        .map(|entry| EntryRow {
+            title: entry.task_title.clone(),
+            colour: entry.colour,
+            when: format!(
+                "{} to {}",
+                zone.clock(entry.start_ts),
+                entry
+                    .end_ts
+                    .map_or_else(|| "now".to_owned(), |ts| zone.clock(ts))
+            ),
+            focus: focus_of(entry, screen.as_ref(), now.as_secs()),
+        })
+        .collect();
     let heading = date.strftime("%A, %-d %B").to_string();
     let mut content = build(data, &day, &zone, filter, now, htmx);
     content.review_due = review_due;
+    content.track = screen
+        .as_ref()
+        .map(|screen| track_of(screen, day.bounds, &zone));
+    content.entries = entries;
     Ok((content, heading))
 }
 
@@ -283,6 +332,8 @@ fn build(
         other_open,
         other_done,
         timeline: timeline_of(&timeline, day.bounds, zone, now.as_secs()),
+        track: None,
+        entries: Vec::new(),
         zone: zone.as_str().to_owned(),
         timer_slot: htmx.then(|| TimerSlot {
             timer: running.map(|timer| TimerPill::new(timer, now.as_secs())),
@@ -321,6 +372,65 @@ pub(super) fn up_and_down(
         before: id_at(Some(index + 2)),
     });
     (up, down)
+}
+
+/// The window to read screen time for: `bounds`, widened to the whole of
+/// every entry in `entries`, so an entry's distraction counts all of it.
+pub(super) fn window_around(
+    entries: &[TrackedEntry],
+    (start, end): (i64, i64),
+    now: i64,
+) -> (i64, i64) {
+    entries.iter().fold((start, end), |(start, end), entry| {
+        (
+            start.min(entry.start_ts),
+            end.max(entry.end_ts.unwrap_or(now)),
+        )
+    })
+}
+
+/// `45m · 6m distraction`: how long an entry ran, and the distraction
+/// during it if the account marked any category. Just `45m` otherwise.
+pub(super) fn focus_of(entry: &TrackedEntry, screen: Option<&ScreenTime>, now: i64) -> String {
+    let span = (entry.start_ts, entry.end_ts.unwrap_or(now));
+    let length = format_duration(span.1 - span.0);
+    match screen.and_then(|screen| screen.distraction_in(span)) {
+        Some(secs) => format!("{length} · {} distraction", format_duration(secs)),
+        None => length,
+    }
+}
+
+/// The screen-time track of the day `[start, end)`, on the timeline's
+/// scale.
+pub(super) fn track_of(
+    screen: &ScreenTime,
+    (start, end): (i64, i64),
+    zone: &TimeZoneName,
+) -> Vec<TrackRect> {
+    #[allow(clippy::cast_precision_loss)]
+    let scale = TIMELINE_WIDTH / (end - start).max(1) as f64;
+    #[allow(clippy::cast_precision_loss)]
+    let x_of = |ts: i64| (ts - start) as f64 * scale;
+    screen
+        .track((start, end))
+        .into_iter()
+        .map(|span| TrackRect {
+            x: format!("{:.2}", x_of(span.start)),
+            width: format!("{:.2}", x_of(span.end) - x_of(span.start)),
+            slot: span.category.as_deref().map(palette::slot_for),
+            title: format!(
+                "{}{}, {} to {}",
+                span.category.as_deref().unwrap_or("Uncategorized"),
+                if span.distraction {
+                    " (distraction)"
+                } else {
+                    ""
+                },
+                zone.clock(span.start),
+                zone.clock(span.end)
+            ),
+        })
+        .collect()
 }
 
 /// The entries of `entries` that overlap the day `[start, end)`, laid

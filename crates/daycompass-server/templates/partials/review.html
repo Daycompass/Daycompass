@@ -14,6 +14,13 @@
       <h2 class="dc-stat__label">Mission hours</h2>
       <p class="dc-stat__value">{{ mission_total }}</p>
     </section>
+    {% if let Some(distraction) = distraction %}
+    <section class="dc-card">
+      <h2 class="dc-stat__label">Distraction</h2>
+      <p class="dc-stat__value">{{ distraction }}</p>
+      <p class="dc-caption">Screen time in the categories you count as distraction, on all your devices, against {{ mission_total }} of mission hours.</p>
+    </section>
+    {% endif %}
     <section class="dc-card">
       <h2 class="dc-stat__label">Share of tracked time</h2>
       <p class="dc-stat__value">{% if let Some(share) = share %}{{ share }}%{% else %}–{% endif %}</p>

@@ -436,6 +436,7 @@ select.dc-field__input { -webkit-appearance: none; appearance: none; cursor: poi
 .dc-task--done .dc-task__title { text-decoration: line-through; color: var(--text-muted); }
 
 .dc-timeline { display: block; width: 100%; height: 40px; }
+.dc-timeline--thin { height: 8px; margin-top: var(--space-1); }
 .dc-timeline__track { fill: var(--surface-sunken); }
 .dc-timeline__tick { stroke: var(--border); stroke-width: 1px; }
 .dc-timeline__now { stroke: var(--error); stroke-width: 2px; }
