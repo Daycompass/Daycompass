@@ -98,6 +98,73 @@ Then read the setup token from `podman logs daycompass` (see
 - The server handles `SIGTERM` itself, so `podman stop` / `docker stop`
   shut it down cleanly.
 
+### Updating
+
+There is no prebuilt image and no automatic update: an update is a
+rebuild from a newer checkout. The server never checks for updates on
+its own - it makes no outgoing requests - so it cannot tell you it is
+out of date. An admin finds the running version under **Account >
+Server version** and compares it with the newest release or commit on
+GitHub.
+
+1. **Back up the database first.** A newer version may migrate the
+   database when it starts, and an older binary then refuses to open
+   it, so the backup is the only way back. Stop the server and copy the
+   volume, for example:
+
+   ```sh
+   podman stop daycompass
+   podman volume export daycompass-data > daycompass-data-backup.tar
+   ```
+
+   With Docker, which has no `volume export`, copy `/data` out with any
+   container that has `tar`, or back up the bind-mounted directory.
+2. **Get the new version and rebuild.** Keep the old image under its
+   own tag, so you can go back to it. Passing the commit lets the
+   dashboard show exactly what runs:
+
+   ```sh
+   podman tag daycompass daycompass:previous
+   git pull
+   podman build -t daycompass \
+     --build-arg DAYCOMPASS_BUILD_COMMIT=$(git rev-parse --short HEAD) .
+   ```
+
+3. **Replace the container.** The data stays on the volume; start the
+   new container with the same options as before.
+
+   ```sh
+   podman rm daycompass
+   podman run -d --name daycompass \
+     -p 127.0.0.1:8080:8080 \
+     -v daycompass-data:/data \
+     -e DAYCOMPASS_PUBLIC_URL=https://daycompass.example.com \
+     daycompass
+   ```
+
+4. **Check.** `podman logs daycompass` should end in the server
+   listening, with no migration error, and **Account > Server version**
+   should show the new commit.
+
+With the compose setup below, steps 2 and 3 are one command, run from
+`deploy/caddy-duckdns/` after `git pull`:
+
+```sh
+DAYCOMPASS_BUILD_COMMIT=$(git rev-parse --short HEAD) docker compose up -d --build daycompass
+```
+
+If the new version does not start, read its log first. To go back,
+put the backup into a fresh volume - importing over the old one would
+mix the files of two versions - and run the previous image:
+
+```sh
+podman rm -f daycompass
+podman volume rm daycompass-data
+podman volume create daycompass-data
+podman volume import daycompass-data daycompass-data-backup.tar
+podman run -d --name daycompass ... daycompass:previous   # same options as before
+```
+
 ## Authentication
 
 | Endpoint | Purpose |

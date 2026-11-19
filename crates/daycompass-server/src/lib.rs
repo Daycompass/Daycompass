@@ -6,6 +6,7 @@
 #![forbid(unsafe_code)]
 
 pub mod auth;
+pub mod build;
 pub mod categories;
 pub mod clientip;
 pub mod config;
