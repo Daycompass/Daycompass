@@ -79,6 +79,14 @@ const DEFAULTS: &[(&str, &str)] = &[
     ("com.amazon.mShop.android.shopping", "Shopping"),
 ];
 
+/// Every built-in category, sorted, each once.
+pub fn names() -> Vec<&'static str> {
+    let mut names: Vec<&'static str> = DEFAULTS.iter().map(|(_, category)| *category).collect();
+    names.sort_unstable();
+    names.dedup();
+    names
+}
+
 /// The built-in category for `app_id`, matched exactly like an
 /// `app_id` rule: case-sensitive, never trimmed.
 pub fn category_for(app_id: &str) -> Option<&'static str> {

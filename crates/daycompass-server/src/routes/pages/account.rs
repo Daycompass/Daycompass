@@ -1,6 +1,6 @@
 //! `GET /account` and its writes: the caller's own account - changing
-//! the password, the time zone and the review day, reading the account
-//! log, and the link to the export.
+//! the password, the time zone, the review day and the Missions screen
+//! time settings, reading the account log, and the link to the export.
 //!
 //! The export is a plain link to `GET /api/v1/export`, not a page route
 //! of its own: that route is already a same-origin `GET` authenticated
@@ -20,7 +20,9 @@ use serde::Deserialize;
 use super::{format_utc, render, render_fragment, Shell};
 use crate::auth::account_log::{self, LogKind};
 use crate::auth::secret::SecretString;
+use crate::categories::palette;
 use crate::error::{ApiError, ErrorKind};
+use crate::missions::screen_time::{self, Settings};
 use crate::missions::service as missions;
 use crate::routes::{account, auth, SessionContext};
 use crate::state::AppState;
@@ -34,6 +36,7 @@ struct AccountPage {
     form: PasswordForm,
     timezone_form: String,
     review_day_form: ReviewDayForm,
+    screen_time_form: ScreenTimeForm,
     log: Vec<LogRow>,
 }
 
@@ -92,6 +95,53 @@ impl ReviewDayForm {
     }
 }
 
+/// The screen time form on its own: the page's, and a save's answer.
+#[derive(Template)]
+#[template(path = "partials/screen_time_form.html")]
+struct ScreenTimeForm {
+    enabled: bool,
+    categories: Vec<CategoryChoice>,
+    saved: bool,
+}
+
+struct CategoryChoice {
+    name: String,
+    slot: u32,
+    marked: bool,
+}
+
+impl ScreenTimeForm {
+    fn new(settings: &Settings, offered: Vec<String>, saved: bool) -> Self {
+        Self {
+            enabled: settings.enabled,
+            categories: offered
+                .into_iter()
+                .map(|name| CategoryChoice {
+                    slot: palette::slot_for(&name),
+                    marked: settings.distraction.contains(&name),
+                    name,
+                })
+                .collect(),
+            saved,
+        }
+    }
+}
+
+/// The settings and the categories to offer, for the form.
+async fn screen_time_form(
+    state: &AppState,
+    user_id: &str,
+    saved: Option<Settings>,
+) -> Result<ScreenTimeForm, crate::auth::store::StoreError> {
+    let offered = screen_time::categories_offered(&state.pool, user_id).await?;
+    let is_save = saved.is_some();
+    let settings = match saved {
+        Some(settings) => settings,
+        None => screen_time::settings(&state.pool, user_id).await?,
+    };
+    Ok(ScreenTimeForm::new(&settings, offered, is_save))
+}
+
 struct LogRow {
     what: &'static str,
     at: String,
@@ -130,12 +180,21 @@ pub async fn page(State(state): State<AppState>, session: SessionContext) -> Res
         }
     };
 
+    let screen_time_form = match screen_time_form(&state, &auth.user.id, None).await {
+        Ok(form) => form,
+        Err(err) => {
+            tracing::error!(error = %err, "reading the screen time settings failed");
+            return ApiError::of(ErrorKind::InternalError).into_response();
+        }
+    };
+
     render(&AccountPage {
         shell: Shell::load(&state.pool, auth, "account").await,
         is_admin: auth.user.role.is_admin(),
         form: PasswordForm { changed: None },
         timezone_form,
         review_day_form: ReviewDayForm::new(review_day, false),
+        screen_time_form,
         log: entries
             .iter()
             .map(|entry| LogRow {
@@ -206,6 +265,39 @@ pub async fn change_review_day(
         Ok(false) => ApiError::of(ErrorKind::ReviewInvalid).into_response(),
         Err(err) => {
             tracing::error!(error = %err, "saving the review day failed");
+            ApiError::of(ErrorKind::InternalError).into_response()
+        }
+    }
+}
+
+/// `enabled=true` if the box is ticked (absent otherwise), and one
+/// `distraction` field per marked category.
+pub async fn change_screen_time(
+    State(state): State<AppState>,
+    session: SessionContext,
+    Form(fields): Form<Vec<(String, String)>>,
+) -> Response {
+    let user_id = &session.auth().user.id;
+    let enabled = fields
+        .iter()
+        .any(|(name, value)| name == "enabled" && value == "true");
+    let distraction: Vec<String> = fields
+        .into_iter()
+        .filter(|(name, _)| name == "distraction")
+        .map(|(_, value)| value)
+        .collect();
+    let saved = match screen_time::save_settings(&state.pool, user_id, enabled, &distraction).await
+    {
+        Ok(saved) => saved,
+        Err(err) => {
+            tracing::error!(error = %err, "saving the screen time settings failed");
+            return ApiError::of(ErrorKind::InternalError).into_response();
+        }
+    };
+    match screen_time_form(&state, user_id, Some(saved)).await {
+        Ok(form) => render_fragment(&form),
+        Err(err) => {
+            tracing::error!(error = %err, "reading the screen time settings failed");
             ApiError::of(ErrorKind::InternalError).into_response()
         }
     }

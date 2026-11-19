@@ -508,3 +508,35 @@ reminder. On that day Today links to the review until the week has
 one. On a Monday the week has only begun, so a Monday review day asks
 about the week before. There is no push notification - there is no
 outgoing channel to send one through.
+
+## How screen time meets the Missions pages
+
+Today, Log and Review set the account's own screen time against its
+tracked time: the distraction during each time entry ("1h 0m · 15m
+distraction"), a thin row of screen time by category under Today's
+timeline, and the week's distraction next to its Mission Hours.
+
+Distraction is whatever the account says it is: it marks categories
+on the Account page (`distraction_categories`, migration
+`0011_missions_screen_time.sql`), chosen from the categories its own
+rules name and the built-in ones. With none marked there is no
+distraction number at all, rather than one built on a guess. Events
+still carry no category; each is resolved when a page is rendered,
+with the same resolver as the overview, and a marked name that no rule
+produces any more simply matches nothing. An entry's distraction is
+the marked categories' screen time clipped to the entry, across every
+device of the account; overlapping events count twice, as they do in
+the stats.
+
+This is a new place where events are read, so it follows the same
+rules as the others: one query in `events/store.rs`
+(`select_own_overlapping`), scoped by the caller's own user id; no
+admin variant and no id parameter. Since a write's answer re-renders
+its page, every route under `/missions/` may read events, and
+`tests/no_event_reads.rs` holds every one of them to session access by
+prefix rather than by a list someone has to remember to extend.
+
+The integration can be turned off (`users.missions_screen_time`, on by
+default), and off means the Missions pages read no event at all -
+not that they read and hide it. Both settings are dashboard-only, like
+the review day: not synced, and not in the export.

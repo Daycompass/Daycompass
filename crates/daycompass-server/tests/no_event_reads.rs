@@ -12,6 +12,15 @@
 //! `GET /api/v1/stats` for the same caller, plus a per-app total
 //! (`stats::aggregate::app_totals`) - still the caller's own only.
 //!
+//! M6 adds the Missions pages: Today, Log and Review set the caller's
+//! own screen time against tracked time, through
+//! `missions::screen_time::load`, which reads
+//! `events::store::select_own_overlapping` for the caller's own id - and
+//! nothing at all if the account turned that off. A write's answer
+//! re-renders the page it came from, so every route under
+//! [`MISSIONS_PREFIX`] may read events, and every one of them must be
+//! session-scoped like the reads above.
+//!
 //! An admin still reaches zero event data, full stop: there is no
 //! admin variant of any of them and no id parameter anywhere that
 //! could point one at another account. None of [`query::list_own`],
@@ -82,6 +91,12 @@ const STATS_ROUTES: &[(&str, &str)] = &[("GET", "/api/v1/stats"), ("GET", "/")];
 /// reason as [`STATS_ROUTES`]: its path does not contain "event" either.
 const EXPORT_ROUTES: &[(&str, &str)] = &[("GET", "/api/v1/export")];
 
+/// Every route under this prefix may render the caller's own screen
+/// time (M6), so every one of them is held to the owner-read rule. A
+/// prefix rather than a list, so a later Missions route is covered
+/// without anyone remembering to add it here.
+const MISSIONS_PREFIX: &str = "/missions/";
+
 /// Files permitted to name the `events` table in SQL.
 ///
 /// Extend this deliberately, with a reviewer, when a milestone adds a
@@ -133,6 +148,26 @@ fn the_inventory_has_exactly_the_write_and_the_owner_read() {
                 "{method} {path} must be session-scoped, never admin and never a device"
             );
         }
+    }
+
+    // The Missions pages read the caller's own screen time: only ever
+    // with a session, never an admin-only route, never a device.
+    let missions: Vec<_> = INVENTORY
+        .iter()
+        .filter(|spec| spec.path.starts_with(MISSIONS_PREFIX))
+        .collect();
+    assert!(
+        !missions.is_empty(),
+        "the Missions pages must be in the table"
+    );
+    for spec in missions {
+        assert_eq!(
+            spec.access,
+            Access::Session,
+            "{} {} must be session-scoped, never admin and never a device",
+            spec.method,
+            spec.path
+        );
     }
 
     // And nothing may read events under another name. Any route on a

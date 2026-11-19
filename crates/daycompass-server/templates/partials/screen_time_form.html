@@ -1,0 +1,19 @@
+{% import "macros.html" as icons -%}
+{#- Swapped in whole after a save. Laid out like the mission form's
+    colour choice. #}
+<form id="screen-time" class="dc-stack" method="post" action="/account/screen-time" hx-post="/account/screen-time" hx-target="#screen-time" hx-swap="outerHTML" hx-disabled-elt="find button">
+  {% if saved %}
+  <div class="dc-banner dc-banner--success" role="status">{% call icons::icon("check") %}{% endcall %}<div><b>Screen time settings saved.</b></div></div>
+  {% endif %}
+  <label class="dc-check"><input type="checkbox" name="enabled" value="true"{% if enabled %} checked{% endif %}>Show screen time in Missions</label>
+  <fieldset class="dc-field dc-colours">
+    <legend class="dc-field__label">Count as distraction</legend>
+    <div class="dc-colours__options">
+      {% for category in categories %}
+      <label class="dc-colours__option"><input type="checkbox" name="distraction" value="{{ category.name }}"{% if category.marked %} checked{% endif %}><span class="dc-swatch dc-swatch--c{{ category.slot }}" aria-hidden="true"></span>{{ category.name }}</label>
+      {% endfor %}
+    </div>
+  </fieldset>
+  <p class="dc-caption">Today, Log and Review show your screen time from all your devices next to tracked time, and how much of it fell in these categories. With none marked, there is no distraction number. Turned off, those pages read no screen time at all.</p>
+  <div><button class="dc-btn dc-btn--neutral" type="submit"><span class="dc-spin" aria-hidden="true"></span>Save screen time settings</button></div>
+</form>

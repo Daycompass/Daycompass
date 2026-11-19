@@ -31,7 +31,7 @@
 
 use sqlx::{Row, SqlitePool};
 
-use super::validate::ValidEvent;
+use super::validate::{ValidEvent, MAX_DURATION_SECS};
 use crate::auth::store::{new_id, StoreError};
 use crate::auth::time::UnixTime;
 
@@ -332,6 +332,58 @@ pub async fn select_own_daily_group_totals(
     .await?;
 
     rows.iter().map(daily_group_total_from_row).collect()
+}
+
+/// One event's span and what decides its category, see
+/// [`select_own_overlapping`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EventSpan {
+    pub start_ts: i64,
+    pub duration_secs: i64,
+    pub app_id: String,
+    pub domain: Option<String>,
+}
+
+/// The caller's own events that overlap `[start_ts, end_ts)` - not only
+/// those starting inside it, unlike the reads above - oldest first, for
+/// the Missions pages to set against tracked time. Same ownership
+/// scoping and overlap semantics as [`select_own_daily_group_totals`].
+///
+/// An event lasts at most [`MAX_DURATION_SECS`], so one starting that
+/// long before the window cannot reach into it: that bound is what lets
+/// the `start_ts` index narrow the scan.
+pub async fn select_own_overlapping(
+    pool: &SqlitePool,
+    user_id: &str,
+    start_ts: i64,
+    end_ts: i64,
+) -> Result<Vec<EventSpan>, StoreError> {
+    let rows = sqlx::query(
+        "SELECT e.start_ts AS start_ts, e.duration_secs AS duration_secs,
+                e.app_id AS app_id, e.domain AS domain
+         FROM events e
+         JOIN devices d ON d.id = e.device_id
+         WHERE d.user_id = ?1 AND e.start_ts > ?2 - ?4 AND e.start_ts < ?3
+             AND e.start_ts + e.duration_secs > ?2
+         ORDER BY e.start_ts ASC",
+    )
+    .bind(user_id)
+    .bind(start_ts)
+    .bind(end_ts)
+    .bind(MAX_DURATION_SECS)
+    .fetch_all(pool)
+    .await?;
+
+    rows.iter()
+        .map(|row| {
+            Ok(EventSpan {
+                start_ts: row.try_get("start_ts")?,
+                duration_secs: row.try_get("duration_secs")?,
+                app_id: row.try_get("app_id")?,
+                domain: row.try_get("domain")?,
+            })
+        })
+        .collect()
 }
 
 /// One app's total over a window, see [`select_own_app_totals`].
