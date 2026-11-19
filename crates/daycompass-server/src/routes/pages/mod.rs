@@ -10,12 +10,14 @@
 //! # What the browser runs
 //!
 //! Two scripts, both served from this binary: `htmx`, and
-//! `assets/daycompass.js`, first-party vanilla JavaScript with four
+//! `assets/daycompass.js`, first-party vanilla JavaScript with a few
 //! small jobs, each keyed on a data attribute the server rendered:
 //! ticking live timers, growing the timeline's running block, keeping
-//! `<details>` open across htmx swaps, and drag and drop of tasks. It
+//! `<details>` open across htmx swaps, drag and drop of tasks, keyboard
+//! shortcuts and the command menu, and a chime when a task is done. It
 //! makes no request of its own - a drop fills in a form and submits
-//! it, and htmx sends it, CSRF token and all, like any other write.
+//! it, a shortcut presses a rendered button, and htmx sends either,
+//! CSRF token and all, like any other write.
 //! The Content-Security-Policy (in [`crate::middleware`])
 //! allows scripts, styles, fonts and images from this origin only, and
 //! no inline script or style at all; neither script needed it changed.
@@ -63,6 +65,7 @@ pub mod admin;
 pub mod assets;
 pub mod categories;
 pub mod devices;
+pub mod focus;
 pub mod login;
 pub mod missions;
 pub mod onboarding;

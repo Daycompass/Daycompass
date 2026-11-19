@@ -330,6 +330,8 @@ async fn another_accounts_task_cannot_be_touched() {
         write(&format!("/missions/tasks/{task}/start"), &bob),
         write(&format!("/missions/tasks/{task}/stop"), &bob),
         write(&format!("/missions/tasks/{task}/done"), &bob).form(&[("done", "true")]),
+        write(&format!("/missions/tasks/{task}/tomorrow"), &bob),
+        write(&format!("/missions/tasks/{task}/notes"), &bob).form(&[("notes", "x")]),
         write("/missions/tasks/move", &bob).form(&[("task", task.as_str())]),
     ] {
         let response = app.send(request).await;

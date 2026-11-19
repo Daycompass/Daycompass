@@ -344,6 +344,7 @@ async fn every_page_renders_without_inline_script_or_style() {
         "/",
         "/devices",
         "/missions/today",
+        "/missions/focus",
         "/missions/plan",
         "/missions/manage",
         "/category-rules",

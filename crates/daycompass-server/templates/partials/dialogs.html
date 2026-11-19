@@ -1,0 +1,40 @@
+{% import "macros.html" as icons -%}
+{#- The command menu (Ctrl/Cmd+K), the shortcut overview (?) and the
+    check that pops when a task is done, all driven by daycompass.js.
+    Options carry ids for aria-activedescendant. #}
+<dialog id="dc-command" class="dc-dialog" aria-label="Command menu">
+  <input class="dc-field__input" type="text" role="combobox" aria-expanded="true" aria-controls="dc-command-list" aria-autocomplete="list" aria-label="Go to or do" placeholder="Go to or do…" autocomplete="off" spellcheck="false">
+  <div class="dc-command" id="dc-command-list" role="listbox" aria-label="Commands">
+    <a class="dc-command__item" role="option" id="dc-cmd-overview" href="/">Overview</a>
+    <a class="dc-command__item" role="option" id="dc-cmd-today" href="/missions/today">Missions: Today</a>
+    <a class="dc-command__item" role="option" id="dc-cmd-focus" href="/missions/focus">Missions: Focus</a>
+    <a class="dc-command__item" role="option" id="dc-cmd-plan" href="/missions/plan">Missions: Plan</a>
+    <a class="dc-command__item" role="option" id="dc-cmd-manage" href="/missions/manage">Missions: Manage</a>
+    <a class="dc-command__item" role="option" id="dc-cmd-devices" href="/devices">Devices</a>
+    <a class="dc-command__item" role="option" id="dc-cmd-account" href="/account">Account</a>
+    <a class="dc-command__item" role="option" id="dc-cmd-rules" href="/category-rules">Category rules</a>
+    {%- if shell.is_admin %}
+    <a class="dc-command__item" role="option" id="dc-cmd-accounts" href="/admin/users">Admin: Accounts</a>
+    <a class="dc-command__item" role="option" id="dc-cmd-all-devices" href="/admin/devices">Admin: All devices</a>
+    {%- endif %}
+    <button class="dc-command__item" role="option" id="dc-cmd-new" type="button" data-dc-run="new">New task</button>
+    <button class="dc-command__item" role="option" id="dc-cmd-keys" type="button" data-dc-run="keys">Keyboard shortcuts</button>
+    <button class="dc-command__item" role="option" id="dc-cmd-logout" type="button" hx-post="/logout">Log out</button>
+  </div>
+</dialog>
+<dialog id="dc-keys" class="dc-dialog" aria-labelledby="dc-keys-title">
+  <h2 class="dc-heading-3" id="dc-keys-title">Keyboard shortcuts</h2>
+  <dl class="dc-keys">
+    <dt><kbd>Ctrl</kbd> <kbd>K</kbd></dt><dd>Command menu</dd>
+    <dt><kbd>N</kbd></dt><dd>New task</dd>
+    <dt><kbd>F</kbd></dt><dd>Focus</dd>
+    <dt><kbd>J</kbd> <kbd>K</kbd> or <kbd>↓</kbd> <kbd>↑</kbd></dt><dd>Select the next or previous task</dd>
+    <dt><kbd>Space</kbd></dt><dd>Start or pause its timer</dd>
+    <dt><kbd>Ctrl</kbd> <kbd>Enter</kbd></dt><dd>Mark it done</dd>
+    <dt><kbd>Ctrl</kbd> <kbd>→</kbd></dt><dd>Move it to tomorrow (on the plan: one column later)</dd>
+    <dt><kbd>?</kbd></dt><dd>This overview</dd>
+  </dl>
+  <p class="dc-caption">On a Mac, ⌘ instead of Ctrl. Not while typing in a field. On Focus, the task shown is selected.</p>
+  <div><button class="dc-btn dc-btn--neutral dc-btn--sm" type="button" data-dc-close>Close</button></div>
+</dialog>
+<div class="dc-celebrate" aria-hidden="true">{% call icons::icon("check") %}{% endcall %}</div>

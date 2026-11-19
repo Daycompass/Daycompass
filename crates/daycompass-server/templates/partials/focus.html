@@ -1,0 +1,46 @@
+{% import "macros.html" as icons -%}
+{#- Swapped in whole after every write but a notes save. The card queues
+    its requests (hx-sync), so notes saved on leaving the field are
+    written before a Complete clicked right after reads the task. #}
+<div id="focus" class="dc-stack dc-stack--lg">
+  {% if let Some(task) = current %}
+  <section class="dc-card dc-stack dc-focus" data-dc-task="{{ task.id }}" data-dc-current tabindex="-1" aria-labelledby="focus-title" hx-sync="this:queue all" hx-target="#focus" hx-swap="outerHTML">
+    {%- if let Some(mission) = task.mission %}
+    <span class="dc-tag dc-tag--muted"><span class="dc-swatch {% if let Some(colour) = task.colour %}dc-swatch--c{{ colour }}{% else %}dc-swatch--neutral{% endif %}" aria-hidden="true"></span>{{ mission }}</span>
+    {%- endif %}
+    <h2 class="dc-heading-2 dc-focus__title" id="focus-title">{{ task.title }}</h2>
+    <p class="dc-stat__value dc-stat__value--lg dc-focus__clock"{% if task.running %} data-dc-elapsed="{{ task.tracked_secs }}"{% endif %}>{{ task.tracked }}</p>
+    <div class="dc-list__actions">
+      {%- if task.running %}
+      <button class="dc-btn dc-btn--secondary" type="button" hx-post="/missions/tasks/{{ task.id }}/stop?view=focus" data-dc-key="timer">{% call icons::icon("pause") %}{% endcall %}<span class="dc-spin" aria-hidden="true"></span>Pause</button>
+      {%- else %}
+      <button class="dc-btn dc-btn--neutral" type="button" hx-post="/missions/tasks/{{ task.id }}/start?view=focus" data-dc-key="timer">{% call icons::icon("play") %}{% endcall %}<span class="dc-spin" aria-hidden="true"></span>{% if task.tracked_secs > 0 %}Resume{% else %}Start{% endif %}</button>
+      {%- endif %}
+      <button class="dc-btn dc-btn--primary" type="button" hx-post="/missions/tasks/{{ task.id }}/done?view=focus" hx-vals='{"done": "true"}' data-dc-key="done">{% call icons::icon("check") %}{% endcall %}<span class="dc-spin" aria-hidden="true"></span>Complete</button>
+      <button class="dc-btn dc-btn--ghost" type="button" hx-post="/missions/tasks/{{ task.id }}/tomorrow?view=focus" data-dc-key="later">{% call icons::icon("right") %}{% endcall %}<span class="dc-spin" aria-hidden="true"></span>Tomorrow</button>
+    </div>
+    {#- Saved on leaving the field too, without swapping: a swap would
+        throw away what is typed after the save was sent. #}
+    <form class="dc-stack" method="post" action="/missions/tasks/{{ task.id }}/notes?view=focus" hx-post="/missions/tasks/{{ task.id }}/notes?view=focus" hx-trigger="submit, change" hx-swap="none" hx-disabled-elt="find button">
+      <div class="dc-field">
+        <label class="dc-field__label" for="focus-notes">Notes</label>
+        <textarea class="dc-field__input dc-field__input--area" id="focus-notes" name="notes" maxlength="4000" rows="5">{{ task.notes }}</textarea>
+      </div>
+      <div><button class="dc-btn dc-btn--neutral dc-btn--sm" type="submit"><span class="dc-spin" aria-hidden="true"></span>Save notes</button></div>
+    </form>
+  </section>
+  {% if more > 0 %}<p class="dc-muted">{{ more }} more today</p>{% endif %}
+  {% else if planned %}
+  <section class="dc-card dc-stack dc-focus">
+    <h2 class="dc-heading-2">Day done</h2>
+    <p class="dc-muted">{{ today }} on missions today.</p>
+    <div><a class="dc-btn dc-btn--neutral" href="/missions/today">Back to Today</a></div>
+  </section>
+  {% else %}
+  <section class="dc-card dc-stack">
+    <p class="dc-muted">Nothing planned for today yet.</p>
+    <div><a class="dc-btn dc-btn--neutral" href="/missions/today#new">Add a task</a></div>
+  </section>
+  {% endif %}
+  {% if let Some(slot) = timer_slot %}{{ slot|safe }}{% endif %}
+</div>

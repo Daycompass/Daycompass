@@ -22,7 +22,7 @@
       {#- Always there, even empty: it is where a drop lands. #}
       <ul class="dc-tasks dc-plan__tasks" data-dc-sortable data-dc-day="{{ column.day }}">
         {%- for task in column.open %}
-        <li class="dc-task" draggable="true" data-dc-task="{{ task.id }}">
+        <li class="dc-task" draggable="true" data-dc-task="{{ task.id }}" tabindex="-1">
           <span class="dc-task__stripe {% if let Some(colour) = task.colour %}dc-swatch--c{{ colour }}{% else %}dc-swatch--neutral{% endif %}" aria-hidden="true"></span>
           <div class="dc-task__main">
             <span class="dc-task__title">{{ task.title }}</span>
@@ -38,7 +38,7 @@
               <button class="dc-btn dc-btn--ghost dc-btn--sm" type="button" hx-post="/missions/plan/move{{ query }}" hx-vals='{"task": "{{ task.id }}", "day": "{{ hop.day }}", "after": "{{ hop.after }}", "before": ""}' hx-target="#plan" hx-swap="outerHTML" aria-label="Move {{ task.title }} to {{ hop.to }}">{% call icons::icon("left") %}{% endcall %}</button>
               {%- endif %}
               {%- if let Some(hop) = task.later %}
-              <button class="dc-btn dc-btn--ghost dc-btn--sm" type="button" hx-post="/missions/plan/move{{ query }}" hx-vals='{"task": "{{ task.id }}", "day": "{{ hop.day }}", "after": "{{ hop.after }}", "before": ""}' hx-target="#plan" hx-swap="outerHTML" aria-label="Move {{ task.title }} to {{ hop.to }}">{% call icons::icon("right") %}{% endcall %}</button>
+              <button class="dc-btn dc-btn--ghost dc-btn--sm" type="button" hx-post="/missions/plan/move{{ query }}" hx-vals='{"task": "{{ task.id }}", "day": "{{ hop.day }}", "after": "{{ hop.after }}", "before": ""}' hx-target="#plan" hx-swap="outerHTML" aria-label="Move {{ task.title }} to {{ hop.to }}" data-dc-key="later">{% call icons::icon("right") %}{% endcall %}</button>
               {%- endif %}
             </div>
           </div>
