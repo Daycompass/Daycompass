@@ -180,6 +180,7 @@ pub struct Day {
     /// `YYYY-MM-DD`, the value of `tasks.day`.
     pub date: String,
     pub yesterday: String,
+    pub tomorrow: String,
     /// `[start, end)` of the day and of its ISO week, Unix seconds.
     pub bounds: (i64, i64),
     pub week: (i64, i64),
@@ -494,6 +495,46 @@ pub async fn move_task(
     let task = Task {
         day: day.map_or(task.day, |day| day.map(str::to_owned)),
         position,
+        updated_at: edit_time(task.updated_at, now),
+        ..task
+    };
+    write(pool, user_id, tasks(vec![task]), now).await
+}
+
+/// Plans a task for `day`, after all of that day's other tasks.
+pub async fn move_to_end_of(
+    pool: &SqlitePool,
+    user_id: &str,
+    task_id: &str,
+    day: &str,
+    now: UnixTime,
+) -> Result<SaveOutcome, StoreError> {
+    let mut conn = pool.acquire().await?;
+    let planned = store::tasks_of_day(&mut conn, user_id, Some(day)).await?;
+    drop(conn);
+    let last = planned.iter().rev().find(|task| task.id != task_id);
+    let after = last.map(|task| task.id.as_str());
+    move_task(pool, user_id, task_id, Some(Some(day)), after, None, now).await
+}
+
+/// Sets a task's notes; blank clears them.
+pub async fn set_notes(
+    pool: &SqlitePool,
+    user_id: &str,
+    task_id: &str,
+    notes: &str,
+    now: UnixTime,
+) -> Result<SaveOutcome, StoreError> {
+    let mut conn = pool.acquire().await?;
+    let Some(task) = store::live_task(&mut conn, user_id, task_id).await? else {
+        return Ok(SaveOutcome::NotFound);
+    };
+    drop(conn);
+    // A browser sends a textarea's line breaks as CRLF; the sync rules
+    // accept LF only.
+    let notes = notes.replace("\r\n", "\n");
+    let task = Task {
+        notes: Some(notes).filter(|notes| !notes.trim().is_empty()),
         updated_at: edit_time(task.updated_at, now),
         ..task
     };

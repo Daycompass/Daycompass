@@ -302,6 +302,7 @@ impl Fixture {
             // The task to move travels in the body, not the path.
             ("POST", "/missions/tasks/move") => Some(vec![("task", target_id.to_owned())]),
             ("POST", "/missions/tasks/{id}/done") => Some(vec![("done", "true".to_owned())]),
+            ("POST", "/missions/tasks/{id}/notes") => Some(vec![("notes", "Probe".to_owned())]),
             ("POST", "/missions/plan/tasks") => {
                 Some(vec![("title", "Probe".to_owned()), ("day", String::new())])
             }

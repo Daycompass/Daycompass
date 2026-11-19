@@ -8,7 +8,8 @@
 //! starting or stopping a timer changes both.
 //!
 //! A mission filter (`?mission=<id>`) only narrows what is shown; every
-//! write's URL carries it along so the answer keeps it.
+//! write's URL carries it along so the answer keeps it. The Focus page
+//! sends the same writes with `?view=focus`, and gets its own block back.
 //!
 //! The day is the calendar day of the account's time zone.
 
@@ -119,19 +120,30 @@ struct Block {
 #[derive(Deserialize)]
 pub struct Filter {
     mission: Option<String>,
+    #[serde(default)]
+    view: View,
 }
 
-fn internal(err: &StoreError, what: &'static str) -> ApiError {
+/// The page a write came from, which decides the answer's shape.
+#[derive(Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+enum View {
+    #[default]
+    Today,
+    Focus,
+}
+
+pub(super) fn internal(err: &StoreError, what: &'static str) -> ApiError {
     tracing::error!(error = %err, "{what} failed");
     ApiError::of(ErrorKind::InternalError)
 }
 
 fn day_of(zone: &TimeZoneName, now: UnixTime) -> Option<(Day, jiff::civil::Date)> {
     let date = zone.date(now.as_secs())?;
-    let yesterday = date.yesterday().ok()?;
     let day = Day {
         date: date.to_string(),
-        yesterday: yesterday.to_string(),
+        yesterday: date.yesterday().ok()?.to_string(),
+        tomorrow: date.tomorrow().ok()?.to_string(),
         bounds: zone.day_bounds(now.as_secs()),
         week: zone.week_bounds(now.as_secs()),
     };
@@ -366,9 +378,12 @@ async fn answer(
 ) -> Response {
     let kind = match saved {
         Ok(SaveOutcome::Saved) => {
-            return match content(state, session, filter.mission, true).await {
-                Ok((content, _heading)) => render_fragment(&content),
-                Err(error) => error.into_response(),
+            return match filter.view {
+                View::Focus => super::focus::fragment(state, session).await,
+                View::Today => match content(state, session, filter.mission, true).await {
+                    Ok((content, _heading)) => render_fragment(&content),
+                    Err(error) => error.into_response(),
+                },
             };
         }
         // One answer for "no such task" and "not yours", as on the API.
@@ -381,7 +396,7 @@ async fn answer(
 }
 
 /// Today's date for a write, from the account's zone.
-async fn today_for(state: &AppState, user_id: &str) -> Result<Day, ApiError> {
+pub(super) async fn today_for(state: &AppState, user_id: &str) -> Result<Day, ApiError> {
     let zone = timezone::get_for_user(&state.pool, user_id)
         .await
         .map_err(|err| internal(&err, "reading the time zone"))?;
@@ -518,6 +533,48 @@ pub async fn done(
 ) -> Response {
     let user_id = &session.auth().user.id;
     let saved = service::set_done(&state.pool, user_id, &task_id, form.done, UnixTime::now()).await;
+    answer(&state, &session, filter, saved).await
+}
+
+/// Plans the task for tomorrow, at the end.
+pub async fn tomorrow(
+    State(state): State<AppState>,
+    session: SessionContext,
+    Path(task_id): Path<String>,
+    Query(filter): Query<Filter>,
+) -> Response {
+    let user_id = &session.auth().user.id;
+    let day = match today_for(&state, user_id).await {
+        Ok(day) => day,
+        Err(error) => return error.into_response(),
+    };
+    let saved = service::move_to_end_of(
+        &state.pool,
+        user_id,
+        &task_id,
+        &day.tomorrow,
+        UnixTime::now(),
+    )
+    .await;
+    answer(&state, &session, filter, saved).await
+}
+
+#[derive(Deserialize)]
+pub struct NotesForm {
+    #[serde(default)]
+    notes: String,
+}
+
+pub async fn notes(
+    State(state): State<AppState>,
+    session: SessionContext,
+    Path(task_id): Path<String>,
+    Query(filter): Query<Filter>,
+    Form(form): Form<NotesForm>,
+) -> Response {
+    let user_id = &session.auth().user.id;
+    let saved =
+        service::set_notes(&state.pool, user_id, &task_id, &form.notes, UnixTime::now()).await;
     answer(&state, &session, filter, saved).await
 }
 

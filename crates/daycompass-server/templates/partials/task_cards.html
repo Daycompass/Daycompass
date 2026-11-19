@@ -1,10 +1,12 @@
 {% import "macros.html" as icons -%}
 {#- One list of task cards. `sortable` lists are the open tasks: they can
-    be dragged (daycompass.js) and moved with the up and down buttons. #}
+    be dragged (daycompass.js) and moved with the up and down buttons.
+    J and K select a card (daycompass.js), and the shortcuts press the
+    card's button with the matching data-dc-key. #}
 {% if !cards.is_empty() %}
 <ul class="dc-tasks"{% if sortable %} data-dc-sortable{% endif %}>
   {%- for task in cards %}
-  <li class="dc-task{% if task.done %} dc-task--done{% endif %}"{% if sortable %} draggable="true" data-dc-task="{{ task.id }}"{% endif %}>
+  <li class="dc-task{% if task.done %} dc-task--done{% endif %}" data-dc-task="{{ task.id }}" tabindex="-1"{% if sortable %} draggable="true"{% endif %}>
     <span class="dc-task__stripe {% if let Some(colour) = task.colour %}dc-swatch--c{{ colour }}{% else %}dc-swatch--neutral{% endif %}" aria-hidden="true"></span>
     <div class="dc-task__main">
       <span class="dc-task__title">{{ task.title }}</span>
@@ -16,9 +18,9 @@
     <div class="dc-task__actions">
       {%- if !task.done %}
       {%- if task.running %}
-      <button class="dc-btn dc-btn--secondary dc-btn--sm" type="button" hx-post="/missions/tasks/{{ task.id }}/stop{{ query }}" hx-target="#today" hx-swap="outerHTML" aria-label="Pause {{ task.title }}">{% call icons::icon("pause") %}{% endcall %}<span class="dc-spin" aria-hidden="true"></span></button>
+      <button class="dc-btn dc-btn--secondary dc-btn--sm" type="button" hx-post="/missions/tasks/{{ task.id }}/stop{{ query }}" hx-target="#today" hx-swap="outerHTML" aria-label="Pause {{ task.title }}" data-dc-key="timer">{% call icons::icon("pause") %}{% endcall %}<span class="dc-spin" aria-hidden="true"></span></button>
       {%- else %}
-      <button class="dc-btn dc-btn--neutral dc-btn--sm" type="button" hx-post="/missions/tasks/{{ task.id }}/start{{ query }}" hx-target="#today" hx-swap="outerHTML" aria-label="Start {{ task.title }}">{% call icons::icon("play") %}{% endcall %}<span class="dc-spin" aria-hidden="true"></span></button>
+      <button class="dc-btn dc-btn--neutral dc-btn--sm" type="button" hx-post="/missions/tasks/{{ task.id }}/start{{ query }}" hx-target="#today" hx-swap="outerHTML" aria-label="Start {{ task.title }}" data-dc-key="timer">{% call icons::icon("play") %}{% endcall %}<span class="dc-spin" aria-hidden="true"></span></button>
       {%- endif %}
       {%- if let Some(up) = task.up %}
       <button class="dc-btn dc-btn--ghost dc-btn--sm" type="button" hx-post="/missions/tasks/move{{ query }}" hx-vals='{"task": "{{ task.id }}", "after": "{{ up.after }}", "before": "{{ up.before }}"}' hx-target="#today" hx-swap="outerHTML" aria-label="Move {{ task.title }} up">{% call icons::icon("up") %}{% endcall %}</button>
@@ -26,7 +28,8 @@
       {%- if let Some(down) = task.down %}
       <button class="dc-btn dc-btn--ghost dc-btn--sm" type="button" hx-post="/missions/tasks/move{{ query }}" hx-vals='{"task": "{{ task.id }}", "after": "{{ down.after }}", "before": "{{ down.before }}"}' hx-target="#today" hx-swap="outerHTML" aria-label="Move {{ task.title }} down">{% call icons::icon("down") %}{% endcall %}</button>
       {%- endif %}
-      <button class="dc-btn dc-btn--ghost dc-btn--sm" type="button" hx-post="/missions/tasks/{{ task.id }}/done{{ query }}" hx-vals='{"done": "true"}' hx-target="#today" hx-swap="outerHTML" aria-label="Mark {{ task.title }} done">{% call icons::icon("check") %}{% endcall %}</button>
+      <button class="dc-btn dc-btn--ghost dc-btn--sm" type="button" hx-post="/missions/tasks/{{ task.id }}/tomorrow{{ query }}" hx-target="#today" hx-swap="outerHTML" aria-label="Move {{ task.title }} to tomorrow" data-dc-key="later">{% call icons::icon("right") %}{% endcall %}</button>
+      <button class="dc-btn dc-btn--ghost dc-btn--sm" type="button" hx-post="/missions/tasks/{{ task.id }}/done{{ query }}" hx-vals='{"done": "true"}' hx-target="#today" hx-swap="outerHTML" aria-label="Mark {{ task.title }} done" data-dc-key="done">{% call icons::icon("check") %}{% endcall %}</button>
       {%- else %}
       <button class="dc-btn dc-btn--ghost dc-btn--sm" type="button" hx-post="/missions/tasks/{{ task.id }}/done{{ query }}" hx-vals='{"done": "false"}' hx-target="#today" hx-swap="outerHTML" aria-label="Mark {{ task.title }} not done">{% call icons::icon("undo") %}{% endcall %}</button>
       {%- endif %}

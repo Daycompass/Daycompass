@@ -1186,6 +1186,19 @@ pub const INVENTORY: &[RouteSpec] = &[
         max_body_bytes: None,
         rate_limits: &[],
     },
+    // Only the task to work on now; its writes are the ones below, sent
+    // with `?view=focus`.
+    RouteSpec {
+        method: "GET",
+        path: "/missions/focus",
+        surface: Surface::Page,
+        access: Access::Session,
+        origin: OriginRule::Checked,
+        csrf: false,
+        sets_session_cookie: false,
+        max_body_bytes: None,
+        rate_limits: &[],
+    },
     RouteSpec {
         method: "POST",
         path: "/missions/today/tasks",
@@ -1244,6 +1257,28 @@ pub const INVENTORY: &[RouteSpec] = &[
     RouteSpec {
         method: "POST",
         path: "/missions/tasks/{id}/done",
+        surface: Surface::Page,
+        access: Access::Session,
+        origin: OriginRule::Required,
+        csrf: true,
+        sets_session_cookie: false,
+        max_body_bytes: None,
+        rate_limits: &[],
+    },
+    RouteSpec {
+        method: "POST",
+        path: "/missions/tasks/{id}/tomorrow",
+        surface: Surface::Page,
+        access: Access::Session,
+        origin: OriginRule::Required,
+        csrf: true,
+        sets_session_cookie: false,
+        max_body_bytes: None,
+        rate_limits: &[],
+    },
+    RouteSpec {
+        method: "POST",
+        path: "/missions/tasks/{id}/notes",
         surface: Surface::Page,
         access: Access::Session,
         origin: OriginRule::Required,
@@ -1555,6 +1590,13 @@ pub fn router(state: AppState) -> Router {
     table.add("POST", "/missions/tasks/{id}/start", pages::today::start);
     table.add("POST", "/missions/tasks/{id}/stop", pages::today::stop);
     table.add("POST", "/missions/tasks/{id}/done", pages::today::done);
+    table.add(
+        "POST",
+        "/missions/tasks/{id}/tomorrow",
+        pages::today::tomorrow,
+    );
+    table.add("POST", "/missions/tasks/{id}/notes", pages::today::notes);
+    table.add("GET", "/missions/focus", pages::focus::page);
     table.add("GET", "/missions/plan", pages::plan::page);
     table.add("POST", "/missions/plan/tasks", pages::plan::add);
     table.add("POST", "/missions/plan/move", pages::plan::move_task);
