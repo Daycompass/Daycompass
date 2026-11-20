@@ -51,7 +51,8 @@ async fn totals_are_grouped_by_day_and_category_and_app_id_beats_domain() {
         .send(TestRequest::get("/api/v1/device/me").authenticated_as_device(&device))
         .await;
     let now = me.body["server_time"].as_i64().unwrap();
-    let day_start = (now / 86_400) * 86_400;
+    // yesterday, so every event has ended even just after midnight UTC
+    let day_start = (now / 86_400) * 86_400 - 86_400;
 
     app.send(create_rule(
         &session,
@@ -135,7 +136,8 @@ async fn overlapping_reports_from_two_devices_are_both_counted() {
         .send(TestRequest::get("/api/v1/device/me").authenticated_as_device(&device_one))
         .await;
     let now = me.body["server_time"].as_i64().unwrap();
-    let day_start = (now / 86_400) * 86_400;
+    // yesterday, so every event has ended even just after midnight UTC
+    let day_start = (now / 86_400) * 86_400 - 86_400;
 
     for device in [&device_one, &device_two] {
         let ingested = app
@@ -228,7 +230,8 @@ async fn one_account_cannot_see_anothers_stats() {
         .send(TestRequest::get("/api/v1/device/me").authenticated_as_device(&bobs_device))
         .await;
     let now = me.body["server_time"].as_i64().unwrap();
-    let day_start = (now / 86_400) * 86_400;
+    // yesterday, so every event has ended even just after midnight UTC
+    let day_start = (now / 86_400) * 86_400 - 86_400;
 
     app.send(
         TestRequest::post("/api/v1/events")
