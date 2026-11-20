@@ -185,7 +185,9 @@ cargo audit, cargo deny check, cargo fmt --check, cargo test
 date), and enforce_admins on, so there is no admin bypass; code
 owner review is not required.
 M3 stats, category rules. M4 export, retention, Dockerfile. M5
-dashboard.
+dashboard. M6 Missions (eight sessions, PRs #85-#93): merged to main,
+followed by #94 (account settings in the export, format version 4) and
+#95 (server version for admins, "Updating" in docs/guide.md).
 
 iOS: not planned, not proven infeasible - no feasibility spike was
 done. Apple's FamilyControls/DeviceActivity needs an Apple
