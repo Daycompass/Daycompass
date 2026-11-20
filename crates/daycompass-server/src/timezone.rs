@@ -76,7 +76,7 @@ impl TimeZoneName {
         let Ok(zone) = TimeZone::get(&self.0) else {
             return ts;
         };
-        match instant.to_zoned(zone).start_of_day() {
+        match instant.to_zoned_datetime(zone).start_of_day() {
             Ok(start) => start.timestamp().as_second(),
             Err(_) => ts,
         }
@@ -91,9 +91,9 @@ impl TimeZoneName {
         (start, self.day_start(start + DAY + DAY / 2))
     }
 
-    fn zoned(&self, ts: i64) -> Option<jiff::Zoned> {
+    fn zoned(&self, ts: i64) -> Option<jiff::ZonedDateTime> {
         let zone = TimeZone::get(&self.0).ok()?;
-        Some(Timestamp::from_second(ts).ok()?.to_zoned(zone))
+        Some(Timestamp::from_second(ts).ok()?.to_zoned_datetime(zone))
     }
 
     /// The calendar date `ts` falls on here.
@@ -111,7 +111,7 @@ impl TimeZoneName {
     /// the first of the two (jiff's "compatible" rule).
     pub fn timestamp_of(&self, local: jiff::civil::DateTime) -> Option<i64> {
         let zone = TimeZone::get(&self.0).ok()?;
-        Some(local.to_zoned(zone).ok()?.timestamp().as_second())
+        Some(local.to_zoned_datetime(zone).ok()?.timestamp().as_second())
     }
 
     /// `09:05` - the local wall-clock time of `ts`.
@@ -129,7 +129,12 @@ impl TimeZoneName {
             .ok()
             .zip(TimeZone::get(&self.0).ok())
             .map_or(0, |(instant, zone)| {
-                i64::from(instant.to_zoned(zone).weekday().to_monday_zero_offset())
+                i64::from(
+                    instant
+                        .to_zoned_datetime(zone)
+                        .weekday()
+                        .to_monday_zero_offset(),
+                )
             });
         // Aim at noon, so a day of 23 or 25 hours in between still lands
         // on the right one.
