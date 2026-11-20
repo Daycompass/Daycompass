@@ -44,7 +44,7 @@ fn id(n: u32) -> String {
 fn ts(local: &str) -> i64 {
     let local: jiff::civil::DateTime = local.parse().unwrap();
     local
-        .to_zoned(jiff::tz::TimeZone::UTC)
+        .to_zoned_datetime(jiff::tz::TimeZone::UTC)
         .unwrap()
         .timestamp()
         .as_second()
@@ -308,7 +308,7 @@ async fn today_asks_for_a_review_on_the_review_day_until_there_is_one() {
     let (_credentials, session) = app.provisioned_admin().await;
 
     let today = jiff::Timestamp::now()
-        .to_zoned(jiff::tz::TimeZone::UTC)
+        .to_zoned_datetime(jiff::tz::TimeZone::UTC)
         .date();
     let weekday = today.weekday().to_monday_one_offset();
     let monday = today

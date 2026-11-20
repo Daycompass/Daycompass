@@ -50,7 +50,7 @@ fn now() -> i64 {
 /// The Monday two weeks before this week's, UTC.
 fn monday() -> Date {
     let today = jiff::Timestamp::now()
-        .to_zoned(jiff::tz::TimeZone::UTC)
+        .to_zoned_datetime(jiff::tz::TimeZone::UTC)
         .date();
     let offset = i64::from(today.weekday().to_monday_zero_offset());
     today.checked_sub((offset + 14).days()).unwrap()
@@ -62,7 +62,7 @@ fn wednesday(hour: i8, minute: i8) -> i64 {
         .checked_add(2.days())
         .unwrap()
         .at(hour, minute, 0, 0)
-        .to_zoned(jiff::tz::TimeZone::UTC)
+        .to_zoned_datetime(jiff::tz::TimeZone::UTC)
         .unwrap()
         .timestamp()
         .as_second()

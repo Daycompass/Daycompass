@@ -40,7 +40,7 @@ async fn ok(app: &TestApp, request: TestRequest) -> TestResponse {
 fn ts(local: &str) -> i64 {
     let local: jiff::civil::DateTime = local.parse().unwrap();
     local
-        .to_zoned(jiff::tz::TimeZone::UTC)
+        .to_zoned_datetime(jiff::tz::TimeZone::UTC)
         .unwrap()
         .timestamp()
         .as_second()
@@ -50,7 +50,7 @@ fn ts(local: &str) -> i64 {
 fn from_now(secs: i64) -> String {
     jiff::Timestamp::from_second(jiff::Timestamp::now().as_second() + secs)
         .unwrap()
-        .to_zoned(jiff::tz::TimeZone::UTC)
+        .to_zoned_datetime(jiff::tz::TimeZone::UTC)
         .strftime("%Y-%m-%dT%H:%M:%S")
         .to_string()
 }
