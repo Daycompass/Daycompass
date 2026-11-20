@@ -42,7 +42,7 @@ RUN mkdir /data && chown 65532:65532 /data
 #
 # Distroless `cc`: glibc and libgcc, nothing else - no shell, no package
 # manager, nothing to log in with. `nonroot` runs as uid 65532.
-FROM gcr.io/distroless/cc-debian13:nonroot@sha256:08476c244888bfb425bae1ae4dd7c17f093e972aab8426883d97f3c6f280f7c1
+FROM gcr.io/distroless/cc-debian13:nonroot@sha256:cb87acc574abe719b6e5c547384defa2f7b1f24af9605d3f618cf852495d8be2
 
 LABEL org.opencontainers.image.title="daycompass-server" \
       org.opencontainers.image.licenses="AGPL-3.0-only"
