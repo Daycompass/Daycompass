@@ -44,7 +44,7 @@ fn now() -> i64 {
 /// Today and yesterday in UTC, as `tasks.day` holds them.
 fn days() -> (String, String) {
     let today = jiff::Timestamp::now()
-        .to_zoned(jiff::tz::TimeZone::UTC)
+        .to_zoned_datetime(jiff::tz::TimeZone::UTC)
         .date();
     (today.to_string(), today.yesterday().unwrap().to_string())
 }

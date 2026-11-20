@@ -61,7 +61,7 @@ async fn move_to(
 /// Today in UTC, and the Monday of its week.
 fn today_and_monday() -> (Date, Date) {
     let today = jiff::Timestamp::now()
-        .to_zoned(jiff::tz::TimeZone::UTC)
+        .to_zoned_datetime(jiff::tz::TimeZone::UTC)
         .date();
     let offset = i64::from(today.weekday().to_monday_zero_offset());
     (today, today.checked_sub(offset.days()).unwrap())

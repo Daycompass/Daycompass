@@ -185,7 +185,7 @@ async fn tomorrow_moves_a_task_to_the_end_of_tomorrow() {
     let app = TestApp::new().await;
     let (_credentials, admin) = app.provisioned_admin().await;
     let tomorrow = jiff::Timestamp::now()
-        .to_zoned(jiff::tz::TimeZone::UTC)
+        .to_zoned_datetime(jiff::tz::TimeZone::UTC)
         .date()
         .tomorrow()
         .unwrap()

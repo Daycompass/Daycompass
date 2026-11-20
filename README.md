@@ -43,9 +43,16 @@ middle, no account with a vendor, and no data that leaves your server.
 - **One small binary, one container, one SQLite file.** No external
   database, no queue, no cache to operate.
 - **Web dashboard built in.** Overview of today and the last seven days,
-  devices, category rules, account settings and admin pages. Server
+  Missions, devices, category rules, account settings and admin pages. Server
   rendered, with htmx served from the binary itself: no npm, no CDN, and
   a strict Content-Security-Policy. Light and dark mode.
+- **Missions.** Long-term goals with a weekly goal in hours, tasks
+  planned per day or week, one focus timer shared by all of a person's
+  devices, a log to correct tracked time, and a weekly review that keeps
+  the goals the week was measured against and downloads as Markdown.
+  Optionally set against screen time: how much of each focus session
+  went to the categories the person counts as distraction. Native
+  clients sync it offline-first through one endpoint.
 - **Accounts by invite.** An admin creates an account; the person
   redeems their own invite and chooses their own password. An admin never
   sees or sets anyone's password.
@@ -228,7 +235,7 @@ explanations. The ones you are most likely to touch:
 
 | | |
 | --- | --- |
-| [Operating guide](docs/guide.md) | First start, containers, reverse proxies, accounts, devices, the reasoning behind the non-obvious parts. |
+| [Operating guide](docs/guide.md) | First start, containers, updating, reverse proxies, accounts, devices, the reasoning behind the non-obvious parts. |
 | [Wire format](docs/wire-format.md) | Every endpoint, request and response. The reference for client authors. |
 | [OpenAPI spec](docs/openapi.json) | Machine-readable API description. [`openapi-wire-v1.json`](docs/openapi-wire-v1.json) is the frozen v1 contract. |
 | [Design decisions](docs/design-decisions.md) | Why things are the way they are. |
@@ -237,10 +244,11 @@ explanations. The ones you are most likely to touch:
 ## Status
 
 The backend is feature-complete for a first set of clients: accounts,
-pairing, ingest, categories, stats, export, retention and the dashboard
-all work and are covered by tests. It has not had a stable release yet,
-so expect breaking changes until a client has shipped against it. The
-first client will be Android.
+pairing, ingest, categories, stats, export, retention, the dashboard and
+Missions all work and are covered by tests. It has not had a stable
+release yet, so expect breaking changes until a client has shipped
+against it, and update by rebuilding from a newer checkout (see
+[Updating](docs/guide.md#updating)). The first client will be Android.
 
 ## Contributing
 
